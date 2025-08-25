@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HCM AI Assistant Prototype</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+    #main-content { transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+    #ai-panel { transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: -10px 0px 30px -15px rgba(0,0,0,0.1); }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    #mic.active { background-color: #fecaca; color: #dc2626; }
+    #stop.hidden { display: none; }
+    .vu { position:absolute; left:50%; bottom:-4px; transform:translateX(-50%); height:3px; background:#2563eb; border-radius:2px; width:8px; transition:width .08s; }
+    .chip{background:#eef2ff;border:1px solid #e5e7eb;color:#374151;border-radius:9999px;padding:.125rem .5rem;font-size:.75rem}
+    .error-message { background-color: #fef2f2; border: 1px solid #fecaca; color: #dc2626; padding: 12px; border-radius: 8px; margin: 8px 0; }
+    .warning-message { background-color: #fffbeb; border: 1px solid #fed7aa; color: #d97706; padding: 12px; border-radius: 8px; margin: 8px 0; }
+  </style>
+</head>
+<body class="overflow-hidden">
+
+  <div class="flex h-screen bg-gray-100">
+    <!-- Main Content Area -->
+    <main id="main-content" class="w-full h-full overflow-y-auto custom-scrollbar">
+      <div class="p-4 md:p-8">
+        <!-- Header -->
+        <header class="flex justify-between items-center pb-6 border-b border-gray-200">
+          <div>
+            <h1 class="text-3xl font-bold text-gray-800" id="welcome-title">Welcome back!</h1>
+            <p class="text-gray-500 mt-1" id="welcome-sub">Here's what's happening with your team today.</p>
+          </div>
+          <div class="flex items-center space-x-4">
+            <button id="ai-dock-btn" class="flex items-center space-x-2 bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-blue-700 transition duration-300">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+              <span id="ask-ai-label">Ask AI</span>
+            </button>
+            <img src="https://placehold.co/40x40/E2E8F0/4A5568?text=U" alt="User Avatar" class="w-10 h-10 rounded-full">
+          </div>
+        </header>
+
+        <!-- Database Status -->
+        <div id="db-status" class="mt-6 mb-4"></div>
+
+        <!-- Dashboard Widgets -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-6">
+          <div class="bg-white p-6 rounded-lg shadow-sm">
+            <h3 class="text-lg font-semibold text-gray-700" id="w1-title">Team Overview</h3>
+            <p class="text-4xl font-bold text-gray-900 mt-2">12 <span class="text-base font-medium text-gray-500" id="w1-sub">Active Members</span></p>
+            <p class="text-sm text-green-600 mt-1" id="w1-trend">+2 this month</p>
+          </div>
+          <div class="bg-white p-6 rounded-lg shadow-sm">
+            <h3 class="text-lg font-semibold text-gray-700" id="w2-title">Time Off Requests</h3>
+            <p class="text-4xl font-bold text-gray-900 mt-2">3 <span class="text-base font-medium text-gray-500" id="w2-sub">Pending</span></p>
+            <p class="text-sm text-gray-500 mt-1" id="w2-cta">Review now</p>
+          </div>
+          <div class="bg-white p-6 rounded-lg shadow-sm">
+            <h3 class="text-lg font-semibold text-gray-700" id="w3-title">Open Positions</h3>
+            <p class="text-4xl font-bold text-gray-900 mt-2">2 <span class="text-base font-medium text-gray-500" id="w3-sub">Engineering</span></p>
+            <p class="text-sm text-gray-500 mt-1" id="w3-sub2">1 Marketing</p>
+          </div>
+          <div class="bg-white p-6 rounded-lg shadow-sm">
+            <h3 class="text-lg font-semibold text-gray-700" id="w4-title">Anniversaries</h3>
+            <p class="text-4xl font-bold text-gray-900 mt-2">5 <span class="text-base font-medium text-gray-500" id="w4-sub">This Month</span></p>
+            <p class="text-sm text-gray-500 mt-1" id="w4-example">Jane Doe (3 yrs)</p>
+          </div>
+        </div>
+
+        <!-- Chart + Activity -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+          <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-sm">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4" id="chart-title">Headcount Growth</h3>
+            <div class="h-64">
+              <canvas id="headcountChart"></canvas>
+            </div>
+          </div>
+          <div class="bg-white p-6 rounded-lg shadow-sm">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4" id="activity-title">Recent Activity</h3>
+            <ul class="space-y-4">
+              <li class="flex items-center space-x-3">
+                <div class="p-2 bg-green-100 rounded-full"><svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg></div>
+                <div>
+                  <p class="text-sm font-medium text-gray-800" id="act1">New hire: John Smith</p>
+                  <p class="text-xs text-gray-500">August 19, 2025</p>
+                </div>
+              </li>
+              <li class="flex items-center space-x-3">
+                <div class="p-2 bg-blue-100 rounded-full"><svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div>
+                <div>
+                  <p class="text-sm font-medium text-gray-800" id="act2">PTO approved for Emily White</p>
+                  <p class="text-xs text-gray-500">August 18, 2025</p>
+                </div>
+              </li>
+              <li class="flex items-center space-x-3">
+                <div class="p-2 bg-yellow-100 rounded-full"><svg class="w-5 h-5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg></div>
+                <div>
+                  <p class="text-sm font-medium text-gray-800" id="act3">Performance review created</p>
+                  <p class="text-xs text-gray-500">August 17, 2025</p>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- AI Assistant Panel (35%) -->
+    <aside id="ai-panel" class="w-full md:w-[35%] lg:w-[35%] h-full bg-slate-50 border-l border-slate-200 flex flex-col fixed top-0 right-0 transform translate-x-full">
+      <div class="p-4 border-b border-slate-200 flex justify-between items-center">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 border border-slate-300 bg-white rounded-lg flex items-center justify-center text-blue-600 font-bold">AI</div>
+          <div>
+            <div id="assistant-title" class="font-semibold text-slate-800">Assistant</div>
+            <div class="flex items-center gap-2 text-xs text-slate-500">
+              <span id="health-badge" class="px-2 py-0.5 rounded-full text-white text-[10px] bg-yellow-500">Checking</span>
+              <button id="refresh-health" class="underline">refresh</button>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <select id="schema-select" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <option value="dbo">dbo (default)</option>
+          </select>
+          <select id="lang" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <option value="en-US">English (US)</option>
+            <option value="zh-CN">中文（简体）</option>
+            <option value="zh-TW">中文（繁體）</option>
+          </select>
+          <button id="close-panel-btn" class="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:bg-slate-100" aria-label="Close">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="flex-1 flex flex-col p-4 gap-4 overflow-hidden">
+        <div id="results" class="flex-1 bg-white border border-slate-200 rounded-lg p-3 overflow-y-auto custom-scrollbar">
+          <div id="placeholder" class="text-slate-500 text-sm h-full flex flex-col justify-center items-center text-center">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-slate-400 mb-4"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+            <p id="ph-title" class="font-semibold">Results will appear here.</p>
+            <p id="ph-sub" class="mt-1">Ask something like:</p>
+            <div id="ph-example" class="mt-2 px-3 py-1.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200">"Show me active employees by department"</div>
+          </div>
+        </div>
+
+        <!-- Composer -->
+        <div class="bg-white border border-slate-200 rounded-lg p-2.5">
+          <div class="flex items-start gap-2">
+            <!-- START -->
+            <button id="mic" class="p-3 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 relative" title="Start recording">
+              <svg id="mic-icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+              <div id="vu" class="vu"></div>
+            </button>
+            <!-- STOP (visible only when recording) -->
+            <button id="stop" class="p-3 rounded-lg border border-red-300 text-red-600 hover:bg-red-50 hidden" title="Stop recording">
+              ⏹
+            </button>
+
+            <div class="flex-1">
+              <textarea id="query" rows="3" placeholder="Ask the database..." class="w-full p-2.5 resize-none overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+
+              <!-- Dictation stream (live words) -->
+              <div id="dictation-stream" class="flex flex-wrap gap-1 mt-1"></div>
+
+              <!-- One-line status -->
+              <div id="voice-line" class="text-slate-500 text-xs mt-1 px-1"></div>
+            </div>
+            <button id="send" class="p-3 rounded-lg bg-blue-600 text-white hover:bg-blue-700" title="Send">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // ---------- API Configuration ----------
+      const API_BASE = window.location.origin; // Use same origin as frontend
+      
+      // ---------- Elements ----------
+      const mainContent = document.getElementById('main-content');
+      const aiPanel = document.getElementById('ai-panel');
+      const openAiBtn = document.getElementById('ai-dock-btn');
+      const closeAiBtn = document.getElementById('close-panel-btn');
+
+      const langSel = document.getElementById('lang');
+      const schemaSelect = document.getElementById('schema-select');
+      const healthBadge = document.getElementById('health-badge');
+      const refreshHealth = document.getElementById('refresh-health');
+      const queryTA = document.getElementById('query');
+      const sendBtn = document.getElementById('send');
+      const results = document.getElementById('results');
+      const placeholder = document.getElementById('placeholder');
+      const voiceLine = document.getElementById('voice-line');
+      const micBtn = document.getElementById('mic');
+      const stopBtn = document.getElementById('stop');
+      const vuBar = document.getElementById('vu');
+      const dictationStream = document.getElementById('dictation-stream');
+      const dbStatus = document.getElementById('db-status');
+
+      const askAiLabel = document.getElementById('ask-ai-label');
+      const assistantTitle = document.getElementById('assistant-title');
+      const welcomeTitle = document.getElementById('welcome-title');
+      const welcomeSub = document.getElementById('welcome-sub');
+      const chartTitle = document.getElementById('chart-title');
+      const activityTitle = document.getElementById('activity-title');
+      const phTitle = document.getElementById('ph-title');
+      const phSub = document.getElementById('ph-sub');
+      const phExample = document.getElementById('ph-example');
+
+      // ---------- Ratios (65/35) ----------
+      const openPanel = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
+      const closePanel = () => { mainContent.style.width = '100%'; aiPanel.style.transform = 'translateX(100%)'; };
+      openAiBtn.addEventListener('click', openPanel);
+      closeAiBtn.addEventListener('click', closePanel);
+
+      // ---------- Chart (static sample) ----------
+      new Chart(document.getElementById('headcountChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug'],
+          datasets: [{ label: 'Headcount', data: [5,7,8,8,9,10,10,12], borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.08)', fill: true, tension: .4 }]
+        },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+      });
+
+      // ---------- i18n (moved up to fix initialization order) ----------
+      const I18N = {
+        'en-US': {
+          askAI: 'Ask AI', assistant: 'Assistant',
+          welcomeTitle: 'Welcome back!', welcomeSub: "Here's what's happening with your team today.",
+          chartTitle: 'Headcount Growth', activityTitle: 'Recent Activity',
+          phTitle: 'Results will appear here.', phSub: 'Ask something like:',
+          phExample: '"Show me active employees by department"',
+          placeholderQuery: 'Ask the database...',
+          runningQuery: 'Running query…', listening: 'Listening…',
+          health: { ok:'Healthy', fail:'Issue', loading:'Checking' }
+        },
+        'zh-CN': {
+          askAI: '询问助理', assistant: '助理',
+          welcomeTitle: '欢迎回来！', welcomeSub: '以下是您团队今天的动态。',
+          chartTitle: '人员规模增长', activityTitle: '最新活动',
+          phTitle: '结果会显示在这里。', phSub: '可以这样问：',
+          phExample: '"按部门显示在职员工数量"',
+          placeholderQuery: '询问数据库…',
+          runningQuery: '正在执行查询…', listening: '正在听写…',
+          health: { ok:'正常', fail:'异常', loading:'检查中' }
+        },
+        'zh-TW': {
+          askAI: '詢問助理', assistant: '助理',
+          welcomeTitle: '歡迎回來！', welcomeSub: '以下是您團隊今天的動態。',
+          chartTitle: '人數成長趨勢', activityTitle: '最近活動',
+          phTitle: '結果會顯示在此。', phSub: '可以這樣問：',
+          phExample: '「顯示各部門在職員工數」',
+          placeholderQuery: '詢問資料庫…',
+          runningQuery: '正在執行查詢…', listening: '正在聽寫…',
+          health: { ok:'正常', fail:'異常', loading:'檢查中' }
+        }
+      };
+
+      // ---------- Health Check & API Integration ----------
+      async function checkHealth() {
+        setBadge('loading');
+        try {
+          const response = await fetch(`${API_BASE}/api/health`);
+          const data = await response.json();
+          
+          // Update database status on main page
+          updateDatabaseStatus(data);
+          
+          if (data.database_connection) {
+            setBadge('ok');
+            
+            // Show warning if metadata/index missing
+            if (!data.metadata_present || !data.index_present) {
+              showDbStatusMessage('warning', 'Database connected but schema index missing. Click "Rebuild Schema" to initialize.');
+            }
+          } else {
+            setBadge('fail');
+            showDbStatusMessage('error', 'Database connection failed. Please check your database configuration.');
+          }
+        } catch (error) {
+          console.error('Health check failed:', error);
+          setBadge('fail');
+          showDbStatusMessage('error', 'Cannot connect to API server. Please ensure the backend is running.');
+        }
+      }
+
+      function setBadge(state) {
+        const locale = langSel.value;
+        const t = I18N[locale] || I18N['en-US'];
+        const map = { 
+          ok: ['bg-green-500', t.health.ok], 
+          fail: ['bg-red-500', t.health.fail], 
+          loading: ['bg-yellow-500', t.health.loading] 
+        };
+        const [cls, txt] = map[state] || map.loading;
+        healthBadge.className = `px-2 py-0.5 rounded-full text-white text-[10px] ${cls}`;
+        healthBadge.textContent = txt;
+      }
+
+      function updateDatabaseStatus(healthData) {
+        let statusHtml = '';
+        if (healthData.database_connection) {
+          statusHtml = '<div class="bg-green-50 border border-green-200 rounded-lg p-3"><div class="flex items-center"><svg class="w-5 h-5 text-green-500 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg><span class="text-green-800 font-medium">Database Connected</span></div>';
+          
+          if (!healthData.metadata_present || !healthData.index_present) {
+            statusHtml += '<div class="mt-2"><button id="rebuild-schema-btn" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">Rebuild Schema Index</button></div>';
+          }
+          statusHtml += '</div>';
+        } else {
+          statusHtml = '<div class="bg-red-50 border border-red-200 rounded-lg p-3"><div class="flex items-center"><svg class="w-5 h-5 text-red-500 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg><span class="text-red-800 font-medium">Database Connection Failed</span></div></div>';
+        }
+        dbStatus.innerHTML = statusHtml;
+
+        // Add rebuild schema event listener if button exists
+        const rebuildBtn = document.getElementById('rebuild-schema-btn');
+        if (rebuildBtn) {
+          rebuildBtn.addEventListener('click', rebuildSchema);
+        }
+      }
+
+      function showDbStatusMessage(type, message) {
+        const className = type === 'error' ? 'error-message' : 'warning-message';
+        dbStatus.innerHTML = `<div class="${className}">${message}</div>`;
+      }
+
+      async function rebuildSchema() {
+        const rebuildBtn = document.getElementById('rebuild-schema-btn');
+        if (rebuildBtn) {
+          rebuildBtn.disabled = true;
+          rebuildBtn.textContent = 'Rebuilding...';
+        }
+
+        try {
+          const response = await fetch(`${API_BASE}/api/schema/rebuild`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ schemas: ['dbo'] })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            showDbStatusMessage('ok', `Schema rebuilt successfully! Indexed ${data.tables_indexed} tables.`);
+            // Refresh health after rebuild
+            setTimeout(checkHealth, 1000);
+          } else {
+            throw new Error('Rebuild failed');
+          }
+        } catch (error) {
+          console.error('Schema rebuild failed:', error);
+          showDbStatusMessage('error', 'Schema rebuild failed. Please check the console for details.');
+        }
+      }
+
+      refreshHealth.addEventListener('click', checkHealth);
+      
+      // Initial health check
+      checkHealth();
+
+      // ---------- Auto-resize textarea ----------
+      function resizeTA() {
+        queryTA.style.height = 'auto';
+        queryTA.style.height = Math.min(200, queryTA.scrollHeight) + 'px';
+      }
+      queryTA.addEventListener('input', resizeTA); resizeTA();
+
+      function applyLangUI(locale){
+        const t = I18N[locale] || I18N['en-US'];
+        askAiLabel.textContent = t.askAI;
+        assistantTitle.textContent = t.assistant;
+        welcomeTitle.textContent = t.welcomeTitle;
+        welcomeSub.textContent = t.welcomeSub;
+        chartTitle.textContent = t.chartTitle;
+        activityTitle.textContent = t.activityTitle;
+        phTitle.textContent = t.phTitle;
+        phSub.textContent = t.phSub;
+        phExample.textContent = t.phExample;
+        queryTA.placeholder = t.placeholderQuery;
+        // Update badge text with current health state
+        const currentClass = healthBadge.className;
+        if (currentClass.includes('bg-green-500')) setBadge('ok');
+        else if (currentClass.includes('bg-red-500')) setBadge('fail');
+        else setBadge('loading');
+      }
+
+      // initial language
+      applyLangUI(langSel.value);
+
+      langSel.addEventListener('change', () => {
+        applyLangUI(langSel.value);
+        // Update recognition language immediately if recording
+        if (recognition && recActive) {
+          try { recognition.stop(); } catch {}
+          startRecording(); // restart with new language
+        }
+      });
+
+      // ---------- Real Query Implementation ----------
+      function escapeHtml(s){ return String(s || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+      
+      function renderResult(resp) {
+        let html = '<div class="p-3 space-y-4">';
+        
+        // Show intent and schema info
+        if (resp.intent || resp.schema) {
+          html += `<div class="text-xs text-slate-500 flex justify-between items-center">
+            <div>Intent: ${escapeHtml(resp.intent || 'unknown')} | Schema: ${escapeHtml(resp.schema || 'dbo')}</div>
+            <div class="text-xs text-slate-400">${new Date().toLocaleTimeString()}</div>
+          </div>`;
+        }
+        
+        // Show generated SQL if available
+        if (resp.query) {
+          html += `<div class="space-y-2">
+            <div class="text-xs font-medium text-slate-700">Generated SQL:</div>
+            <pre class="text-xs p-2 bg-slate-100 border border-slate-200 rounded-md text-slate-800 overflow-auto custom-scrollbar">${escapeHtml(resp.query)}</pre>
+          </div>`;
+        }
+        
+        // Show results table if we have data
+        if (Array.isArray(resp.columns) && Array.isArray(resp.results) && resp.results.length > 0) {
+          html += `<div class="space-y-2">
+            <div class="text-xs font-medium text-slate-700">Results (${resp.results.length} rows):</div>
+            <div class="overflow-auto border border-slate-200 rounded-lg max-h-64">
+              <table class="w-full text-sm">
+                <thead><tr class="bg-slate-50 sticky top-0">
+                  ${resp.columns.map(c => `<th class="p-2 text-left font-semibold text-slate-700 border-b border-slate-200">${escapeHtml(c)}</th>`).join('')}
+                </tr></thead>
+                <tbody class="divide-y divide-slate-200">
+                  ${resp.results.map(row => `<tr class="hover:bg-slate-50">
+                    ${resp.columns.map((_, i) => `<td class="p-2 text-slate-600">${escapeHtml(String(row[i] ?? ''))}</td>`).join('')}
+                  </tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>`;
+        } else if (resp.query) {
+          html += `<div class="text-slate-500 text-sm p-3 bg-slate-50 rounded border">
+            Query executed but returned no results.
+          </div>`;
+        }
+        
+        // Show retrieval suggestions
+        if (Array.isArray(resp.retrieval) && resp.retrieval.length > 0) {
+          html += `<div class="space-y-2">
+            <div class="text-xs font-medium text-slate-700">Suggested Tables:</div>
+            <div class="flex flex-wrap gap-1">
+              ${resp.retrieval.slice(0, 5).map(item => `
+                <span class="chip cursor-pointer hover:bg-blue-100" onclick="suggestTable('${escapeHtml(item.table)}')" title="Score: ${item.score}">
+                  ${escapeHtml(item.table)}
+                </span>
+              `).join('')}
+            </div>
+          </div>`;
+        }
+        
+        html += '</div>';
+        results.innerHTML = html;
+      }
+      
+      function renderError(error) {
+        const html = `<div class="p-3">
+          <div class="error-message">
+            <strong>Error:</strong> ${escapeHtml(error.message || error)}
+          </div>
+          <div class="text-xs text-slate-500 mt-2">
+            Please check your database connection and try again.
+          </div>
+        </div>`;
+        results.innerHTML = html;
+      }
+      
+      // Global function for table suggestions
+      window.suggestTable = function(tableName) {
+        queryTA.value = `Show me data from ${tableName}`;
+        resizeTA();
+      };
+
+      async function sendQuery() {
+        const locale = langSel.value;
+        const t = I18N[locale] || I18N['en-US'];
+        const text = queryTA.value.trim();
+        const schema = schemaSelect.value || 'dbo';
+        
+        if (!text) return;
+        
+        placeholder && (placeholder.style.display = 'none');
+        results.innerHTML = `<div class="text-slate-500 p-4 flex items-center gap-2">
+          <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          ${escapeHtml(t.runningQuery)}
+        </div>`;
+
+        try {
+          const response = await fetch(`${API_BASE}/api/query`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              question: text,
+              schema_name: schema
+            })
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const data = await response.json();
+          renderResult(data);
+          
+        } catch (error) {
+          console.error('Query failed:', error);
+          renderError(error);
+        }
+      }
+
+      sendBtn.addEventListener('click', sendQuery);
+      queryTA.addEventListener('keydown', (e) => {
+        const panelOpen = aiPanel.style.transform === 'translateX(0px)';
+        const isSend = (e.key === 'Enter' && !e.shiftKey) || ((e.ctrlKey || e.metaKey) && e.key === 'Enter');
+        if (panelOpen && document.activeElement === queryTA && isSend) { e.preventDefault(); sendQuery(); }
+        if (e.key === 'Escape' && panelOpen) { closePanel(); }
+      });
+
+      // ---------- Microphone / Speech Recognition with Stop button + Dictation ----------
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let recognition = null;
+      let recActive = false;
+
+      // VU meter via WebAudio (visual only)
+      let vuStream = null, audioCtx = null, analyser = null, vuRAF = null, dataArray = null;
+      function startVUMeter() {
+        if (vuStream) return;
+        navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } })
+          .then(stream => {
+            vuStream = stream;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            source.connect(analyser);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const tick = () => {
+              analyser.getByteTimeDomainData(dataArray);
+              let sum = 0; for (let i=0;i<dataArray.length;i++){ const v=(dataArray[i]-128)/128; sum+=v*v; }
+              const rms = Math.sqrt(sum/dataArray.length);
+              vuBar.style.width = Math.min(48, 8 + rms * 150) + 'px';
+              vuRAF = requestAnimationFrame(tick);
+            };
+            tick();
+          }).catch(()=>{});
+      }
+      function stopVUMeter() {
+        if (vuRAF) cancelAnimationFrame(vuRAF);
+        vuRAF = null;
+        try { vuStream && vuStream.getTracks().forEach(t=>t.stop()); } catch {}
+        vuStream = null;
+        try { audioCtx && audioCtx.close(); } catch {}
+        audioCtx = null; analyser=null; dataArray=null;
+        vuBar.style.width = '8px';
+      }
+
+      function updateDictationChips(text, locale){
+        // Show the last ~12 tokens/segments as chips.
+        dictationStream.innerHTML = '';
+        if (!text) return;
+        let tokens = [];
+        if (locale.startsWith('zh')) {
+          // For Chinese, group by 6 chars per chip for readability
+          for (let i=0; i<text.length; i+=6) tokens.push(text.slice(i,i+6));
+        } else {
+          tokens = text.trim().split(/\s+/);
+        }
+        tokens.slice(-12).forEach(tok=>{
+          const span = document.createElement('span');
+          span.className = 'chip';
+          span.textContent = tok;
+          dictationStream.appendChild(span);
+        });
+      }
+
+      function startRecording() {
+        if (!SpeechRecognition) {
+          alert('Speech recognition not supported in this browser. Try Chrome or Edge.');
+          return;
+        }
+        if (recActive) return;
+
+        const locale = langSel.value;
+        recognition = new SpeechRecognition();
+        recognition.lang = locale || 'en-US';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        let finalText = '', interim = '';
+        micBtn.classList.add('active');
+        recActive = true;
+        stopBtn.classList.remove('hidden');
+        const t = I18N[locale] || I18N['en-US'];
+        voiceLine.textContent = t.listening;
+        startVUMeter();
+
+        recognition.onresult = (event) => {
+          interim = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const res = event.results[i];
+            if (res.isFinal) finalText += res[0].transcript + (locale.startsWith('zh') ? '' : ' ');
+            else interim += res[0].transcript;
+          }
+          const combined = (finalText + interim).trim();
+          queryTA.value = combined;
+          updateDictationChips(combined, locale);
+          voiceLine.textContent = interim ? (interim + '…') : finalText.trim();
+          resizeTA();
+        };
+        recognition.onerror = () => { stopRecording(); };
+        recognition.onend = () => { stopRecording(); };
+        recognition.start();
+      }
+
+      function stopRecording() {
+        if (!recActive) return;
+        try { recognition && recognition.stop(); } catch {}
+        recognition = null;
+        recActive = false;
+        micBtn.classList.remove('active');
+        stopBtn.classList.add('hidden');
+        stopVUMeter();
+      }
+
+      micBtn.addEventListener('click', startRecording);
+      stopBtn.addEventListener('click', stopRecording);
+    });
+  </script>
+</body>
+</html>
