@@ -1,0 +1,89 @@
+{
+  "header": {
+    "welcome_title": "歡迎回來！",
+    "welcome_sub": "這是您的團隊儀表板 - 每30秒更新一次即時數據",
+    "last_updated": "最後更新：{time}",
+    "refresh_data": "重新整理數據"
+  },
+  "metrics": {
+    "on_leave_today": "今日請假",
+    "people": "人",
+    "pending_approvals": "待核准",
+    "requests": "申請",
+    "review_now": "立即審核 →",
+    "low_balance_alerts": "餘額不足警示",
+    "employees": "員工",
+    "days_remaining": "< 5 天剩餘",
+    "overtime_this_week": "本週加班",
+    "hours": "小時",
+    "loading": "載入中...",
+    "no_one_on_leave": "無人請假"
+  },
+  "sections": {
+    "whos_out_today": "今日請假人員",
+    "leave_trends": "請假趨勢（過去7天）",
+    "upcoming_leave": "即將請假（未來7天）",
+    "leave_by_department": "各部門請假狀況",
+    "no_employees_on_leave": "今日無員工請假",
+    "no_upcoming_leave": "無即將到來的請假",
+    "no_department_data": "無部門資料"
+  },
+  "leave_types": {
+    "leave": "請假",
+    "vacation": "年假",
+    "sick": "病假",
+    "personal": "事假",
+    "until": "直到 {date}",
+    "on_leave": "請假中"
+  },
+  "ai_assistant": {
+    "ask_ai": "詢問 AI",
+    "assistant": "助理",
+    "checking": "檢查中",
+    "healthy": "正常",
+    "degraded": "降級",
+    "offline": "離線",
+    "refresh": "重新整理",
+    "close": "關閉",
+    "placeholder_title": "試著詢問請假資料",
+    "placeholder_sub": "範例：",
+    "example_1": "今天誰請假？",
+    "example_2": "顯示待核准的請假申請",
+    "example_3": "查詢員工編號的年假餘額",
+    "query_placeholder": "詢問請假、出勤或加班相關問題...",
+    "start_recording": "開始錄音",
+    "stop_recording": "停止錄音",
+    "send": "發送",
+    "you": "您",
+    "thinking": "思考中...",
+    "listening": "聆聽中...",
+    "speech_not_supported": "此瀏覽器不支援語音識別功能。"
+  },
+  "system_status": {
+    "system_ready": "系統就緒",
+    "system_not_ready": "系統未就緒",
+    "database": "資料庫：{status}",
+    "index": "索引：{status}",
+    "vector": "向量：{status}",
+    "ok": "正常",
+    "down": "停機",
+    "missing": "缺失",
+    "off": "關閉",
+    "health_check_failed": "健康檢查失敗。無法連接 API。",
+    "demo_data_notice": "示範資料 - API 未連線或該日期無資料",
+    "placeholder_data": "使用占位資料"
+  },
+  "errors": {
+    "leave_metrics_failed": "請假指標失敗（HTTP {status}）",
+    "network_error": "連接助理時發生網路錯誤。",
+    "something_wrong": "抱歉，出現了問題。",
+    "done": "完成。"
+  },
+  "common": {
+    "more": "還有{count}位",
+    "na": "無",
+    "unknown": "未知",
+    "loading": "載入中...",
+    "count_people": "{count} 人"
+  }
+}

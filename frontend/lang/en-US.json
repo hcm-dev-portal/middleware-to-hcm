@@ -1,0 +1,89 @@
+{
+  "header": {
+    "welcome_title": "Welcome back!",
+    "welcome_sub": "Here's your team dashboard - live data updates every 30 seconds",
+    "last_updated": "Last updated: {time}",
+    "refresh_data": "Refresh Data"
+  },
+  "metrics": {
+    "on_leave_today": "On Leave Today",
+    "people": "people",
+    "pending_approvals": "Pending Approvals",
+    "requests": "requests",
+    "review_now": "Review now →",
+    "low_balance_alerts": "Low Balance Alerts",
+    "employees": "employees",
+    "days_remaining": "< 5 days remaining",
+    "overtime_this_week": "Overtime This Week",
+    "hours": "hours",
+    "loading": "Loading...",
+    "no_one_on_leave": "No one on leave"
+  },
+  "sections": {
+    "whos_out_today": "Who's Out Today",
+    "leave_trends": "Leave Trends (Last 7 Days)",
+    "upcoming_leave": "Upcoming Leave (Next 7 Days)",
+    "leave_by_department": "Leave by Department",
+    "no_employees_on_leave": "No employees on leave today",
+    "no_upcoming_leave": "No upcoming leave scheduled",
+    "no_department_data": "No department data available"
+  },
+  "leave_types": {
+    "leave": "Leave",
+    "vacation": "Vacation",
+    "sick": "Sick Leave",
+    "personal": "Personal Leave",
+    "until": "Until {date}",
+    "on_leave": "on leave"
+  },
+  "ai_assistant": {
+    "ask_ai": "Ask AI",
+    "assistant": "Assistant",
+    "checking": "Checking",
+    "healthy": "Healthy",
+    "degraded": "Degraded",
+    "offline": "Offline",
+    "refresh": "refresh",
+    "close": "Close",
+    "placeholder_title": "Try asking about leave data",
+    "placeholder_sub": "Examples:",
+    "example_1": "Who's on leave today?",
+    "example_2": "Show pending leave requests",
+    "example_3": "Vacation balance for employee ID",
+    "query_placeholder": "Ask about leave, attendance, or overtime...",
+    "start_recording": "Start recording",
+    "stop_recording": "Stop recording",
+    "send": "Send",
+    "you": "You",
+    "thinking": "Thinking...",
+    "listening": "Listening...",
+    "speech_not_supported": "Speech recognition not supported in this browser."
+  },
+  "system_status": {
+    "system_ready": "System Ready",
+    "system_not_ready": "System Not Ready",
+    "database": "DB: {status}",
+    "index": "Index: {status}",
+    "vector": "Vector: {status}",
+    "ok": "OK",
+    "down": "down",
+    "missing": "missing",
+    "off": "off",
+    "health_check_failed": "Health check failed. API not reachable.",
+    "demo_data_notice": "Demo data - API not connected or no data for date",
+    "placeholder_data": "Using placeholder data"
+  },
+  "errors": {
+    "leave_metrics_failed": "Leave metrics failed (HTTP {status})",
+    "network_error": "Network error contacting assistant.",
+    "something_wrong": "Sorry, something went wrong.",
+    "done": "Done."
+  },
+  "common": {
+    "more": "+{count} more",
+    "na": "N/A",
+    "unknown": "Unknown",
+    "loading": "Loading...",
+    "count_people": "{count} people"
+  }
+}
