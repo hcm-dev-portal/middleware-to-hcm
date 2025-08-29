@@ -197,10 +197,10 @@ class SQLServerDatabaseService:
 
             t2 = time.perf_counter()
             rows = cur.fetchmany(max_rows)
+            # >>> FIX: capture columns BEFORE the connection/cursor close
+            columns = [d[0] for d in cur.description] if cur.description else []
+            rows_list = [tuple(r) for r in rows]
             t3 = time.perf_counter()
-
-        columns = [d[0] for d in cur.description] if cur.description else []
-        rows_list = [tuple(r) for r in rows]
 
         logger.info(
             "SQL ok rid=%s rows=%d cols=%d connect=%dms exec=%dms fetch=%dms total=%dms",
@@ -379,8 +379,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(
         level=os.getenv("DB_LOG_LEVEL", "INFO"),
-        format="%(asctime)s | %(levelname)s | %(name)s | rid=%(rid)s | %(message)s"
-        .replace("%(rid)s", "%(message)s")  # fallback if LogRecord has no 'rid'
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
 
     # Ensure a RID for CLI
