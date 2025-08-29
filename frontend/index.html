@@ -3,22 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>HCM AI Assistant - Dashboard Prototype</title>
+  <title>HCM AI Assistant - Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="./translations.js"></script>
   <style>
-    body { 
-      font-family: 'Inter', 'Noto Sans TC', sans-serif; 
-      background-color: #f8fafc; 
-    }
-    body[lang="zh-TW"] {
-      font-family: 'Noto Sans TC', 'Inter', sans-serif;
-    }
+    body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
     #main-content { transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
     #ai-panel { transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: -10px 0px 30px -15px rgba(0,0,0,0.1); }
     .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -37,6 +29,7 @@
     .metric-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
     .pulse-dot { display: inline-block; width: 8px; height: 8px; background: #10b981; border-radius: 50%; animation: pulse 2s infinite; }
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+    .animate-spin { animation: spin 1s linear infinite; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -49,20 +42,20 @@
         <!-- Header -->
         <header class="flex justify-between items-center pb-6 border-b border-gray-200">
           <div>
-            <h1 class="text-3xl font-bold text-gray-800" id="welcome-title" data-i18n="header.welcome_title">Welcome back!</h1>
-            <p class="text-gray-500 mt-1" id="welcome-sub" data-i18n="header.welcome_sub">Here's your team dashboard - live data updates every 30 seconds</p>
+            <h1 class="text-3xl font-bold text-gray-800" id="welcome-title">Welcome back!</h1>
+            <p class="text-gray-500 mt-1" id="welcome-sub">Here's your team dashboard - live data updates every 30 seconds</p>
           </div>
           <div class="flex items-center space-x-4">
             <div class="flex items-center space-x-2 text-sm text-gray-500">
               <span class="pulse-dot"></span>
               <span id="last-update">Last updated: --:--</span>
             </div>
-            <button id="refresh-btn" class="p-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50" data-i18n="header.refresh_data" data-i18n-type="title" title="Refresh Data">
+            <button id="refresh-btn" class="p-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50" title="Refresh Data">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3m2 5.3a10 10 0 01-18.8 4.2"/></svg>
             </button>
             <button id="ai-dock-btn" class="flex items-center space-x-2 bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-blue-700 transition duration-300">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
-              <span id="ask-ai-label" data-i18n="ai_assistant.ask_ai">Ask AI</span>
+              <span id="ask-ai-label">Ask AI</span>
             </button>
             <img src="https://placehold.co/40x40/E2E8F0/4A5568?text=U" alt="User Avatar" class="w-10 h-10 rounded-full">
           </div>
@@ -71,19 +64,19 @@
         <!-- Database Status -->
         <div id="db-status" class="mt-6 mb-4"></div>
 
-        <!-- Dashboard Widgets with Real Data Integration -->
+        <!-- Dashboard Widgets -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-6">
           
           <!-- Leave Today -->
           <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="metrics.on_leave_today">On Leave Today</h3>
+                <h3 class="text-sm font-medium text-gray-600">On Leave Today</h3>
                 <p class="text-3xl font-bold text-gray-900 mt-2">
                   <span id="leave-today-count">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="metrics.people">people</span>
+                  <span class="text-lg font-normal text-gray-500">people</span>
                 </p>
-                <p class="text-xs text-gray-500 mt-2" id="leave-today-details" data-i18n="metrics.loading">Loading...</p>
+                <p class="text-xs text-gray-500 mt-2" id="leave-today-details">Loading...</p>
               </div>
               <div class="p-2 bg-amber-100 rounded-lg">
                 <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -97,12 +90,12 @@
           <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="metrics.pending_approvals">Pending Approvals</h3>
+                <h3 class="text-sm font-medium text-gray-600">Pending Approvals</h3>
                 <p class="text-3xl font-bold text-gray-900 mt-2">
                   <span id="pending-leave-count">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="metrics.requests">requests</span>
+                  <span class="text-lg font-normal text-gray-500">requests</span>
                 </p>
-                <p class="text-xs text-blue-600 mt-2 cursor-pointer hover:underline" id="pending-action" data-i18n="metrics.review_now">Review now →</p>
+                <p class="text-xs text-blue-600 mt-2 cursor-pointer hover:underline" id="pending-action">Review now →</p>
               </div>
               <div class="p-2 bg-blue-100 rounded-lg">
                 <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -112,16 +105,16 @@
             </div>
           </div>
 
-          <!-- Low Balance Alerts -->
+          <!-- Vacation Balance -->
           <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="metrics.low_balance_alerts">Low Balance Alerts</h3>
+                <h3 class="text-sm font-medium text-gray-600">Low Balance Alerts</h3>
                 <p class="text-3xl font-bold text-gray-900 mt-2">
                   <span id="low-balance-count">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="metrics.employees">employees</span>
+                  <span class="text-lg font-normal text-gray-500">employees</span>
                 </p>
-                <p class="text-xs text-orange-600 mt-2" id="low-balance-details" data-i18n="metrics.days_remaining">&lt; 5 days remaining</p>
+                <p class="text-xs text-orange-600 mt-2" id="low-balance-details">&lt; 5 days remaining</p>
               </div>
               <div class="p-2 bg-orange-100 rounded-lg">
                 <svg class="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -135,10 +128,10 @@
           <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="metrics.overtime_this_week">Overtime This Week</h3>
+                <h3 class="text-sm font-medium text-gray-600">Overtime This Week</h3>
                 <p class="text-3xl font-bold text-gray-900 mt-2">
                   <span id="overtime-hours">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="metrics.hours">hours</span>
+                  <span class="text-lg font-normal text-gray-500">hours</span>
                 </p>
                 <p class="text-xs text-gray-500 mt-2" id="overtime-people">-- people</p>
               </div>
@@ -157,8 +150,8 @@
           <!-- Currently On Leave List -->
           <div class="bg-white p-6 rounded-lg shadow-sm">
             <h3 class="text-lg font-semibold text-gray-700 mb-4 flex items-center justify-between">
-              <span data-i18n="sections.whos_out_today">Who's Out Today</span>
-              <span class="text-xs font-normal text-gray-500" id="leave-list-date" data-i18n="metrics.loading">Loading...</span>
+              Who's Out Today
+              <span class="text-xs font-normal text-gray-500" id="leave-list-date">Loading...</span>
             </h3>
             <div id="leave-list" class="space-y-3">
               <div class="loading-shimmer h-12 rounded"></div>
@@ -168,7 +161,7 @@
 
           <!-- Leave Trends Chart -->
           <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.leave_trends">Leave Trends (Last 7 Days)</h3>
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">Leave Trends (Last 7 Days)</h3>
             <div class="h-64">
               <canvas id="leaveTrendChart"></canvas>
             </div>
@@ -180,42 +173,43 @@
           
           <!-- Upcoming Leave -->
           <div class="bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.upcoming_leave">Upcoming Leave (Next 7 Days)</h3>
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">Upcoming Leave (Next 7 Days)</h3>
             <div id="upcoming-leave" class="space-y-3">
-              <div class="text-sm text-gray-500" data-i18n="sections.no_upcoming_leave">Loading upcoming leave...</div>
+              <div class="text-sm text-gray-500">Loading upcoming leave...</div>
             </div>
           </div>
 
           <!-- Department Leave Summary -->
           <div class="bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.leave_by_department">Leave by Department</h3>
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">Leave by Department</h3>
             <div id="dept-leave-summary" class="space-y-3">
-              <div class="text-sm text-gray-500" data-i18n="sections.no_department_data">Loading department data...</div>
+              <div class="text-sm text-gray-500">Loading department data...</div>
             </div>
           </div>
         </div>
       </div>
     </main>
 
-    <!-- AI Assistant Panel (35%) -->
+    <!-- AI Assistant Panel -->
     <aside id="ai-panel" class="w-full md:w-[35%] lg:w-[35%] h-full bg-slate-50 border-l border-slate-200 flex flex-col fixed top-0 right-0 transform translate-x-full">
       <div class="p-4 border-b border-slate-200 flex justify-between items-center">
         <div class="flex items-center gap-3">
           <div class="w-9 h-9 border border-slate-300 bg-white rounded-lg flex items-center justify-center text-blue-600 font-bold">AI</div>
           <div>
-            <div id="assistant-title" class="font-semibold text-slate-800" data-i18n="ai_assistant.assistant">Assistant</div>
+            <div id="assistant-title" class="font-semibold text-slate-800">Assistant</div>
             <div class="flex items-center gap-2 text-xs text-slate-500">
-              <span id="health-badge" class="px-2 py-0.5 rounded-full text-white text-[10px] bg-yellow-500" data-i18n="ai_assistant.checking">Checking</span>
-              <button id="refresh-health" class="underline" data-i18n="ai_assistant.refresh">refresh</button>
+              <span id="health-badge" class="px-2 py-0.5 rounded-full text-white text-[10px] bg-yellow-500">Checking</span>
+              <button id="refresh-health" class="underline">refresh</button>
             </div>
           </div>
         </div>
         <div class="flex items-center gap-2">
           <select id="lang" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <option value="en-US">English (US)</option>
+            <option value="zh-CN">中文（简体）</option>
             <option value="zh-TW">中文（繁體）</option>
           </select>
-          <button id="close-panel-btn" class="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:bg-slate-100" data-i18n="ai_assistant.close" data-i18n-type="aria-label" aria-label="Close">
+          <button id="close-panel-btn" class="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:bg-slate-100" aria-label="Close">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -225,12 +219,12 @@
         <div id="results" class="flex-1 bg-white border border-slate-200 rounded-lg p-3 overflow-y-auto custom-scrollbar">
           <div id="placeholder" class="text-slate-500 text-sm h-full flex flex-col justify-center items-center text-center">
             <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-slate-400 mb-4"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
-            <p id="ph-title" class="font-semibold" data-i18n="ai_assistant.placeholder_title">Try asking about leave data</p>
-            <p id="ph-sub" class="mt-1" data-i18n="ai_assistant.placeholder_sub">Examples:</p>
+            <p id="ph-title" class="font-semibold">Try asking about leave data</p>
+            <p id="ph-sub" class="mt-1">Examples:</p>
             <div class="mt-2 space-y-2">
-              <div class="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200 text-xs" data-i18n="ai_assistant.example_1">"Who's on leave today?"</div>
-              <div class="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200 text-xs" data-i18n="ai_assistant.example_2">"Show pending leave requests"</div>
-              <div class="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200 text-xs" data-i18n="ai_assistant.example_3">"Vacation balance for employee ID"</div>
+              <div class="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200 text-xs">"Who's on leave today?"</div>
+              <div class="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200 text-xs">"Show pending leave requests"</div>
+              <div class="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200 text-xs">"Vacation balance for employee ID"</div>
             </div>
           </div>
         </div>
@@ -238,18 +232,20 @@
         <!-- Composer -->
         <div class="bg-white border border-slate-200 rounded-lg p-2.5">
           <div class="flex items-start gap-2">
-            <button id="mic" class="p-3 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 relative" data-i18n="ai_assistant.start_recording" data-i18n-type="title" title="Start recording">
+            <button id="mic" class="p-3 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 relative" title="Start recording">
               <svg id="mic-icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
               <div id="vu" class="vu"></div>
             </button>
-            <button id="stop" class="p-3 rounded-lg border border-red-300 text-red-600 hover:bg-red-50 hidden" data-i18n="ai_assistant.stop_recording" data-i18n-type="title" title="Stop recording">⏹</button>
+            <button id="stop" class="p-3 rounded-lg border border-red-300 text-red-600 hover:bg-red-50 hidden" title="Stop recording">
+              ⏹
+            </button>
 
             <div class="flex-1">
-              <textarea id="query" rows="3" class="w-full p-2.5 resize-none overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500" data-i18n="ai_assistant.query_placeholder" data-i18n-type="placeholder" placeholder="Ask about leave, attendance, or overtime..."></textarea>
+              <textarea id="query" rows="3" placeholder="Ask about leave, attendance, or overtime..." class="w-full p-2.5 resize-none overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
               <div id="dictation-stream" class="flex flex-wrap gap-1 mt-1"></div>
               <div id="voice-line" class="text-slate-500 text-xs mt-1 px-1"></div>
             </div>
-            <button id="send" class="p-3 rounded-lg bg-blue-600 text-white hover:bg-blue-700" data-i18n="ai_assistant.send" data-i18n-type="title" title="Send">
+            <button id="send" class="p-3 rounded-lg bg-blue-600 text-white hover:bg-blue-700" title="Send">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
             </button>
           </div>
@@ -259,52 +255,32 @@
   </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', async () => {
-  // ---------- Initialize Translation Manager ----------
-  const translator = new TranslationManager();
-  await translator.init('en-US'); // Initialize with English as default
-  window.translator = translator; // Make it globally available
-
-  // ---------- API Configuration (robust against bad values) ----------
+document.addEventListener('DOMContentLoaded', () => {
+  // API Configuration
+  const DEFAULT_API_BASE = 'http://localhost:8899';
   const origin = window.location.origin || '';
-  const DEFAULT_API_BASE = /^https?:\/\//.test(origin) ? origin : 'http://127.0.0.1:8899';
-  const saved = localStorage.getItem('API_BASE');
-
-  const isValidBase = (v) => typeof v === 'string' && /^https?:\/\/[^/]+(:\d+)?$/.test(v);
-  if (saved && !isValidBase(saved)) {
-    try { localStorage.removeItem('API_BASE'); } catch {}
-  }
-  const API_BASE = isValidBase(saved) ? saved : DEFAULT_API_BASE;
-
-  // Central URL builder — always provides a proper absolute URL
-  function apiUrl(path, params) {
-    const u = new URL(path, API_BASE); // works for "/api/..." and "api/..."
-    if (params && typeof params === 'object') {
-      Object.entries(params).forEach(([k, v]) => {
-        if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, v);
-      });
-    }
-    return u.toString();
-  }
-
+  const stored = localStorage.getItem('API_BASE');
+  const API_BASE = (stored && /^https?:\/\//.test(stored))
+    ? stored
+    : (/^https?:\/\//.test(origin) ? origin : DEFAULT_API_BASE);
   console.log('[dash] API_BASE =', API_BASE);
 
   const params = new URLSearchParams(window.location.search);
-  const AS_OF = params.get('asOf') || ''; // let backend choose unless explicitly provided
+  const AS_OF = params.get('asOf') || '';
   const TREND_DAYS = Number(params.get('days') || 7);
   let refreshInterval;
 
-  // ---------- Elements ----------
+  // Elements
   const mainContent = document.getElementById('main-content');
   const aiPanel = document.getElementById('ai-panel');
   const openAiBtn = document.getElementById('ai-dock-btn');
   const closeAiBtn = document.getElementById('close-panel-btn');
   const refreshBtn = document.getElementById('refresh-btn');
   const lastUpdateEl = document.getElementById('last-update');
+  const refreshHealthBtn = document.getElementById('refresh-health');
 
   const langSel = document.getElementById('lang');
   const healthBadge = document.getElementById('health-badge');
-  const refreshHealth = document.getElementById('refresh-health');
   const queryTA = document.getElementById('query');
   const sendBtn = document.getElementById('send');
   const results = document.getElementById('results');
@@ -316,30 +292,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const dictationStream = document.getElementById('dictation-stream');
   const dbStatus = document.getElementById('db-status');
 
-  // ---------- Language Switching ----------
-  langSel.addEventListener('change', (e) => {
-    const newLang = e.target.value;
-    translator.switchLanguage(newLang);
-    document.documentElement.lang = newLang === 'zh-TW' ? 'zh-TW' : 'en';
-    document.body.setAttribute('lang', newLang);
-  });
-
-  // Set initial language from saved preference
-  const savedLang = translator.getCurrentLanguage();
-  langSel.value = savedLang;
-  document.documentElement.lang = savedLang === 'zh-TW' ? 'zh-TW' : 'en';
-  document.body.setAttribute('lang', savedLang);
-
-  // Listen for language changes
-  window.addEventListener('languageChanged', (e) => {
-    // Update any dynamic content after language change
-    updateLastUpdateTime();
-    if (recognition) {
-      recognition.lang = e.detail.language;
-    }
-  });
-
-  // ---------- Helpers ----------
+  // Helpers
   function banner(msg, kind='error') {
     const el = document.createElement('div');
     el.className = kind === 'error' ? 'error-message' : 'warning-message';
@@ -347,43 +300,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     dbStatus?.prepend(el);
   }
 
-  // ---------- Panel Controls ----------
-  const openPanel = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
-  const closePanel = () => { mainContent.style.width = '100%'; aiPanel.style.transform = 'translateX(100%)'; };
+  // Panel Controls
+  const openPanel = () => {
+    mainContent.style.width = '65%';
+    aiPanel.style.transform = 'translateX(0)';
+  };
+  
+  const closePanel = () => {
+    mainContent.style.width = '100%';
+    aiPanel.style.transform = 'translateX(100%)';
+  };
+  
   openAiBtn.addEventListener('click', openPanel);
   closeAiBtn.addEventListener('click', closePanel);
 
-  // ---------- Dashboard Data Loading ----------
+  // Dashboard Data Loading
   async function loadLeaveMetrics() {
     try {
-      const url = apiUrl('/api/leave_data', { kind: 'metrics', ...(AS_OF ? { as_of: AS_OF } : {}) });
-      const response = await fetch(url);
+      const url = new URL(`${API_BASE}/api/leave_data`);
+      url.searchParams.set('kind', 'metrics');
+      if (AS_OF) url.searchParams.set('as_of', AS_OF);
+
+      const response = await fetch(url.toString());
       if (!response.ok) {
-        banner(translator.t('errors.leave_metrics_failed', { status: response.status }));
+        banner(`Leave metrics failed (HTTP ${response.status})`);
         throw new Error(`HTTP ${response.status}`);
       }
       const data = await response.json();
 
       if (data.success) {
         const m = data.metrics || {};
-        // Main metrics
+        
+        // Update metrics
         document.getElementById('leave-today-count').textContent = m.employees_on_leave_today ?? '0';
         document.getElementById('pending-leave-count').textContent = m.pending_leave_requests ?? '0';
         document.getElementById('low-balance-count').textContent = m.low_balance_count ?? '0';
         document.getElementById('overtime-hours').textContent = m.overtime_hours ?? '0';
-        document.getElementById('overtime-people').textContent = translator.t('common.count_people', { count: m.overtime_people ?? '0' });
+        document.getElementById('overtime-people').textContent = `${m.overtime_people ?? '0'} people`;
 
-        // Today details/list
+        // Today details
         const leaveDetails = m.on_leave_details || [];
         if (leaveDetails.length > 0) {
           const personIds = leaveDetails.slice(0, 3).map(p => String(p.person_id || '').substring(0, 6)).join(', ');
           document.getElementById('leave-today-details').textContent =
-            personIds + (leaveDetails.length > 3 ? ` ${translator.t('common.more', { count: leaveDetails.length - 3 })}` : '');
+            personIds + (leaveDetails.length > 3 ? ` +${leaveDetails.length - 3} more` : '');
         } else {
-          document.getElementById('leave-today-details').textContent = translator.t('metrics.no_one_on_leave');
+          document.getElementById('leave-today-details').textContent = 'No one on leave';
         }
 
-        // Render list (prefer display_name if present)
+        // Render leave list
         const leaveListHtml = leaveDetails.length > 0
           ? leaveDetails.map(person => `
               <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -393,65 +358,54 @@ document.addEventListener('DOMContentLoaded', async () => {
                   </div>
                   <div>
                     <p class="text-sm font-medium text-gray-900">${escapeHtml(person.display_name || person.person_id || '')}</p>
-                    <p class="text-xs text-gray-500">${escapeHtml(person.type || translator.t('leave_types.leave'))}</p>
+                    <p class="text-xs text-gray-500">${escapeHtml(person.type || 'Leave')}</p>
                   </div>
                 </div>
-                <span class="text-xs text-gray-500">${translator.t('leave_types.until', { date: formatDate(person.end_date) })}</span>
+                <span class="text-xs text-gray-500">Until ${formatDate(person.end_date)}</span>
               </div>
             `).join('')
-          : `<div class="text-center text-gray-500 py-8">${translator.t('sections.no_employees_on_leave')}</div>`;
+          : '<div class="text-center text-gray-500 py-8">No employees on leave today</div>';
         document.getElementById('leave-list').innerHTML = leaveListHtml;
 
-        // Upcoming leave (prefer display_name)
+        // Upcoming leave
         const up = m.upcoming_leave || [];
         document.getElementById('upcoming-leave').innerHTML = up.length
           ? up.map(item => `
               <div class="border-l-4 border-blue-400 pl-3 py-2">
                 <p class="text-sm font-medium text-gray-900">${escapeHtml(item.display_name || item.person_id || '')}</p>
                 <p class="text-xs text-gray-500">${formatDate(item.start_date)} - ${formatDate(item.end_date)}</p>
-                <p class="text-xs text-gray-400">${escapeHtml(item.type || translator.t('leave_types.leave'))}</p>
+                <p class="text-xs text-gray-400">${escapeHtml(item.type || 'Leave')}</p>
               </div>
             `).join('')
-          : `<div class="text-sm text-gray-500">${translator.t('sections.no_upcoming_leave')}</div>`;
+          : '<div class="text-sm text-gray-500">No upcoming leave scheduled</div>';
 
         // Department summary
         const dept = m.department_summary || [];
         document.getElementById('dept-leave-summary').innerHTML = dept.length
           ? dept.map(d => `
               <div class="flex justify-between items-center py-2">
-                <span class="text-sm text-gray-700">${escapeHtml(d.department_id || translator.t('common.unknown'))}</span>
-                <span class="text-sm font-medium text-gray-900">${d.count} ${translator.t('leave_types.on_leave')}</span>
+                <span class="text-sm text-gray-700">${escapeHtml(d.department_id || 'Unknown')}</span>
+                <span class="text-sm font-medium text-gray-900">${d.count} on leave</span>
               </div>
             `).join('')
-          : `<div class="text-sm text-gray-500">${translator.t('sections.no_department_data')}</div>`;
+          : '<div class="text-sm text-gray-500">No department data available</div>';
 
         updateLastUpdateTime();
-      } else {
-        showDemoData();
       }
     } catch (error) {
       console.error('Failed to load leave metrics:', error);
-      showDemoData();
     }
   }
 
-  function showDemoData() {
-    document.getElementById('leave-today-count').textContent = '3';
-    document.getElementById('pending-leave-count').textContent = '5';
-    document.getElementById('low-balance-count').textContent = '7';
-    document.getElementById('overtime-hours').textContent = '42';
-    document.getElementById('overtime-people').textContent = translator.t('common.count_people', { count: '8' });
-    document.getElementById('leave-today-details').textContent = translator.t('system_status.demo_data_notice');
-    document.getElementById('leave-list').innerHTML = `<div class="text-center text-gray-400 py-8">${translator.t('system_status.placeholder_data')}</div>`;
-  }
-
-  // ---------- Utilities ----------
+  // Utilities
   function escapeHtml(s) {
-    return String(s || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    return String(s || '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
   }
   
   function formatDate(dateStr) {
-    if (!dateStr) return translator.t('common.na');
+    if (!dateStr) return 'N/A';
     try {
       if (dateStr.length === 8 && !dateStr.includes('-')) {
         const year = dateStr.substring(0, 4);
@@ -460,19 +414,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         dateStr = `${year}-${month}-${day}`;
       }
       const date = new Date(dateStr);
-      return translator.formatDate(date, { month: 'short', day: 'numeric' });
-    } catch { 
-      return dateStr; 
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch {
+      return dateStr;
     }
   }
   
   function updateLastUpdateTime() {
     const now = new Date();
-    const timeStr = translator.formatTime(now);
-    lastUpdateEl.textContent = translator.t('header.last_updated', { time: timeStr });
+    lastUpdateEl.textContent = `Last updated: ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
   }
 
-  // ---------- Chart ----------
+  // Chart
   let leaveTrendChart = null;
   function initializeCharts() {
     const ctx = document.getElementById('leaveTrendChart').getContext('2d');
@@ -480,36 +433,33 @@ document.addEventListener('DOMContentLoaded', async () => {
       type: 'line',
       data: {
         labels: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-        datasets: [{ 
-          label: translator.t('sections.leave_trends'), 
-          data: [0,0,0,0,0,0,0], 
-          fill: false, 
-          borderWidth: 2, 
-          tension: 0.3, 
-          pointRadius: 3 
+        datasets: [{
+          label: 'Employees on Leave',
+          data: [0,0,0,0,0,0,0],
+          fill: false,
+          borderWidth: 2,
+          tension: 0.3,
+          pointRadius: 3,
+          borderColor: '#3b82f6',
+          backgroundColor: '#3b82f6'
         }]
       },
       options: {
-        maintainAspectRatio: false, 
-        responsive: true, 
+        maintainAspectRatio: false,
+        responsive: true,
         animation: { duration: 400 },
-        plugins: { 
-          legend: { display: false }, 
-          tooltip: { mode: 'index', intersect: false } 
-        },
-        scales: { 
-          x: { grid: { display: false } }, 
-          y: { beginAtZero: true, ticks: { precision: 0 } } 
-        }
+        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+        scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 } } }
       }
     });
   }
   
   function updateLeaveTrend(trend) {
-    if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) return;
+    if (!leaveTrendChart) return;
+    if (!Array.isArray(trend) || trend.length === 0) return;
     const labels = trend.map(t => {
       const d = new Date(t.date);
-      return translator.formatDate(d, { weekday: 'short' });
+      return d.toLocaleDateString('en-US', { weekday: 'short' });
     });
     const values = trend.map(t => Number(t.count || 0));
     leaveTrendChart.data.labels = labels;
@@ -517,43 +467,104 @@ document.addEventListener('DOMContentLoaded', async () => {
     leaveTrendChart.update();
   }
 
-  // ---------- Health ----------
+  // Health Check
   async function checkHealth() {
     try {
-      const res = await fetch(apiUrl('/api/health'));
+      const res = await fetch(`${API_BASE}/api/health`);
       const data = await res.json();
       const ready = !!data?.ready_for_queries;
-      
-      healthBadge.textContent = ready ? translator.t('ai_assistant.healthy') : translator.t('ai_assistant.degraded');
+      healthBadge.textContent = ready ? 'Healthy' : 'Degraded';
       healthBadge.className = `px-2 py-0.5 rounded-full text-white text-[10px] ${ready ? 'bg-emerald-600' : 'bg-yellow-500'}`;
 
       const parts = [
-        translator.t('system_status.database', { status: data?.database_connection ? translator.t('system_status.ok') : translator.t('system_status.down') }),
-        translator.t('system_status.index', { status: data?.index_present ? translator.t('system_status.ok') : translator.t('system_status.missing') }),
-        translator.t('system_status.vector', { status: data?.vector_db?.ready ? translator.t('system_status.ok') : translator.t('system_status.off') })
+        `DB: ${data?.database_connection ? 'OK' : 'down'}`,
+        `Index: ${data?.index_present ? 'OK' : 'missing'}`,
+        `Vector: ${data?.vector_db?.ready ? 'OK' : 'off'}`
       ];
-      
       dbStatus.innerHTML = `
         <div class="warning-message flex items-center gap-3 ${ready ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : ''}">
           <span class="pulse-dot"></span>
           <div>
-            <div class="font-semibold">${ready ? translator.t('system_status.system_ready') : translator.t('system_status.system_not_ready')}</div>
+            <div class="font-semibold">System ${ready ? 'Ready' : 'Not Ready'}</div>
             <div class="text-sm">${parts.join(' · ')}</div>
           </div>
         </div>`;
     } catch {
-      healthBadge.textContent = translator.t('ai_assistant.offline');
+      healthBadge.textContent = 'Offline';
       healthBadge.className = 'px-2 py-0.5 rounded-full text-white text-[10px] bg-red-600';
-      dbStatus.innerHTML = `<div class="error-message">${translator.t('system_status.health_check_failed')}</div>`;
+      dbStatus.innerHTML = `<div class="error-message">Health check failed. API not reachable.</div>`;
     }
   }
 
-  // ---------- AI Assistant ----------
+  refreshHealthBtn.addEventListener('click', checkHealth);
+
+  // AI Assistant
+  const translations = {
+    'en-US': {
+      title: 'Assistant',
+      placeholder: 'Try asking about leave data',
+      examples: ['Who\'s on leave today?', 'Show pending leave requests', 'Vacation balance for employee ID'],
+      you: 'You',
+      assistant: 'Assistant',
+      thinking: 'Thinking...',
+      inputPlaceholder: 'Ask about leave, attendance, or overtime...',
+      listening: 'Listening...',
+      speechError: 'Speech recognition not supported in this browser.',
+      networkError: 'Network error contacting assistant.',
+      errorMessage: 'Sorry, something went wrong.'
+    },
+    'zh-CN': {
+      title: '助手',
+      placeholder: '尝试询问请假数据',
+      examples: ['今天谁请假了？', '显示待批准的请假申请', '员工ID的假期余额'],
+      you: '您',
+      assistant: '助手',
+      thinking: '思考中...',
+      inputPlaceholder: '询问关于请假、出勤或加班的问题...',
+      listening: '正在听...',
+      speechError: '此浏览器不支持语音识别。',
+      networkError: '联系助手时网络错误。',
+      errorMessage: '抱歉，出了点问题。'
+    },
+    'zh-TW': {
+      title: '助手',
+      placeholder: '嘗試詢問請假數據',
+      examples: ['今天誰請假了？', '顯示待批准的請假申請', '員工ID的假期餘額'],
+      you: '您',
+      assistant: '助手',
+      thinking: '思考中...',
+      inputPlaceholder: '詢問關於請假、出勤或加班的問題...',
+      listening: '正在聽...',
+      speechError: '此瀏覽器不支持語音識別。',
+      networkError: '聯繫助手時網絡錯誤。',
+      errorMessage: '抱歉，出了點問題。'
+    }
+  };
+
+  function getTranslation(key) {
+    const lang = langSel.value;
+    return translations[lang]?.[key] || translations['en-US'][key];
+  }
+
+  function updateUILanguage() {
+    document.getElementById('assistant-title').textContent = getTranslation('title');
+    document.getElementById('ph-title').textContent = getTranslation('placeholder');
+    queryTA.placeholder = getTranslation('inputPlaceholder');
+    
+    const examples = getTranslation('examples');
+    const exampleDivs = placeholder.querySelectorAll('.mt-2 > div');
+    exampleDivs.forEach((div, i) => {
+      if (examples[i]) div.textContent = `"${examples[i]}"`;
+    });
+  }
+
+  langSel.addEventListener('change', updateUILanguage);
+
   function appendMessage(role, text) {
     placeholder.classList.add('hidden');
     const bubble = document.createElement('div');
     bubble.className = `mb-3 p-3 rounded-lg border ${role === 'user' ? 'bg-blue-50 border-blue-200 text-blue-900' : 'bg-white border-slate-200 text-slate-800'}`;
-    const roleLabel = role === 'user' ? translator.t('ai_assistant.you') : translator.t('ai_assistant.assistant');
+    const roleLabel = role === 'user' ? getTranslation('you') : getTranslation('assistant');
     bubble.innerHTML = `<div class="text-xs mb-1 ${role==='user'?'text-blue-600':'text-slate-500'}">${roleLabel}</div><div class="text-sm leading-6">${escapeHtml(text)}</div>`;
     results.appendChild(bubble);
     results.scrollTop = results.scrollHeight;
@@ -567,12 +578,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const typing = document.createElement('div');
     typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
-    typing.innerHTML = `<span class="inline-flex items-center gap-2"><span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>${translator.t('ai_assistant.thinking')}</span>`;
+    typing.innerHTML = `<span class="inline-flex items-center gap-2"><span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>${getTranslation('thinking')}</span>`;
     results.appendChild(typing);
     results.scrollTop = results.scrollHeight;
 
     try {
-      const res = await fetch(apiUrl('/api/assistant/query'), {
+      const res = await fetch(`${API_BASE}/api/assistant/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, lang: langSel.value })
@@ -580,13 +591,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       const data = await res.json();
       typing.remove();
       if (data?.success) {
-        appendMessage('assistant', data.summary || data.explanation_localized || data.explanation_english || translator.t('errors.done'));
+        appendMessage('assistant',
+          data.summary || data.explanation_localized || data.explanation_english || 'Done.'
+        );
       } else {
-        appendMessage('assistant', data?.error || translator.t('errors.something_wrong'));
+        appendMessage('assistant', data?.error || getTranslation('errorMessage'));
       }
     } catch (e) {
       typing.remove();
-      appendMessage('assistant', translator.t('errors.network_error'));
+      appendMessage('assistant', getTranslation('networkError'));
     }
   }
 
@@ -594,18 +607,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   queryTA.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery();
   });
+  
   document.getElementById('pending-action')?.addEventListener('click', () => {
     openPanel();
-    queryTA.value = translator.t('ai_assistant.example_2').replace(/"/g, '');
+    queryTA.value = 'Show pending leave requests';
     queryTA.focus();
   });
 
-  // ---------- Voice Dictation ----------
+  // Voice Dictation
   let recognition = null;
   let listening = false;
+  
   function supportsSpeech() {
     return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
   }
+  
   function setupRecognition() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognition = new SR();
@@ -634,9 +650,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     recognition.onerror = () => stopListening();
     recognition.onend = () => stopListening();
   }
+  
   function startListening() {
     if (!supportsSpeech()) {
-      voiceLine.textContent = translator.t('ai_assistant.speech_not_supported');
+      voiceLine.textContent = getTranslation('speechError');
       return;
     }
     if (!recognition) setupRecognition();
@@ -645,40 +662,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     stopBtn.classList.remove('hidden');
     listening = true;
     vuTick();
-    voiceLine.textContent = translator.t('ai_assistant.listening');
+    voiceLine.textContent = getTranslation('listening');
     recognition.lang = langSel.value;
     recognition.start();
   }
+  
   function stopListening() {
     if (!listening) return;
     listening = false;
     micBtn.classList.remove('active');
     stopBtn.classList.add('hidden');
     voiceLine.textContent = '';
+    dictationStream.innerHTML = '';
     try { recognition.stop(); } catch {}
     vuBar.style.width = '8px';
   }
+  
   function vuTick() {
     if (!listening) return;
     const w = 8 + Math.round(Math.random() * 40);
     vuBar.style.width = `${w}px`;
     setTimeout(vuTick, 80);
   }
+  
   micBtn.addEventListener('click', startListening);
   stopBtn.addEventListener('click', stopListening);
   langSel.addEventListener('change', () => {
     if (listening) stopListening();
     recognition = null;
+    updateUILanguage();
   });
 
-  // ---------- Refresh & Scheduling ----------
+  // Refresh & Scheduling
   function scheduleRefresh() {
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = setInterval(async () => {
       await loadLeaveMetrics();
       try {
-        const url = apiUrl('/api/leave_data', { kind: 'trend', ...(AS_OF ? { as_of: AS_OF } : {}), days: TREND_DAYS });
-        const res = await fetch(url);
+        const url = new URL(`${API_BASE}/api/leave_data`);
+        url.searchParams.set('kind', 'trend');
+        if (AS_OF) url.searchParams.set('as_of', AS_OF);
+        url.searchParams.set('days', TREND_DAYS);
+        const res = await fetch(url.toString());
         if (res.ok) {
           const data = await res.json();
           if (data?.success) updateLeaveTrend(data.trend);
@@ -686,13 +711,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       } catch {}
     }, 30000);
   }
-  
-  document.getElementById('refresh-btn').addEventListener('click', async () => {
+
+  refreshBtn.addEventListener('click', async () => {
     refreshBtn.classList.add('animate-spin');
     await Promise.all([loadLeaveMetrics(), checkHealth()]);
     try {
-      const url = apiUrl('/api/leave_data', { kind: 'trend', ...(AS_OF ? { as_of: AS_OF } : {}), days: TREND_DAYS });
-      const res = await fetch(url);
+      const url = new URL(`${API_BASE}/api/leave_data`);
+      url.searchParams.set('kind', 'trend');
+      if (AS_OF) url.searchParams.set('as_of', AS_OF);
+      url.searchParams.set('days', TREND_DAYS);
+      const res = await fetch(url.toString());
       if (res.ok) {
         const data = await res.json();
         if (data?.success) updateLeaveTrend(data.trend);
@@ -701,18 +729,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTimeout(() => refreshBtn.classList.remove('animate-spin'), 500);
   });
 
-  document.getElementById('refresh-health').addEventListener('click', checkHealth);
-
-  // ---------- Init ----------
+  // Initialize
   (async function init() {
     initializeCharts();
+    updateUILanguage();
     await Promise.all([loadLeaveMetrics(), checkHealth()]);
     scheduleRefresh();
 
     // Initial trend load
     try {
-      const url = apiUrl('/api/leave_data', { kind: 'trend', ...(AS_OF ? { as_of: AS_OF } : {}), days: TREND_DAYS });
-      const res = await fetch(url);
+      const url = new URL(`${API_BASE}/api/leave_data`);
+      url.searchParams.set('kind', 'trend');
+      if (AS_OF) url.searchParams.set('as_of', AS_OF);
+      url.searchParams.set('days', TREND_DAYS);
+      const res = await fetch(url.toString());
       if (res.ok) {
         const data = await res.json();
         if (data?.success) updateLeaveTrend(data.trend);
@@ -721,48 +751,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     updateLastUpdateTime();
 
-    // Welcome copy with localized timezone and date info
     const welcomeSub = document.getElementById('welcome-sub');
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
     const dateLabel = AS_OF ? AS_OF : 'auto';
-    
-    // Update welcome subtitle with current language
-    const baseText = translator.t('header.welcome_sub');
-    welcomeSub.textContent = `${baseText} · ${tz} · as_of=${dateLabel}`;
-    
-    // Update leave list date
-    const leaveListDate = document.getElementById('leave-list-date');
-    const displayDate = AS_OF ? new Date(AS_OF) : new Date();
-    leaveListDate.textContent = translator.formatDate(displayDate, { 
-      weekday: 'long', 
-      month: 'short', 
-      day: 'numeric' 
-    });
-
-    // Listen for dynamic content updates to retranslate
-    window.addEventListener('languageChanged', () => {
-      // Re-translate dynamic content
-      const welcomeSub = document.getElementById('welcome-sub');
-      const baseText = translator.t('header.welcome_sub');
-      welcomeSub.textContent = `${baseText} · ${tz} · as_of=${dateLabel}`;
-      
-      const leaveListDate = document.getElementById('leave-list-date');
-      leaveListDate.textContent = translator.formatDate(displayDate, { 
-        weekday: 'long', 
-        month: 'short', 
-        day: 'numeric' 
-      });
-
-      // Update chart label
-      if (leaveTrendChart) {
-        leaveTrendChart.data.datasets[0].label = translator.t('sections.leave_trends');
-        leaveTrendChart.update();
-      }
-
-      // Reload metrics to get translated content
-      loadLeaveMetrics();
-      checkHealth();
-    });
+    welcomeSub.textContent = `Here's your team dashboard – live data updates every 30 seconds · ${tz} · as_of=${dateLabel}`;
+    document.getElementById('leave-list-date').textContent =
+      (AS_OF ? new Date(AS_OF) : new Date()).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   })();
 });
 </script>

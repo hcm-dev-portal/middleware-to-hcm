@@ -5,6 +5,8 @@ from typing import List, Dict, Tuple, Iterable, Set, Optional, Any
 import re
 from enum import Enum
 
+# ───────────────────────────────── Enums & Models ─────────────────────────────────
+
 class JoinType(Enum):
     INNER = "INNER"
     LEFT = "LEFT"
@@ -25,7 +27,7 @@ class TableJoin:
     join_type: JoinType = JoinType.LEFT
     cardinality: Cardinality = Cardinality.ONE_TO_MANY
     is_required: bool = True
-    condition: Optional[str] = None  # Additional join conditions
+    condition: Optional[str] = None  # Use placeholders {left} and {right} for table names
 
 @dataclass
 class QueryPattern:
@@ -49,205 +51,258 @@ class TableSchema:
     is_deleted_data: bool = False
     temporal_columns: List[str] = field(default_factory=list)
 
+# ───────────────────────────────── Helper Aliases ─────────────────────────────────
+
+COLUMN_ALIASES: Dict[str, Set[str]] = {
+    # Frequent schema spelling variations
+    "BUSINESSUNITID": {"BUSINESSUINTID"},
+    "EFFECTIVEDATE": {"EFFINIENTDATE", "EFFICIENTDATE", "EFFDATE"},
+    # Timecard spelling variations
+    "TIMECARDDATE": {"CARDDATE"},
+}
+
+def _has_col(table: "TableSchema", name: str) -> bool:
+    """True if table has the column or an alias."""
+    cols = {c.upper() for c in table.columns}
+    nameU = name.upper()
+    if nameU in cols:
+        return True
+    for canonical, aliases in COLUMN_ALIASES.items():
+        if nameU == canonical or nameU in {a.upper() for a in aliases}:
+            if canonical in cols or any(a.upper() in cols for a in aliases):
+                return True
+    return False
+
+# ───────────────────────────────── Leave Vector DB ─────────────────────────────────
+
 class LeaveVectorDB:
     def __init__(self, tables: List[TableSchema]):
         self.tables = tables
-        self._by_name = {t.full.lower(): t for t in tables}
-        
-        # Comprehensive join relationships
+        self._by_name: Dict[str, TableSchema] = {t.full.lower(): t for t in tables}
+
+        # Resolve person dimension table once (PSNACCOUNT_D or BIPSNACCOUNTSP)
+        self._person_table = self._resolve_person_table()
+
+        # Build data
         self._joins = self._build_comprehensive_joins()
-        
-        # Query patterns for common HR scenarios
         self._query_patterns = self._build_query_patterns()
-        
-        # Semantic keywords mapping
         self._semantic_keywords = self._build_semantic_keywords()
 
+    # ---------- Resolution helpers ----------
+
+    def _resolve_person_table(self) -> Optional[str]:
+        candidates = [
+            "dbo.PSNACCOUNT_D",       # classic person master (if present)
+            "dbo.BIPSNACCOUNTSP",     # BI person snapshot view (present in your dump)
+            "BIPSNACCOUNTSP",         # fallback if schema-less naming is used
+        ]
+        for name in candidates:
+            if name.lower() in self._by_name:
+                return name
+        return None
+
+    def _exists(self, full: str) -> bool:
+        return full.lower() in self._by_name
+
+    # ---------- Joins ----------
+
     def _build_comprehensive_joins(self) -> List[TableJoin]:
-        """Build comprehensive join relationships with cardinality and performance hints."""
-        joins = []
-        
-        # Core person relationships - all attendance tables link to person master
-        person_tables = [
-            "dbo.ATDLEAVEDATA", "dbo.ATDHISLEAVEDATA", "dbo.ATDLEAVEDATA_D", "dbo.ATDLEAVEDATA_T",
-            "dbo.ATDLEAVEDATAEX", "dbo.ATDLEAVEDATAEX_D", "dbo.ATDLEAVECANCELDATA",
-            "dbo.ATDLATEEARLY", "dbo.ATDHISLATEEARLY", "dbo.ATDLATEEARLY_D", "dbo.ATDLATEEARLY_C",
-            "dbo.ATDHISNOTIMECARD", "dbo.ATDHISTIMECARDDATA", "dbo.ATDHISOVERTIME",
-            "dbo.ATDHISOVERTIMEEXCEPTION", "dbo.ATDHISOVERTIMEORDER", "dbo.EDFATDLEAVEDATA",
-            "dbo.ATDJOBCONTENT", "dbo.ATDJOBCONTENT_T", "dbo.ATDNONCALCULATEDVACATION",
-            "dbo.ATDHISNONCALCULATEDVACATION", "dbo.ATDNONCALCULATEDVACATION_D"
+        joins: List[TableJoin] = []
+
+        # Core leave tables (current, historical, deleted, transferred)
+        leave_core = [
+            "dbo.ATDLEAVEDATA",
+            "dbo.ATDHISLEAVEDATA",
+            "dbo.ATDLEAVEDATA_D",
+            "dbo.ATDHISLEAVEDATA_D",
+            "dbo.ATDLEAVEDATA_T",
+            "dbo.ATDLEAVEDATAEX",
+            "dbo.ATDLEAVEDATAEX_D",
+            "dbo.ATDLEAVECANCELDATA",
+            "dbo.ATDNONCALCULATEDVACATION",
+            "dbo.ATDHISNONCALCULATEDVACATION",
+            "dbo.ATDNONCALCULATEDVACATION_D",
+            "dbo.EDFATDLEAVEDATA",
         ]
-        
-        for table in person_tables:
+
+        # Person joins (M:1) for any table that has PERSONID
+        if self._person_table:
+            for lt in leave_core + [
+                "dbo.ATDHISLATEEARLY",
+                "dbo.ATDHISTIMECARDDATA",
+                "dbo.ATDHISNOTIMECARD",
+                "dbo.ATDRESULTDATAIMPORT",
+            ]:
+                if self._exists(lt) and _has_col(self._by_name[lt.lower()], "PERSONID"):
+                    joins.append(TableJoin(
+                        left_table=lt, left_column="PERSONID",
+                        right_table=self._person_table, right_column="PERSONID",
+                        join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE
+                    ))
+
+        # LeaveEX ↔ Vacation balance (reconciliation path)
+        if self._exists("dbo.ATDLEAVEDATAEX") and self._exists("dbo.ATDNONCALCULATEDVACATION"):
             joins.append(TableJoin(
-                left_table=table,
-                left_column="PERSONID",
-                right_table="dbo.PSNACCOUNT_D",
-                right_column="PERSONID",
-                join_type=JoinType.LEFT,
-                cardinality=Cardinality.MANY_TO_ONE
+                left_table="dbo.ATDLEAVEDATAEX", left_column="VACATIONID",
+                right_table="dbo.ATDNONCALCULATEDVACATION", right_column="OID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE
             ))
-        
-        # Leave data extensions via LEAVEID
-        leave_extensions = [
-            ("dbo.ATDLEAVEDATA", "dbo.ATDLEAVEDATAEX"),
-            ("dbo.ATDLEAVEDATA", "dbo.ATDLEAVEDATA_D"),
-            ("dbo.ATDHISLEAVEDATA", "dbo.ATDHISLEAVEDATA_D"),
-            ("dbo.ATDLEAVEDATAEX", "dbo.ATDLEAVEDATAEX_D"),
-        ]
-        
-        for left, right in leave_extensions:
+
+        # Leave (current) ↔ LeaveEX (1:1-ish by LEAVEID, LEAVEID in EX may be NULL)
+        if self._exists("dbo.ATDLEAVEDATA") and self._exists("dbo.ATDLEAVEDATAEX"):
             joins.append(TableJoin(
-                left_table=left,
-                left_column="LEAVEID",
-                right_table=right,
-                right_column="LEAVEID",
-                join_type=JoinType.LEFT,
-                cardinality=Cardinality.ONE_TO_ONE
+                left_table="dbo.ATDLEAVEDATA", left_column="LEAVEID",
+                right_table="dbo.ATDLEAVEDATAEX", right_column="LEAVEID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.ONE_TO_ONE
             ))
-        
-        # Overtime relationships
-        joins.append(TableJoin(
-            left_table="dbo.ATDHISOVERTIME",
-            left_column="OVERTIMEID",
-            right_table="dbo.ATDHISOVERTIMEEXCEPTION",
-            right_column="OVERTIMEID",
-            join_type=JoinType.LEFT,
-            cardinality=Cardinality.ONE_TO_MANY
-        ))
-        
-        # Job content type relationships
-        joins.append(TableJoin(
-            left_table="dbo.ATDJOBCONTENT",
-            left_column="CONTENTTYPEID",
-            right_table="dbo.ATDJOBCONTENTTYPE",
-            right_column="CONTENTTYPEID",
-            join_type=JoinType.LEFT,
-            cardinality=Cardinality.MANY_TO_ONE
-        ))
-        
-        # Family information
-        joins.append(TableJoin(
-            left_table="dbo.PSNFAMILYINFO",
-            left_column="PERSONID",
-            right_table="dbo.PSNACCOUNT_D",
-            right_column="PERSONID",
-            join_type=JoinType.LEFT,
-            cardinality=Cardinality.MANY_TO_ONE
-        ))
-        
-        # Calendar relationships
-        joins.append(TableJoin(
-            left_table="dbo.ATDHISTIMEORDERCALENDAR",
-            left_column="TIMEORDERID",
-            right_table="dbo.ATDHISOVERTIMEORDER",
-            right_column="OVERTIMEORDERID",
-            join_type=JoinType.LEFT,
-            cardinality=Cardinality.MANY_TO_ONE
-        ))
-        
+
+        # Historical/Deleted ↔ Original by LEAVEID (audit trace)
+        if self._exists("dbo.ATDHISLEAVEDATA_D") and self._exists("dbo.ATDHISLEAVEDATA"):
+            joins.append(TableJoin(
+                left_table="dbo.ATDHISLEAVEDATA_D", left_column="LEAVEID",
+                right_table="dbo.ATDHISLEAVEDATA", right_column="LEAVEID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE
+            ))
+        if self._exists("dbo.ATDLEAVEDATA_D") and self._exists("dbo.ATDLEAVEDATA"):
+            joins.append(TableJoin(
+                left_table="dbo.ATDLEAVEDATA_D", left_column="LEAVEID",
+                right_table="dbo.ATDLEAVEDATA", right_column="LEAVEID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE
+            ))
+
+        # Leave ↔ Cancel (composite ON since cancel table has no LEAVEID)
+        if self._exists("dbo.ATDLEAVECANCELDATA") and self._exists("dbo.ATDLEAVEDATA"):
+            joins.append(TableJoin(
+                left_table="dbo.ATDLEAVECANCELDATA", left_column="PERSONID",
+                right_table="dbo.ATDLEAVEDATA", right_column="PERSONID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE,
+                condition=(
+                    "({left}.ATTENDANCETYPE = {right}.ATTENDANCETYPE "
+                    "AND {left}.STARTDATE = {right}.STARTDATE "
+                    "AND {left}.ENDDATE = {right}.ENDDATE)"
+                )
+            ))
+
+        # Leave ↔ Legal calendar (holiday detection)
+        if self._exists("dbo.ATDLEAVEDATA") and self._exists("dbo.ATDLEGALCALENDAR"):
+            joins.append(TableJoin(
+                left_table="dbo.ATDLEAVEDATA", left_column="WORKDATE",
+                right_table="dbo.ATDLEGALCALENDAR", right_column="CALENDARDATE",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE
+            ))
+
+        # Dept-day operation state ↔ Leave (validate/calc checkpoints by day & dept)
+        if self._exists("dbo.ATDDEPTOPERSTATE") and self._exists("dbo.ATDLEAVEDATA"):
+            joins.append(TableJoin(
+                left_table="dbo.ATDLEAVEDATA", left_column="DEPARTMENTID",
+                right_table="dbo.ATDDEPTOPERSTATE", right_column="DEPARTMENTID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE,
+                condition="({left}.WORKDATE = {right}.WORKDATE)"
+            ))
+
+        # EDF external leave ↔ Leave (same person + overlapping date window)
+        if self._exists("dbo.EDFATDLEAVEDATA") and self._exists("dbo.ATDLEAVEDATA"):
+            joins.append(TableJoin(
+                left_table="dbo.EDFATDLEAVEDATA", left_column="PERSONID",
+                right_table="dbo.ATDLEAVEDATA", right_column="PERSONID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE,
+                condition=(
+                    "( {right}.WORKDATE BETWEEN {left}.WORKDATES AND {left}.WORKDATEE )"
+                )
+            ))
+
+        # Monthly import results ↔ Leave by PERSONID + ATTENDANCETYPE (for rollups)
+        if self._exists("dbo.ATDRESULTDATAIMPORT") and self._exists("dbo.ATDLEAVEDATA"):
+            joins.append(TableJoin(
+                left_table="dbo.ATDRESULTDATAIMPORT", left_column="PERSONID",
+                right_table="dbo.ATDLEAVEDATA", right_column="PERSONID",
+                join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE,
+                condition="({left}.ATTENDANCETYPE = {right}.ATTENDANCETYPE)"
+            ))
+
         return joins
 
+    # ---------- Patterns ----------
+
     def _build_query_patterns(self) -> List[QueryPattern]:
-        """Define common HR query patterns with optimization hints."""
-        return [
+        patterns = [
             QueryPattern(
                 pattern="current_leave_status",
                 description="Who is currently on leave",
-                primary_tables=["dbo.ATDLEAVEDATA", "dbo.PSNACCOUNT_D"],
+                primary_tables=["dbo.ATDLEAVEDATA"],
                 suggested_joins=["PERSONID"],
-                required_filters=["CAST(GETDATE() AS date) BETWEEN CAST(STARTDATE AS date) AND CAST(ENDDATE AS date)"],
-                performance_notes=["Index on STARTDATE, ENDDATE recommended", "Consider VALIDATED = 1 filter"]
+                required_filters=[
+                    "CAST(GETDATE() AS date) BETWEEN CAST(STARTDATE AS date) AND CAST(ENDDATE AS date)",
+                    "VALIDATED = 1"
+                ],
+                performance_notes=[
+                    "Index/Filter on STARTDATE, ENDDATE",
+                    "Group by PERSONID to collapse multiple days"
+                ],
+            ),
+            QueryPattern(
+                pattern="upcoming_leave",
+                description="Who will be on leave in a future window",
+                primary_tables=["dbo.ATDLEAVEDATA"],
+                suggested_joins=["PERSONID"],
+                required_filters=["STARTDATE >= CAST(GETDATE() AS date)"],
+                performance_notes=["Index on STARTDATE, ENDDATE; include VALIDATED = 1"],
             ),
             QueryPattern(
                 pattern="historical_leave_analysis",
                 description="Leave patterns over time periods",
-                primary_tables=["dbo.ATDHISLEAVEDATA", "dbo.PSNACCOUNT_D"],
+                primary_tables=["dbo.ATDHISLEAVEDATA"],
                 suggested_joins=["PERSONID"],
-                required_filters=["Date range filter required for performance"],
-                performance_notes=["Large table - always filter by date range", "Consider BUSINESSUNITID filter"]
+                required_filters=["Date range filter required (WORKDATE/STARTDATE/ENDDATE)"],
+                performance_notes=["Large table — always filter by date range"],
             ),
             QueryPattern(
-                pattern="department_attendance",
-                description="Attendance by department/business unit",
-                primary_tables=["dbo.ATDLEAVEDATA", "dbo.PSNACCOUNT_D"],
-                suggested_joins=["PERSONID"],
-                required_filters=["DEPARTMENTID or BUSINESSUNITID filter recommended"],
-                performance_notes=["Group by department for better performance"]
-            ),
-            QueryPattern(
-                pattern="overtime_analysis",
-                description="Overtime hours and patterns",
-                primary_tables=["dbo.ATDHISOVERTIME", "dbo.PSNACCOUNT_D"],
-                suggested_joins=["PERSONID"],
-                required_filters=["Date range required"],
-                performance_notes=["Join with ATDHISOVERTIMEORDER for approved overtime only"]
-            ),
-            QueryPattern(
-                pattern="attendance_exceptions",
-                description="Late arrivals, early departures, no-card events",
-                primary_tables=["dbo.ATDLATEEARLY", "dbo.ATDHISNOTIMECARD", "dbo.PSNACCOUNT_D"],
-                suggested_joins=["PERSONID"],
-                required_filters=["ATTENDDATE filter required"],
-                performance_notes=["Consider PROCSTATE for processed vs pending"]
-            ),
-            QueryPattern(
-                pattern="vacation_balance",
-                description="Vacation days available and used",
-                primary_tables=["dbo.ATDNONCALCULATEDVACATION", "dbo.PSNACCOUNT_D"],
-                suggested_joins=["PERSONID"],
-                required_filters=["EFFINIENTDATE and INVALIDATIONDATE for active balances"],
-                performance_notes=["Check FLAG column for record status"]
+                pattern="leave_balance_reconciliation",
+                description="Reconcile used/remaining leave with vacation balance",
+                primary_tables=["dbo.ATDLEAVEDATAEX", "dbo.ATDNONCALCULATEDVACATION"],
+                suggested_joins=["PERSONID", "VACATIONID"],
+                required_filters=[
+                    "VACATIONTYPE filter recommended",
+                    "WORKDATE or STARTDATE/ENDDATE window"
+                ],
+                performance_notes=["Join VACATIONID ↔ OID; group by PERSONID, VACATIONTYPE"],
             ),
             QueryPattern(
                 pattern="leave_cancellations",
                 description="Cancelled leave requests and reasons",
-                primary_tables=["dbo.ATDLEAVECANCELDATA", "dbo.PSNACCOUNT_D"],
+                primary_tables=["dbo.ATDLEAVECANCELDATA"],
                 suggested_joins=["PERSONID"],
                 required_filters=["WORKDATE range filter"],
-                performance_notes=["Include REASON column for analysis"]
+                performance_notes=["Filter VALIDATED if needed; use REASON/LEAVEREASON"],
             ),
-            QueryPattern(
-                pattern="timecard_raw_data",
-                description="Raw timecard swipes and machine data",
-                primary_tables=["dbo.ATDHISTIMECARDDATA", "dbo.PSNACCOUNT_D"],
-                suggested_joins=["PERSONID"],
-                required_filters=["TIMECARDDATE range required"],
-                performance_notes=["Very large table - narrow date ranges essential"]
-            )
         ]
+        return patterns
+
+    # ---------- Semantics ----------
 
     def _build_semantic_keywords(self) -> Dict[str, List[str]]:
-        """Map semantic concepts to relevant tables and columns."""
         return {
+            # Leave-first focus
             "current_leave": ["dbo.ATDLEAVEDATA"],
             "historical_leave": ["dbo.ATDHISLEAVEDATA"],
             "deleted_leave": ["dbo.ATDLEAVEDATA_D", "dbo.ATDHISLEAVEDATA_D"],
             "transferred_leave": ["dbo.ATDLEAVEDATA_T"],
             "leave_extensions": ["dbo.ATDLEAVEDATAEX", "dbo.ATDLEAVEDATAEX_D"],
             "cancelled_leave": ["dbo.ATDLEAVECANCELDATA"],
+            "vacation_balance": ["dbo.ATDNONCALCULATEDVACATION", "dbo.ATDHISNONCALCULATEDVACATION"],
+            "holiday_calendar": ["dbo.ATDLEGALCALENDAR"],
+
+            # Auxiliary context (lower scoring)
             "edf_leave": ["dbo.EDFATDLEAVEDATA"],
-            "current_attendance": ["dbo.ATDLATEEARLY"],
             "historical_attendance": ["dbo.ATDHISLATEEARLY"],
-            "deleted_attendance": ["dbo.ATDLATEEARLY_D"],
-            "calculated_attendance": ["dbo.ATDLATEEARLY_C"],
             "no_timecard": ["dbo.ATDHISNOTIMECARD"],
             "timecard_data": ["dbo.ATDHISTIMECARDDATA"],
-            "current_overtime": ["dbo.ATDHISOVERTIME"],
-            "overtime_exceptions": ["dbo.ATDHISOVERTIMEEXCEPTION"],
-            "overtime_orders": ["dbo.ATDHISOVERTIMEORDER"],
-            "calendar": ["dbo.ATDHISTIMEORDERCALENDAR", "dbo.ATDLEGALCALENDAR"],
-            "vacation_balance": ["dbo.ATDNONCALCULATEDVACATION", "dbo.ATDHISNONCALCULATEDVACATION"],
-            "job_content": ["dbo.ATDJOBCONTENT", "dbo.ATDJOBCONTENT_T"],
-            "job_types": ["dbo.ATDJOBCONTENTTYPE"],
-            "longevity_rules": ["dbo.ATDLONGEVITYRULE"],
-            "no_card_reasons": ["dbo.ATDNOCARDREASON"],
-            "person_master": ["dbo.PSNACCOUNT_D"],
-            "family_info": ["dbo.PSNFAMILYINFO"],
-            "people": ["dbo.PSNACCOUNT_D", "dbo.PSNFAMILYINFO"],
-            "employees": ["dbo.PSNACCOUNT_D"],
-            "staff": ["dbo.PSNACCOUNT_D"]
+            "dept_ops": ["dbo.ATDDEPTOPERSTATE"],
+            "monthly_import": ["dbo.ATDRESULTDATAIMPORT"],
+            "people": [self._person_table] if self._person_table else [],
         }
+
+    # ---------- Health ----------
 
     def is_ready(self) -> bool:
         return bool(self.tables)
@@ -257,489 +312,354 @@ class LeaveVectorDB:
             "ready": self.is_ready(),
             "tables_indexed": len(self.tables),
             "join_relationships": len(self._joins),
-            "query_patterns": len(self._query_patterns)
+            "query_patterns": len(self._query_patterns),
+            "person_table": self._person_table,
         }
 
+    # ---------- Search & Hints ----------
+
     def search_relevant_tables(self, query: str, top_k: int = 5) -> List[Tuple[str, float]]:
-        """Enhanced table relevance scoring with semantic understanding."""
         q = query.lower()
         q_terms = set(re.findall(r"\w+", q))
         if not q_terms:
             return []
-        
-        def calculate_score(table: TableSchema) -> float:
-            score = 0.0
-            
-            # Basic term matching in table name, description, tags, columns
-            searchable_text = " ".join([
-                table.full, table.description,
-                " ".join(table.tags), " ".join(table.columns)
-            ]).lower()
-            
-            # Term frequency scoring
+
+        def score(table: TableSchema) -> float:
+            s = 0.0
+            text = " ".join([table.full, table.description, " ".join(table.tags), " ".join(table.columns)]).lower()
+
             for term in q_terms:
-                if term in searchable_text:
-                    # Boost score based on where the term appears
+                if term in text:
                     if term in table.full.lower():
-                        score += 3.0
+                        s += 3.0
                     elif term in table.description.lower():
-                        score += 2.0
+                        s += 2.0
                     elif term in " ".join(table.tags).lower():
-                        score += 2.0
-                    elif term in " ".join(table.columns).lower():
-                        score += 1.0
-            
-            # Semantic keyword matching
-            for keyword, relevant_tables in self._semantic_keywords.items():
-                if keyword in q and table.full in relevant_tables:
-                    score += 4.0
-            
-            # Domain-specific bonuses
-            domain_bonuses = {
+                        s += 2.0
+                    else:
+                        s += 1.0
+
+            # semantic boost
+            for keyword, tabs in self._semantic_keywords.items():
+                if keyword in q and table.full in tabs:
+                    s += 4.0
+
+            # domain boosts
+            boosts = {
                 ("leave", "vacation", "absence", "sick", "annual"): [
-                    "atdleavedata", "atdhisleavedata", "atdleavecanceldata", 
-                    "atdleavedataex", "edfatdleavedata", "atdnoncalculatedvacation"
+                    "atdleavedata", "atdhisleavedata", "atdleavedataex",
+                    "atdleavedata_d", "atdhisleavedata_d", "atdleavercanceldata",
+                    "atdnocalculatedvacation", "atdhisnoncalculatedvacation",
                 ],
-                ("overtime", "ot"): [
-                    "atdhisovertime", "atdhisovertimeexception", "atdhisovertimeorder"
-                ],
-                ("attendance", "late", "early", "timecard"): [
-                    "atdlateearly", "atdhislateearly", "atdhistimecarddata", "atdhisnotimecard"
-                ],
-                ("current", "active", "now", "today"): [
-                    "atdleavedata", "atdlateearly", "atdnoncalculatedvacation"
-                ],
-                ("history", "historical", "past", "previous"): [
-                    "atdhisleavedata", "atdhislateearly", "atdhistimecarddata", 
-                    "atdhisovertime", "atdhisnoncalculatedvacation"
-                ],
-                ("deleted", "cancelled", "removed"): [
-                    "_d", "atdleavecanceldata"
-                ],
-                ("person", "employee", "staff", "people", "who"): [
-                    "psnaccount_d", "psnfamilyinfo"
+                ("cancel", "cancelled"): ["atdleavercanceldata"],
+                ("deleted", "removed"): ["_d"],
+                ("history", "historical", "trend"): ["his"],
+                ("person", "employee", "who", "name"): [
+                    "psnaccount_d", "bipsnaccountsp"
                 ],
                 ("department", "unit", "business"): [
                     "departmentid", "businessunitid"
                 ],
-                ("job", "content", "work"): [
-                    "atdjobcontent", "atdjobcontenttype"
-                ]
             }
-            
-            for keywords, table_patterns in domain_bonuses.items():
-                if any(kw in q for kw in keywords):
-                    for pattern in table_patterns:
-                        if pattern.lower() in table.full.lower():
-                            score += 2.0
-            
-            # Temporal query detection
-            temporal_terms = ["today", "yesterday", "week", "month", "year", "date", "when", "current"]
-            if any(term in q for term in temporal_terms):
+            for kws, pats in boosts.items():
+                if any(k in q for k in kws):
+                    for p in pats:
+                        if p in table.full.lower():
+                            s += 2.0
+
+            # temporal detection
+            if any(t in q for t in ["today", "yesterday", "week", "month", "year", "date", "current"]):
                 if table.temporal_columns:
-                    score += 1.5
-                if "his" in table.full.lower():  # Historical tables
-                    score += 1.0
-                if table.full == "dbo.ATDLEAVEDATA":  # Current data
-                    score += 2.0
-            
-            # Penalize deleted/historical tables unless specifically requested
-            if table.is_deleted_data and not any(term in q for term in ["deleted", "cancelled", "removed", "history"]):
-                score *= 0.5
-            
-            if table.is_historical and not any(term in q for term in ["history", "historical", "past", "trend"]):
-                score *= 0.7
-            
-            # Performance penalty for very large tables without specific targeting
-            if table.row_estimate and table.row_estimate > 1000000:
-                if not any(term in q for term in ["timecard", "historical", "all"]):
-                    score *= 0.8
-            
-            return score
-        
-        # Score and rank tables
-        scored_tables = [(table, calculate_score(table)) for table in self.tables]
-        ranked = sorted(scored_tables, key=lambda x: x[1], reverse=True)
-        
-        # Filter out zero scores and return top_k
-        relevant = [(t.full, score) for t, score in ranked if score > 0]
-        return relevant[:max(1, top_k)]
+                    s += 1.5
+                if "his" in table.full.lower():
+                    s += 1.0
+                if table.full.lower() == "dbo.atdleavedata":
+                    s += 2.0
+
+            # downweight deleted/historical unless requested
+            if table.is_deleted_data and not any(t in q for t in ["deleted", "cancelled", "removed", "history", "historical"]):
+                s *= 0.5
+            if table.is_historical and not any(t in q for t in ["history", "historical", "past", "trend"]):
+                s *= 0.7
+
+            return s
+
+        ranked = sorted(((t, score(t)) for t in self.tables), key=lambda x: x[1], reverse=True)
+        return [(t.full, s) for t, s in ranked if s > 0][:max(1, top_k)]
 
     def join_hints(self, tables: Iterable[str]) -> List[str]:
-        """Generate optimized join hints with performance considerations."""
         table_set = {t.lower() for t in tables}
         hints: List[str] = []
-        
-        # Find applicable joins
-        applicable_joins = []
-        for join in self._joins:
-            if join.left_table.lower() in table_set and join.right_table.lower() in table_set:
-                applicable_joins.append(join)
-        
-        # Generate join hints with type and performance notes
-        for join in applicable_joins:
-            join_hint = f"{join.join_type.value} JOIN {join.right_table} ON {join.left_table}.{join.left_column} = {join.right_table}.{join.right_column}"
-            
-            if join.condition:
-                join_hint += f" AND {join.condition}"
-            
-            # Add cardinality comment for performance awareness
-            join_hint += f" -- {join.cardinality.value}"
-            
-            hints.append(join_hint)
-        
-        # Add performance recommendations
-        performance_hints = []
-        for table_name in table_set:
-            table = self._by_name.get(table_name)
-            if table and table.row_estimate and table.row_estimate > 100000:
-                performance_hints.append(f"-- Performance: Filter {table.full} by date range when possible")
-        
-        return list(dict.fromkeys(hints + performance_hints))
+
+        # Filter applicable joins
+        for j in self._joins:
+            if j.left_table.lower() in table_set and j.right_table.lower() in table_set:
+                cond = ""
+                if j.condition:
+                    cond = " AND " + j.condition.format(
+                        left=j.left_table, right=j.right_table
+                    )
+                hints.append(
+                    f"{j.join_type.value} JOIN {j.right_table} "
+                    f"ON {j.left_table}.{j.left_column} = {j.right_table}.{j.right_column}"
+                    f"{cond} -- {j.cardinality.value}"
+                )
+
+        # Perf notes
+        for tname in table_set:
+            t = self._by_name.get(tname)
+            if t and t.row_estimate and t.row_estimate > 100_000:
+                hints.append(f"-- Performance: filter {t.full} by date range when possible")
+
+        # Deduplicate preserve order
+        return list(dict.fromkeys(hints))
 
     def get_query_pattern(self, query: str) -> Optional[QueryPattern]:
-        """Match query to known patterns for optimization hints."""
         q = query.lower()
-        
-        # Pattern matching logic
-        if any(term in q for term in ["current", "today", "now"]) and "leave" in q:
+        if "leave" in q and any(x in q for x in ["current", "today", "now"]):
             return next((p for p in self._query_patterns if p.pattern == "current_leave_status"), None)
-        
-        if any(term in q for term in ["history", "trend", "past"]) and "leave" in q:
+        if "leave" in q and any(x in q for x in ["future", "upcoming", "next"]):
+            return next((p for p in self._query_patterns if p.pattern == "upcoming_leave"), None)
+        if "leave" in q and any(x in q for x in ["history", "historical", "trend", "past"]):
             return next((p for p in self._query_patterns if p.pattern == "historical_leave_analysis"), None)
-        
-        if any(term in q for term in ["department", "unit", "team"]):
-            return next((p for p in self._query_patterns if p.pattern == "department_attendance"), None)
-        
-        if "overtime" in q:
-            return next((p for p in self._query_patterns if p.pattern == "overtime_analysis"), None)
-        
-        if any(term in q for term in ["late", "early", "timecard"]):
-            return next((p for p in self._query_patterns if p.pattern == "attendance_exceptions"), None)
-        
-        if any(term in q for term in ["vacation", "balance", "remaining", "available"]):
-            return next((p for p in self._query_patterns if p.pattern == "vacation_balance"), None)
-        
-        if any(term in q for term in ["cancel", "cancelled"]):
+        if any(x in q for x in ["balance", "vacation", "remaining"]):
+            return next((p for p in self._query_patterns if p.pattern == "leave_balance_reconciliation"), None)
+        if any(x in q for x in ["cancel", "cancelled", "cancellation"]):
             return next((p for p in self._query_patterns if p.pattern == "leave_cancellations"), None)
-        
         return None
 
+    # ---------- Validation ----------
+
+    def relationships_sanity_check(self) -> Dict[str, List[str]]:
+        errors, warnings = [], []
+        for j in self._joins:
+            lt = self._by_name.get(j.left_table.lower())
+            rt = self._by_name.get(j.right_table.lower())
+            if not lt or not rt:
+                warnings.append(f"Table absent: {j.left_table} or {j.right_table}")
+                continue
+            if not _has_col(lt, j.left_column):
+                errors.append(f"Missing column {j.left_table}.{j.left_column}")
+            if not _has_col(rt, j.right_column):
+                errors.append(f"Missing column {j.right_table}.{j.right_column}")
+            if j.condition and ("{left}" not in j.condition or "{right}" not in j.condition):
+                warnings.append(f"Condition placeholders missing in join {j.left_table} → {j.right_table}")
+        return {"errors": errors, "warnings": warnings}
+
+# ───────────────────────────────── Index Builder ─────────────────────────────────
+# Keep this lightweight; include only the tables you actively query for leave.
+
 def build_leave_index() -> LeaveVectorDB:
-    """Build comprehensive leave index with full schema information."""
-    
-    def T(full: str, cols: List[str], desc: str = "", tags: List[str] = None, 
-          pks: List[str] = None, indexed: List[str] = None, 
-          rows: int = None, is_hist: bool = False, is_del: bool = False,
-          temporal: List[str] = None) -> TableSchema:
+    def T(full: str, cols: List[str], desc: str = "", tags: List[str] = None,
+          pks: List[str] = None, indexed: List[str] = None, rows: int = None,
+          is_hist: bool = False, is_del: bool = False, temporal: List[str] = None) -> TableSchema:
         return TableSchema(
-            full=full, 
-            columns=cols, 
-            description=desc, 
-            tags=tags or [], 
-            primary_keys=pks or [],
-            indexed_columns=indexed or [],
-            row_estimate=rows,
-            is_historical=is_hist,
-            is_deleted_data=is_del,
-            temporal_columns=temporal or []
+            full=full, columns=cols, description=desc, tags=tags or [],
+            primary_keys=pks or [], indexed_columns=indexed or [], row_estimate=rows,
+            is_historical=is_hist, is_deleted_data=is_del, temporal_columns=temporal or []
         )
-    
+
     tables: List[TableSchema] = [
-        # Core leave tables
-        T("dbo.ATDLEAVEDATA", 
-          ["ATTENDANCETYPE", "PERSONID", "WORKDATE", "STARTTIME", "ENDTIME", "HOURS", 
-           "DEPARTMENTID", "BUSINESSUNITID", "STARTDATE", "ENDDATE", "LEAVEID", "LEAVEREASON"],
-          "Primary validated leave data - core for current leave status queries",
-          ["leave", "current", "validated", "active"],
-          ["LEAVEID"], ["PERSONID", "STARTDATE", "ENDDATE", "WORKDATE"], 50000,
-          temporal=["WORKDATE", "STARTDATE", "ENDDATE"]),
-        
+        # Leave core
+        T("dbo.ATDLEAVEDATA",
+          ["ATTENDANCETYPE","PERSONID","WORKDATE","STARTTIME","ENDTIME","HOURS",
+           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","STARTDATE","ENDDATE","AutoRevise",
+           "TIMECLASSID","TIMECLASSHOURS","CREATIONTIME","CREATEDBY","LASTUPDATETIME",
+           "LASTUPDATEDBY","LEAVEID","FORMKIND","FROM_SOURCE","FORM_NO","RECORD_ID",
+           "FLEAVEBYDAYTYPE","TLEAVEBYDAYTYPE","LEAVEREASON"],
+          "Current validated leave data", ["leave","current","validated"],
+          ["LEAVEID"], ["PERSONID","STARTDATE","ENDDATE"], rows=50_000,
+          temporal=["WORKDATE","STARTDATE","ENDDATE"]),
+
         T("dbo.ATDHISLEAVEDATA",
-          ["LEAVEID", "ATTENDANCETYPE", "PERSONID", "WORKDATE", "STARTTIME", "ENDTIME", 
-           "HOURS", "DEPARTMENTID", "BUSINESSUNITID", "STARTDATE", "ENDDATE", "LEAVEREASON"],
-          "Historical leave data snapshot for trend analysis",
-          ["leave", "history", "trends"],
-          ["LEAVEID"], ["PERSONID", "WORKDATE"], 500000, is_hist=True,
-          temporal=["WORKDATE", "STARTDATE", "ENDDATE"]),
-        
+          ["LEAVEID","ATTENDANCETYPE","PERSONID","WORKDATE","STARTTIME","ENDTIME","HOURS",
+           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","STARTDATE","ENDDATE","AutoRevise",
+           "TIMECLASSID","TIMECLASSHOURS","CREATIONTIME","CREATEDBY","LASTUPDATETIME",
+           "LASTUPDATEDBY","FORMKIND","FROM_SOURCE","FORM_NO","RECORD_ID","RECORD_USERID",
+           "RECORD_DATE","FLEAVEBYDAYTYPE","TLEAVEBYDAYTYPE","LEAVEREASON"],
+          "Historical leave data", ["leave","history"], ["LEAVEID"], ["PERSONID","WORKDATE"],
+          rows=500_000, is_hist=True, temporal=["WORKDATE","STARTDATE","ENDDATE"]),
+
         T("dbo.ATDLEAVEDATA_D",
-          ["DELETEID", "ATTENDANCETYPE", "PERSONID", "WORKDATE", "STARTTIME", "ENDTIME", 
-           "HOURS", "LEAVEID", "DELETE_USER_ID", "DELETE_TIME"],
-          "Deleted leave records with audit trail",
-          ["leave", "deleted", "audit"],
-          ["DELETEID"], ["PERSONID", "DELETE_TIME"], 25000, is_del=True,
-          temporal=["WORKDATE", "DELETE_TIME"]),
-        
-        T("dbo.ATDLEAVEDATAEX",
-          ["ATTENDANCETYPE", "PERSONID", "WORKDATE", "HOURS", "VACATIONID", "MINUSDAYS", 
-           "LEAVETYPE", "LEAVEID"],
-          "Extended leave accounting and vacation balance tracking",
-          ["leave", "extended", "vacation", "balance"],
-          ["LEAVEID"], ["PERSONID", "VACATIONID"], 50000,
-          temporal=["WORKDATE"]),
-        
-        T("dbo.ATDLEAVECANCELDATA",
-          ["OID", "ATTENDANCETYPE", "PERSONID", "WORKDATE", "STARTDATE", "STARTTIME", 
-           "ENDDATE", "ENDTIME", "HOURS", "REASON", "LEAVEREASON"],
-          "Cancelled leave requests with cancellation reasons",
-          ["leave", "cancelled", "reasons"],
-          ["OID"], ["PERSONID", "WORKDATE"], 10000,
-          temporal=["WORKDATE", "STARTDATE", "ENDDATE"]),
-        
-        # Attendance and timecard tables
-        T("dbo.ATDLATEEARLY",
-          ["LATEEARLYID", "ATTENDDATE", "PERSONID", "SHOULDTIME", "CARDTIME", "MINUTES", 
-           "ATDTYPE", "DEPARTMENTID", "BUSINESSUNITID"],
-          "Current late arrivals and early departures",
-          ["attendance", "late", "early", "current"],
-          ["LATEEARLYID"], ["PERSONID", "ATTENDDATE"], 75000,
-          temporal=["ATTENDDATE", "CARDDATE"]),
-        
-        T("dbo.ATDHISLATEEARLY",
-          ["LATEEARLYID", "ATTENDDATE", "PERSONID", "SHOULDTIME", "CARDTIME", "MINUTES", 
-           "ATDTYPE", "DEPARTMENTID", "BUSINESSUNITID"],
-          "Historical late/early records for trend analysis",
-          ["attendance", "late", "early", "history"],
-          ["LATEEARLYID"], ["PERSONID", "ATTENDDATE"], 750000, is_hist=True,
-          temporal=["ATTENDDATE"]),
-        
-        T("dbo.ATDHISTIMECARDDATA",
-          ["RECORDID", "PERSONID", "TIMECARDDATE", "TIMECARDTIME", "MACHINEID", 
-           "DEPARTMENTID", "BUSINESSUNITID"],
-          "Raw timecard swipe data - very large table, filter by date essential",
-          ["timecard", "raw", "swipes", "machine"],
-          ["RECORDID"], ["PERSONID", "TIMECARDDATE"], 2000000, is_hist=True,
-          temporal=["TIMECARDDATE"]),
-        
-        T("dbo.ATDHISNOTIMECARD",
-          ["NOTIMECARDID", "ATTENDDATE", "PERSONID", "DEPARTMENTID", "REASONID", 
-           "ATDTYPE", "BUSINESSUNITID"],
-          "Missing timecard events with reasons",
-          ["attendance", "notimecard", "missing", "exceptions"],
-          ["NOTIMECARDID"], ["PERSONID", "ATTENDDATE"], 50000,
-          temporal=["ATTENDDATE"]),
-        
-        # Overtime tables
-        T("dbo.ATDHISOVERTIME",
-          ["OVERTIMEID", "PERSONID", "OVERTIMEDATE", "TIMEFROM", "TIMETO", "HOURS", 
-           "OVERTIMETYPE", "DEPARTMENTID", "BUSINESSUNITID"],
-          "Overtime hours worked with approval status",
-          ["overtime", "hours"],
-          ["OVERTIMEID"], ["PERSONID", "OVERTIMEDATE"], 100000,
-          temporal=["OVERTIMEDATE"]),
-        
-        T("dbo.ATDHISOVERTIMEORDER",
-          ["OVERTIMEORDERID", "PERSONID", "OVERTIMEDATE", "STARTTIME", "ENDTIME", 
-           "HOURS", "OVERTIMETYPE", "CONTRASTSTATE"],
-          "Overtime orders/requests with approval workflow",
-          ["overtime", "orders", "requests", "approval"],
-          ["OVERTIMEORDERID"], ["PERSONID", "OVERTIMEDATE"], 50000,
-          temporal=["OVERTIMEDATE"]),
-        
-        T("dbo.ATDHISOVERTIMEEXCEPTION",
-          ["PERSONID", "WORKDATE", "BEGINTIME", "ENDTIME", "HOURS", "TYPE", 
-           "DEPARTMENTID", "BUSINESSUNITID", "OVERTIMEID"],
-          "Overtime exceptions and adjustments",
-          ["overtime", "exceptions", "adjustments"],
-          [], ["PERSONID", "WORKDATE"], 25000,
-          temporal=["WORKDATE"]),
-        
-        # Vacation and balance tables
-        T("dbo.ATDNONCALCULATEDVACATION",
-          ["OID", "PERSONID", "BUSINESSUINTID", "VACATIONDAYS", "USEDDAYS", "REMAINDAYS", 
-           "VACATIONTYPE", "EFFINIENTDATE", "INVALIDATIONDATE", "FLAG"],
-          "Current vacation balances and entitlements",
-          ["vacation", "balance", "entitlements", "current"],
-          ["OID"], ["PERSONID", "VACATIONTYPE"], 25000,
-          temporal=["EFFINIENTDATE", "INVALIDATIONDATE"]),
-        
-        T("dbo.ATDHISNONCALCULATEDVACATION",
-          ["OID", "PERSONID", "BUSINESSUINTID", "VACATIONDAYS", "USEDDAYS", "REMAINDAYS", 
-           "VACATIONTYPE", "EFFINIENTDATE", "INVALIDATIONDATE"],
-          "Historical vacation balance snapshots",
-          ["vacation", "balance", "history"],
-          ["OID"], ["PERSONID"], 100000, is_hist=True,
-          temporal=["EFFINIENTDATE", "INVALIDATIONDATE"]),
-        
-        # Job content tables
-        T("dbo.ATDJOBCONTENT",
-          ["JOBCONTENTID", "PERSONID", "WORKDATE", "STARTDATE", "STARTTIME", 
-           "ENDDATE", "ENDTIME", "CONTENTTYPEID"],
-          "Job content and work activity tracking",
-          ["job", "content", "activity", "work"],
-          ["JOBCONTENTID"], ["PERSONID", "WORKDATE"], 200000,
-          temporal=["WORKDATE", "STARTDATE", "ENDDATE"]),
-        
-        T("dbo.ATDJOBCONTENTTYPE",
-          ["CONTENTTYPEID", "CONTENTTYPECODE", "CONTENTTYPENAME", "CONTENTTYPECLASS", 
-           "BUSINESSUNITID"],
-          "Job content type definitions and classifications",
-          ["job", "content", "types", "definitions"],
-          ["CONTENTTYPEID"], ["BUSINESSUNITID"], 100),
-        
-        # Person and organizational tables
-        T("dbo.PSNACCOUNT_D",
-          ["PERSONID", "TRUENAME", "EMPLOYEEID", "COMPANYEMAIL", "BELONGCORPID", 
-           "BRANCHID", "POSITIONID", "MOBILE"],
-          "Person master data including soft-deleted records - central for all people queries",
-          ["person", "employee", "master", "people"],
-          ["PERSONID"], ["EMPLOYEEID", "TRUENAME"], 10000),
-        
-        T("dbo.PSNFAMILYINFO",
-          ["PERSONID", "RELATION", "NAME", "PHONE", "EMAIL", "ADDRESS"],
-          "Employee family contact information",
-          ["person", "family", "contacts"],
-          [], ["PERSONID"], 15000),
-        
-        # Calendar and rules tables
-        T("dbo.ATDLEGALCALENDAR",
-          ["CALENDARDATE", "LEGALID", "CALENDARTYPE"],
-          "Legal holidays and calendar definitions",
-          ["calendar", "holidays", "legal"],
-          ["CALENDARDATE", "LEGALID"], ["CALENDARDATE"], 1000,
-          temporal=["CALENDARDATE"]),
-        
-        T("dbo.ATDHISTIMEORDERCALENDAR",
-          ["RECORDID", "CALENDARDATE", "TIMEORDERID", "TIMECLASSID", "CALENDARTYPE", "BUSINESSUNITID"],
-          "Time order calendar scheduling",
-          ["calendar", "timeorder", "scheduling"],
-          ["RECORDID"], ["TIMEORDERID", "CALENDARDATE"], 50000,
-          temporal=["CALENDARDATE"]),
-        
-        T("dbo.ATDLONGEVITYRULE",
-          ["RULEID", "YEARMORETHAN", "YEARLESSTHAN", "VACATIONDAYS", "BUSINESSUNITID"],
-          "Longevity-based vacation day rules and calculations",
-          ["vacation", "rules", "longevity", "calculations"],
-          ["RULEID"], ["BUSINESSUNITID"], 50),
-        
-        T("dbo.ATDNOCARDREASON",
-          ["REASONID", "REASONCODE", "REASONVALUE", "REASONDESC", "BUSINESSRULEID"],
-          "Predefined reasons for missing timecard events",
-          ["reasons", "notimecard", "codes"],
-          ["REASONID"], ["BUSINESSRULEID"], 100),
-        
-        # EDF integration table
-        T("dbo.EDFATDLEAVEDATA",
-          ["RECORDID", "ATTENDANCETYPE", "PERSONID", "WORKDATES", "WORKDATEE", 
-           "STARTTIME", "ENDTIME", "HOURS", "DEPARTMENTID", "BUSINESSUNITID"],
-          "EDF-integrated leave data from external systems",
-          ["leave", "edf", "integration", "external"],
-          ["RECORDID"], ["PERSONID"], 25000,
-          temporal=["WORKDATES", "WORKDATEE"]),
-        
-        # Additional deleted/historical tables
-        T("dbo.ATDLATEEARLY_D",
-          ["DELETEID", "ATTENDDATE", "PERSONID", "SHOULDTIME", "CARDTIME", "MINUTES", 
-           "ATDTYPE", "LATEEARLYID", "DELETE_USER_ID", "DELETE_TIME"],
-          "Deleted late/early records with audit information",
-          ["attendance", "late", "early", "deleted", "audit"],
-          ["DELETEID"], ["PERSONID", "DELETE_TIME"], 50000, is_del=True,
-          temporal=["ATTENDDATE", "DELETE_TIME"]),
-        
-        T("dbo.ATDLATEEARLY_C",
-          ["CALGUID", "ATTENDDATE", "PERSONID", "SHOULDTIME", "CARDTIME", "MINUTES", 
-           "ATDTYPE", "LATEEARLYID"],
-          "Calculated late/early attendance data",
-          ["attendance", "late", "early", "calculated"],
-          ["CALGUID"], ["PERSONID", "ATTENDDATE"], 75000,
-          temporal=["ATTENDDATE"]),
-        
+          ["DELETEID","ATTENDANCETYPE","PERSONID","WORKDATE","STARTTIME","ENDTIME","HOURS",
+           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","STARTDATE","ENDDATE","AUTOREVISE",
+           "TIMECLASSID","TIMECLASSHOURS","CREATIONTIME","CREATEDBY","LASTUPDATETIME",
+           "LASTUPDATEDBY","LEAVEID","DELETE_USER_ID","DELETE_TIME","FORMKIND","FROM_SOURCE",
+           "FORM_NO","RECORD_ID","FLEAVEBYDAYTYPE","TLEAVEBYDAYTYPE","LEAVEREASON"],
+          "Deleted leave data (audit)", ["leave","deleted","audit"], ["DELETEID"],
+          ["PERSONID","DELETE_TIME"], rows=25_000, is_del=True,
+          temporal=["WORKDATE","DELETE_TIME"]),
+
+        T("dbo.ATDHISLEAVEDATA_D",
+          ["DELETEID","ATTENDANCETYPE","PERSONID","WORKDATE","STARTTIME","ENDTIME","HOURS",
+           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","STARTDATE","ENDDATE","AUTOREVISE",
+           "TIMECLASSID","TIMECLASSHOURS","CREATIONTIME","CREATEDBY","LASTUPDATETIME",
+           "LASTUPDATEDBY","LEAVEID","DELETE_USER_ID","DELETE_TIME","FORMKIND","FROM_SOURCE",
+           "FORM_NO","RECORD_ID","RECORD_USERID","RECORD_DATE","FLEAVEBYDAYTYPE",
+           "TLEAVEBYDAYTYPE","LEAVEREASON"],
+          "Deleted historical leave (audit)", ["leave","deleted","audit"], ["DELETEID"],
+          ["PERSONID","DELETE_TIME"], rows=25_000, is_del=True,
+          temporal=["WORKDATE","DELETE_TIME"]),
+
         T("dbo.ATDLEAVEDATA_T",
-          ["ATTENDANCETYPE", "PERSONID", "WORKDATE", "STARTTIME", "ENDTIME", "HOURS", 
-           "LEAVEID", "TRANSFERUNITID", "LEAVEREASON"],
-          "Transferred leave data between business units",
-          ["leave", "transferred", "businessunit"],
-          ["LEAVEID"], ["PERSONID", "TRANSFERUNITID"], 5000,
-          temporal=["WORKDATE"]),
-        
+          ["ATTENDANCETYPE","PERSONID","WORKDATE","STARTTIME","ENDTIME","HOURS",
+           "BUSINESSUNITID","STARTDATE","ENDDATE","LEAVEID","TRANSFERUNITID","LEAVEREASON"],
+          "Transferred leave across units", ["leave","transferred"], ["LEAVEID"],
+          ["PERSONID","TRANSFERUNITID"], rows=5_000, temporal=["WORKDATE"]),
+
+        T("dbo.ATDLEAVEDATAEX",
+          ["ATTENDANCETYPE","PERSONID","WORKDATE","HOURS","BUSINESSUNITID","VACATIONID",
+           "MINUSDAYS","LEAVETYPE","STARTTIME","ENDTIME","STARTDATE","ENDDATE",
+           "TIMECLASSID","TIMECLASSHOURS","LEAVEID"],
+          "Extended leave accounting / vacation linkage", ["leave","extended","balance"],
+          ["LEAVEID"], ["PERSONID","VACATIONID"], rows=50_000, temporal=["WORKDATE"]),
+
         T("dbo.ATDLEAVEDATAEX_D",
-          ["DELETEID", "ATTENDANCETYPE", "PERSONID", "WORKDATE", "HOURS", "VACATIONID", 
-           "LEAVEID", "DELETE_USER_ID", "DELETE_TIME"],
-          "Deleted extended leave data with audit trail",
-          ["leave", "extended", "deleted", "audit"],
-          ["DELETEID"], ["PERSONID", "DELETE_TIME"], 10000, is_del=True,
-          temporal=["WORKDATE", "DELETE_TIME"]),
-        
-        T("dbo.ATDNONCALCULATEDVACATION_D",
-          ["DELETEID", "OID", "PERSONID", "BUSINESSUINTID", "VACATIONDAYS", "USEDDAYS", 
-           "REMAINDAYS", "VACATIONTYPE", "DELETE_USER_ID", "DELETE_TIME"],
-          "Deleted vacation balance records",
-          ["vacation", "balance", "deleted", "audit"],
-          ["DELETEID"], ["PERSONID", "DELETE_TIME"], 5000, is_del=True,
-          temporal=["DELETE_TIME"]),
-        
-        T("dbo.ATDJOBCONTENT_T",
-          ["JOBCONTENTID", "PERSONID", "WORKDATE", "STARTDATE", "STARTTIME", 
-           "ENDDATE", "ENDTIME", "CONTENTTYPEID", "TRANSFERUNITID"],
-          "Transferred job content records",
-          ["job", "content", "transferred"],
-          ["JOBCONTENTID"], ["PERSONID", "TRANSFERUNITID"], 10000,
-          temporal=["WORKDATE", "STARTDATE", "ENDDATE"])
+          ["DELETEID","ATTENDANCETYPE","PERSONID","WORKDATE","HOURS","BUSINESSUNITID",
+           "VACATIONID","MINUSDAYS","LEAVETYPE","STARTTIME","ENDTIME","STARTDATE","ENDDATE",
+           "TIMECLASSID","TIMECLASSHOURS","LEAVEID","DELETE_USER_ID","DELETE_TIME"],
+          "Deleted extended leave (audit)", ["leave","extended","deleted","audit"], ["DELETEID"],
+          ["PERSONID","DELETE_TIME"], rows=10_000, is_del=True,
+          temporal=["WORKDATE","DELETE_TIME"]),
+
+        T("dbo.ATDLEAVECANCELDATA",
+          ["OID","ATTENDANCETYPE","PERSONID","WORKDATE","STARTDATE","STARTTIME","ENDDATE",
+           "ENDTIME","HOURS","DEPARTMENTID","VALIDATED","BUSINESSUNITID","ISHISDATA",
+           "AutoRevise","CREATEDATE","CREATEUSERID","LASTEDITUSERID","LASTEDITTIME","REASON",
+           "FLEAVEBYDAYTYPE","TLEAVEBYDAYTYPE","LEAVEREASON","FROM_SOURCE","FORM_NO",
+           "RECORD_ID","FORMKIND"],
+          "Cancelled leave requests", ["leave","cancelled"], ["OID"], ["PERSONID","WORKDATE"],
+          rows=10_000, temporal=["WORKDATE","STARTDATE","ENDDATE"]),
+
+        # Balance / holiday / ops
+        T("dbo.ATDNONCALCULATEDVACATION",
+          ["OID","PERSONID","BUSINESSUINTID","VACATIONDAYS","USEDDAYS","REMAINDAYS","VACATIONTYPE",
+           "LASTUPDATETIME","EFFINIENTDATE","INVALIDATIONDATE","DESCRIPTION","CREATIONTIME",
+           "CREATEDBY","LASTUPDATEDBY","FLAG"],
+          "Current vacation balances", ["vacation","balance","current"], ["OID"],
+          ["PERSONID","VACATIONTYPE"], rows=25_000,
+          temporal=["EFFINIENTDATE","INVALIDATIONDATE"]),
+
+        T("dbo.ATDHISNONCALCULATEDVACATION",
+          ["OID","PERSONID","BUSINESSUINTID","VACATIONDAYS","USEDDAYS","REMAINDAYS","VACATIONTYPE",
+           "LASTUPDATETIME","EFFINIENTDATE","INVALIDATIONDATE","DESCRIPTION","CREATIONTIME",
+           "CREATEDBY","LASTUPDATEDBY"],
+          "Historical vacation balances", ["vacation","balance","history"], ["OID"],
+          ["PERSONID"], rows=100_000, is_hist=True,
+          temporal=["EFFINIENTDATE","INVALIDATIONDATE"]),
+
+        T("dbo.ATDLEGALCALENDAR",
+          ["CALENDARDATE","LEGALID","CALENDARTYPE"],
+          "Legal holidays / calendar", ["calendar","holidays"], ["CALENDARDATE","LEGALID"],
+          ["CALENDARDATE"], rows=1_000, temporal=["CALENDARDATE"]),
+
+        T("dbo.ATDDEPTOPERSTATE",
+          ["DEPARTMENTID","WORKDATE","STATEROLLCALL","STATEOVERTIME","STATEALLOWANCE",
+           "CALCULATOR","CALCULATETIME","SUBMITER","SUBMITTIME","CHECKER","CHECKTIME",
+           "VALIDATER","VALIDATETIME","BUSINESSUNITID"],
+          "Department-day operation status (calc/validate checkpoints)",
+          ["dept","ops","status"], ["DEPARTMENTID","WORKDATE"], ["WORKDATE"], rows=50_000,
+          temporal=["WORKDATE"]),
+
+        # Aux attendance/timecard
+        T("dbo.ATDHISLATEEARLY",
+          ["LATEEARLYID","ATTENDDATE","PERSONID","SHOULDTIME","DEPARTMENTID","TIMECLASS",
+           "CARDTIME","MINUTES","FUNCFLAG","PROCSTATE","ATDTYPE","ALLEGEREASON",
+           "BUSINESSUNITID","SHOULDDATE","CREATIONTIME","CREATEDBY","LASTUPDATETIME",
+           "LASTUPDATEDBY","PROCSTATEBEFORETODEAL","RECORD_USERID","RECORD_DATE",
+           "TOPAYROLLDATE","PACKAGEID","CARDDATE","EVENTRULECODE"],
+          "Historical late/early events", ["attendance","late","early","history"],
+          ["LATEEARLYID"], ["PERSONID","ATTENDDATE"], rows=750_000, is_hist=True,
+          temporal=["ATTENDDATE","CARDDATE"]),
+
+        T("dbo.ATDHISTIMECARDDATA",
+          ["RECORDID","DATAID","TIMECARDDATE","TIMECARDTIME","RECEIVEDATE","MACHINEID",
+           "DEPARTMENTID","PERSONID","REGIONID","DATAFROM","BUSINESSUNITID","CREATIONTIME",
+           "CREATEDBY","LASTUPDATETIME","LASTUPDATEDBY","RECORD_USERID","RECORD_DATE",
+           "CONFIGID","REASONID","FORM_NO","RECORD_ID","REMARK","LOCATIONADDRESS"],
+          "Raw timecard swipes (historical)", ["timecard","raw","history"],
+          ["RECORDID"], ["PERSONID","TIMECARDDATE"], rows=2_000_000, is_hist=True,
+          temporal=["TIMECARDDATE"]),
+
+        T("dbo.ATDHISNOTIMECARD",
+          ["NOTIMECARDID","SHOULDTIME","ATTENDDATE","PERSONID","DEPARTMENTID","TIMECLASS",
+           "REASONID","PROCSTATE","ALLEGEREASON","BUSINESSUNITID","SHOULDDATE","CREATIONTIME",
+           "CREATEDBY","LASTUPDATETIME","LASTUPDATEDBY","PROCSTATEBEFORETODEAL","RECORD_USERID",
+           "RECORD_DATE","TOPAYROLLDATE","PACKAGEID","ATDTYPE","EVENTRULECODE"],
+          "Missing timecard events", ["attendance","notimecard","exceptions"], ["NOTIMECARDID"],
+          ["PERSONID","ATTENDDATE"], rows=50_000, temporal=["ATTENDDATE"]),
+
+        # External + rollups
+        T("dbo.EDFATDLEAVEDATA",
+          ["RECORDID","ATTENDANCETYPE","PERSONID","WORKDATES","WORKDATEE","STARTTIME","ENDTIME",
+           "HOURS","DEPARTMENTID","VALIDATED","BUSINESSUNITID","PROCESSINSTANCEID","ISHANDLE"],
+          "External (EDF) leave imports", ["leave","edf","integration"], ["RECORDID"],
+          ["PERSONID"], rows=25_000, temporal=["WORKDATES","WORKDATEE"]),
+
+        T("dbo.ATDRESULTDATAIMPORT",
+          ["PERSONID","DEPARTMENTID","ATTENDANCETYPE","BELONGYEARMONTH","RESULTDATA","ISPAY",
+           "BUSINESSUNITID","CREATIONTIME","CREATEDBY","LASTUPDATETIME","LASTUPDATEDBY","IMPORTID"],
+          "Monthly attendance/leave rollup import", ["import","monthly","rollup"],
+          ["IMPORTID"], ["PERSONID","ATTENDANCETYPE"], rows=100_000,
+          temporal=["BELONGYEARMONTH"]),
+
+        # Person dimension (auto-resolved by constructor)
+        T("dbo.BIPSNACCOUNTSP",
+          ["PERIODID","ANALYZETYPEID","PERSONID","TRUENAME","EMPLOYEEID","HEADCOUNT","BRANCHID",
+           "JOBCODE","JOBCODESERIALID","JOBCODEGROUPID","JOBCODEGRADEID","JOBCODETYPEID",
+           "JOBCHARACTER","RESPONSIBILITYID","RESPONSIBILITYTYPEID","GRADEID","GRADETYPEID",
+           "TITLEID","TITLETYPEID","GENDER","EDUCATIONALLEVELID","AGE","AGEOFSCOPEID",
+           "NATIONALITYID","SERVICELENGTHCOMPANY","SERVICELENGTHCOMPANYSCOPEID",
+           "SERVICELENGTHSOCIAL","SERVICELENGTHSOCIALSCOPEID","DLIDL","EMPLOYEETYPEID",
+           "EMPLOYEECHARID","JOBTYPEID","ARRANGEMENTID","NATIVEPLACEPROPERTYID","BELONGCORPID",
+           "MARRIAGEID","ACCESSIONSTATE","ATTENDONDATE"],
+          "Person dimension (BI snapshot)", ["person","employee","bi"], ["PERSONID"], ["PERSONID"]),
     ]
-    
+
     return LeaveVectorDB(tables)
 
-
-# Additional utility functions for enhanced query optimization
+# ───────────────────────────────── Query Analyzers ─────────────────────────────────
 
 def analyze_query_complexity(query: str) -> Dict[str, Any]:
-    """Analyze query complexity and provide optimization suggestions."""
     q = query.lower()
-    
-    complexity_indicators = {
-        "temporal_range": any(term in q for term in ["between", "range", "from", "to", "last", "past"]),
-        "aggregation": any(term in q for term in ["count", "sum", "average", "total", "max", "min"]),
-        "grouping": any(term in q for term in ["by", "group", "department", "unit", "type"]),
-        "multiple_tables": len([term for term in ["leave", "overtime", "attendance", "vacation"] if term in q]) > 1,
-        "person_lookup": any(term in q for term in ["who", "person", "employee", "name"]),
-        "current_data": any(term in q for term in ["current", "today", "now", "active"]),
-        "historical_data": any(term in q for term in ["history", "historical", "trend", "past"])
+    indicators = {
+        "temporal_range": any(t in q for t in ["between", "range", "from", "to", "last", "past"]),
+        "aggregation": any(t in q for t in ["count", "sum", "average", "total", "max", "min"]),
+        "grouping": any(t in q for t in [" by ", "group", "department", "unit", "type"]),
+        "multiple_tables": len([t for t in ["leave", "attendance", "vacation"] if t in q]) > 1,
+        "person_lookup": any(t in q for t in ["who", "person", "employee", "name"]),
+        "current_data": any(t in q for t in ["current", "today", "now", "active"]),
+        "historical_data": any(t in q for t in ["history", "historical", "trend", "past"]),
     }
-    
-    optimization_hints = []
-    
-    if complexity_indicators["temporal_range"]:
-        optimization_hints.append("Use indexed date columns for range queries")
-    
-    if complexity_indicators["multiple_tables"]:
-        optimization_hints.append("Consider join order: smaller tables first")
-    
-    if complexity_indicators["historical_data"]:
-        optimization_hints.append("Historical tables are large - always filter by date range")
-    
-    if complexity_indicators["aggregation"] and not complexity_indicators["temporal_range"]:
-        optimization_hints.append("Add date filters to aggregation queries for better performance")
-    
-    return {
-        "complexity_score": sum(complexity_indicators.values()),
-        "indicators": complexity_indicators,
-        "optimization_hints": optimization_hints
-    }
-
+    hints = []
+    if indicators["temporal_range"]:
+        hints.append("Use indexed/filtered date columns for range queries")
+    if indicators["multiple_tables"]:
+        hints.append("Consider join order: smaller / filtered tables first")
+    if indicators["historical_data"]:
+        hints.append("Historical tables are large — always filter by date range")
+    if indicators["aggregation"] and not indicators["temporal_range"]:
+        hints.append("Add a date window to aggregations for performance")
+    return {"complexity_score": sum(indicators.values()), "indicators": indicators, "optimization_hints": hints}
 
 def suggest_query_improvements(query: str, selected_tables: List[str]) -> List[str]:
-    """Suggest improvements based on selected tables and query pattern."""
     suggestions = []
     q = query.lower()
-    
-    # Check for missing essential filters
-    large_tables = ["dbo.ATDHISTIMECARDDATA", "dbo.ATDHISLEAVEDATA", "dbo.ATDHISLATEEARLY"]
-    if any(table in selected_tables for table in large_tables):
-        if not any(term in q for term in ["date", "between", "last", "past", "month", "year"]):
-            suggestions.append("Add date range filter for better performance on historical tables")
-    
-    # Check for person queries without name resolution
-    if any(term in q for term in ["who", "person", "employee"]) and "dbo.PSNACCOUNT_D" not in selected_tables:
-        suggestions.append("Include PSNACCOUNT_D table for person name resolution")
-    
-    # Check for department/unit queries
-    if any(term in q for term in ["department", "unit", "team"]):
-        if not any("DEPARTMENTID" in table or "BUSINESSUNITID" in table for table in selected_tables):
-            suggestions.append("Consider filtering by DEPARTMENTID or BUSINESSUNITID")
-    
-    # Check for validation status
+
+    large = {"dbo.ATDHISTIMECARDDATA", "dbo.ATDHISLEAVEDATA", "dbo.ATDHISLATEEARLY"}
+    if any(t in large for t in selected_tables):
+        if not any(t in q for t in ["date", "between", "last", "past", "month", "year", "range"]):
+            suggestions.append("Add a date range filter for historical tables")
+
+    if any(t in q for t in ["who", "person", "employee", "name"]):
+        if not any("PSNACCOUNT" in t.upper() or "BIPSNACCOUNTSP" in t.upper() for t in selected_tables):
+            suggestions.append("Include person dimension table for name/ID resolution")
+
     if "leave" in q and "dbo.ATDLEAVEDATA" in selected_tables:
-        suggestions.append("Consider filtering by VALIDATED = 1 for approved leave only")
-    
+        suggestions.append("Filter by VALIDATED = 1 for approved leave only")
+
+    if any(t in q for t in ["department", "unit", "business"]):
+        if not any("DEPARTMENTID" in t or "BUSINESSUNITID" in t for t in selected_tables):
+            suggestions.append("Consider filtering/grouping by DEPARTMENTID or BUSINESSUNITID")
+
     return suggestions

@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.services.db_service import SQLServerDatabaseService
 from app.services.nlp_service import NLPService
+from app.services.leave_vector import build_leave_index
 
 logger = logging.getLogger(__name__)
 
@@ -41,37 +42,27 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("App services shutting down")
 
-# The single FastAPI app
+# FastAPI app + router
 app = FastAPI(lifespan=lifespan)
-
-# One router for all routes
 router = APIRouter()
 
+# ------------------------------------------------------------------
+# Debug: Leave vector endpoints
+# ------------------------------------------------------------------
+_db = build_leave_index()
 
-# If your SQL helpers live elsewhere, import them here:
-# from app.api.commands import _sql_leave_metrics, _sql_leave_trend
-# Otherwise keep their definitions below this file.
+@router.get("/debug/leave/health")
+def leave_health():
+    report = _db.relationships_sanity_check()
+    return {"health": _db.health_check(), "sanity": report}
+
+@router.get("/debug/leave/join-hints")
+def leave_join_hints(tables: List[str] = Query(..., alias="tables")):
+    return {"tables": tables, "join_hints": _db.join_hints(tables)}
 
 # ------------------------------------------------------------------
-# Health
+# Helpers
 # ------------------------------------------------------------------
-# backend/app/api/router.py
-import os, json, time, uuid, logging
-from pathlib import Path
-from typing import Dict, Any, Optional
-
-from fastapi import APIRouter, Request, HTTPException, Query
-from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
-from starlette.concurrency import run_in_threadpool
-
-from app.services.db_service import SQLServerDatabaseService
-
-from app.services.nlp_service import NLPService
-
-logger = logging.getLogger(__name__)
-router = APIRouter()
-
-# ------- Helpers -------
 def _frontend_paths():
     # backend/app/api/router.py -> parents[2] = backend/
     base_dir = Path(__file__).resolve().parents[2]
@@ -81,7 +72,9 @@ def _frontend_paths():
     index_file = frontend_dir / "index.html"
     return base_dir, project_root, frontend_dir, index_file
 
-# ------- Routes -------
+# ------------------------------------------------------------------
+# Static / SPA
+# ------------------------------------------------------------------
 @router.get("/", include_in_schema=False)
 async def serve_index():
     base_dir, project_root, frontend_dir, index_file = _frontend_paths()
@@ -97,11 +90,30 @@ async def serve_index():
     logger.warning("index.html not found; redirecting to /docs")
     return RedirectResponse("/docs")
 
+@router.get("/dashboard", include_in_schema=False)
+async def serve_dashboard():
+    base_dir = Path(__file__).resolve().parents[2]
+    frontend_dir = base_dir / "frontend"
+    index_file = frontend_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return RedirectResponse("/docs")
+
+# Simple ping
+@router.get("/api/ping", include_in_schema=False)
+async def ping():
+    return {"ok": True}
+
+# ------------------------------------------------------------------
+# Health
+# ------------------------------------------------------------------
 @router.get("/api/health")
-async def health(request: Request,
-                 no_db: bool = Query(False),
-                 no_index: bool = Query(False),
-                 no_vector: bool = Query(False)) -> Dict[str, Any]:
+async def health(
+    request: Request,
+    no_db: bool = Query(False),
+    no_index: bool = Query(False),
+    no_vector: bool = Query(False),
+) -> Dict[str, Any]:
     t0 = time.perf_counter()
     out: Dict[str, Any] = {}
 
@@ -124,7 +136,6 @@ async def health(request: Request,
         out["database_connection"] = None
         out["database_skipped"] = True
 
-
     # Vector
     if not no_vector:
         logger.info("health: entering vector check")
@@ -136,8 +147,10 @@ async def health(request: Request,
                 vec = {"info": str(vec)}
             out["vector_db"] = vec
             out["vector_ms"] = int((time.perf_counter() - t) * 1000)
-            logger.info("health: completed vector check ok=%s dur=%dms",
-                        bool(vec.get("ready")), out["vector_ms"])
+            logger.info(
+                "health: completed vector check ok=%s dur=%dms",
+                bool(vec.get("ready")), out["vector_ms"]
+            )
         except BaseException as e:
             out["vector_db"] = {"ready": False, "error": f"{type(e).__name__}: {e}"}
             logger.exception("health: vector_status raised %s", type(e).__name__)
@@ -152,6 +165,9 @@ async def health(request: Request,
     logger.info("health: ready=%s total=%dms", out["ready_for_queries"], out["total_ms"])
     return out
 
+# ------------------------------------------------------------------
+# Assistant Query (LLM)
+# ------------------------------------------------------------------
 @router.post("/api/assistant/query")
 async def assistant_query(payload: dict, request: Request):
     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
@@ -163,19 +179,18 @@ async def assistant_query(payload: dict, request: Request):
 
     nlp: NLPService = getattr(request.app.state, "nlp", None)
     if nlp is None:
-        logger.error(f"rid={rid} /assistant/query error: NLP service not initialized on app.state")
+        logger.error("rid=%s /assistant/query error: NLP service not initialized on app.state", rid)
         return JSONResponse({"success": False, "error": "NLP service not initialized"}, status_code=200)
 
     try:
         data = await run_in_threadpool(nlp.process_complete_query, q, "dbo", rid)
         return JSONResponse({"success": True, **(data or {})})
     except Exception as e:
-        logger.exception(f"rid={rid} /assistant/query error: {type(e).__name__}: {e}")
+        logger.exception("rid=%s /assistant/query error: %s: %s", rid, type(e).__name__, e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=200)
     finally:
         ms = int((time.perf_counter() - t0) * 1000)
         logger.info(f"rid={rid} /assistant/query done ms={ms}")
-
 
 # ------------------------------------------------------------------
 # Dashboard Data (uses DB on app.state)
@@ -185,14 +200,14 @@ async def leave_data(
     request: Request,
     kind: str = "metrics",
     as_of: Optional[str] = None,
-    days: int = 7
+    days: int = 7,
 ) -> Dict[str, Any]:
-    from datetime import datetime, date
+    from datetime import datetime, date, timedelta
 
     # Validate/normalize as_of
     if as_of:
         try:
-            as_of_dt = datetime.strptime(as_of.replace('/', '-'), "%Y-%m-%d").date()
+            as_of_dt = datetime.strptime(as_of.replace("/", "-"), "%Y-%m-%d").date()
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid 'as_of' format. Use YYYY-MM-DD.")
     else:
@@ -204,70 +219,110 @@ async def leave_data(
     if db is None:
         raise HTTPException(status_code=500, detail="Database service not initialized")
 
+    # --- Look up data window (min/max WORKDATE) ---
+    min_date_str = None
+    max_date_str = None
     try:
+        win_rows, win_cols = db.run_select(
+            """
+            SELECT
+              CONVERT(varchar(10), MIN(CAST(WORKDATE AS date)), 23) AS min_date,
+              CONVERT(varchar(10), MAX(CAST(WORKDATE AS date)), 23) AS max_date
+            FROM dbo.ATDLEAVEDATA
+            """
+        )
+        if win_rows and len(win_rows[0]) >= 2:
+            min_date_str, max_date_str = win_rows[0][0], win_rows[0][1]
+    except Exception as e:
+        logger.warning("Failed to fetch data window: %s", e)
+
+    # If there is a known window, clamp as_of to it
+    effective_as_of_str = as_of_str
+    if max_date_str and effective_as_of_str > max_date_str:
+        effective_as_of_str = max_date_str
+    if min_date_str and effective_as_of_str < min_date_str:
+        effective_as_of_str = min_date_str
+
+    # For trend, also clamp the start and adjust days to avoid empty data
+    effective_days = days
+    effective_start_str = None
+    if kind.lower() == "trend":
+        try:
+            end_dt = datetime.strptime(effective_as_of_str, "%Y-%m-%d").date()
+            # Default start: end - (days-1)
+            start_dt = end_dt - timedelta(days=max(0, days - 1))
+            if min_date_str:
+                min_dt = datetime.strptime(min_date_str, "%Y-%m-%d").date()
+                if start_dt < min_dt:
+                    start_dt = min_dt
+            # If max_date exists and is earlier than requested end, align the end
+            if max_date_str:
+                max_dt = datetime.strptime(max_date_str, "%Y-%m-%d").date()
+                if end_dt > max_dt:
+                    end_dt = max_dt
+            # Effective range
+            effective_days = max(1, (end_dt - start_dt).days + 1)
+            effective_as_of_str = end_dt.strftime("%Y-%m-%d")
+            effective_start_str = start_dt.strftime("%Y-%m-%d")
+        except Exception as e:
+            logger.warning("Failed to clamp trend window: %s", e)
+
+    try:
+        # Build SQL with clamped dates
         if kind.lower() == "trend":
-            sql = _sql_leave_trend(as_of_str, days)   # keep your existing helper
+            sql = _sql_leave_trend(effective_as_of_str, effective_days)  # keep your existing helper
         else:
-            sql = _sql_leave_metrics(as_of_str)       # keep your existing helper
+            sql = _sql_leave_metrics(effective_as_of_str)                # keep your existing helper
 
         rows, columns = db.run_select(sql)
         if not rows:
-            return {"success": False, "error": "No data returned from database."}
+            # Still return context so the frontend knows the usable window
+            base = {
+                "success": True,
+                "data_window": {"min_date": min_date_str, "max_date": max_date_str},
+                "effective_as_of": effective_as_of_str,
+            }
+            if kind.lower() == "trend":
+                base["trend"] = []
+                if effective_start_str:
+                    base["effective_range"] = {"start": effective_start_str, "end": effective_as_of_str}
+            else:
+                base["metrics"] = {}
+            return base
 
         # Expect single-row JSON projection
         row = dict(zip(columns, rows[0]))
+
+        # Common extra context fields
+        extra_ctx = {
+            "data_window": {"min_date": min_date_str, "max_date": max_date_str},
+            "effective_as_of": effective_as_of_str,
+        }
+        if kind.lower() == "trend" and effective_start_str:
+            extra_ctx["effective_range"] = {"start": effective_start_str, "end": effective_as_of_str}
+
         if "metrics" in row and isinstance(row["metrics"], str):
             payload = json.loads(row["metrics"])
-            return {"success": True, **({"metrics": payload} if kind != "trend" else payload)}
+            return {"success": True, "metrics": payload, **extra_ctx}
+
         if "trend" in row and isinstance(row["trend"], str):
             payload = json.loads(row["trend"])
-            return {"success": True, "trend": payload}
+            return {"success": True, "trend": payload, **extra_ctx}
 
         # Fallback (already materialized)
-        return {"success": True, **row}
+        return {"success": True, **row, **extra_ctx}
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"/api/leave_data failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"leave_data query failed: {str(e)}")
-
-# ------------------------------------------------------------------
-# Static / SPA
-# ------------------------------------------------------------------
-@router.get("/", include_in_schema=False)
-async def serve_index():
-    base_dir = Path(__file__).resolve().parents[2]   # backend/
-    frontend_dir = base_dir / "frontend"
-    index_file = frontend_dir / "index.html"
-
-    logger.info(f"Router file location: {Path(__file__).resolve()}")
-    logger.info(f"Base dir: {base_dir}")
-    logger.info(f"Frontend dir: {frontend_dir}")
-    logger.info(f"Looking for index.html at: {index_file}")
-    logger.info(f"File exists: {index_file.exists()}")
-
-    if index_file.exists():
-        logger.info("Serving index.html")
-        return FileResponse(str(index_file))
-    return RedirectResponse("/docs")
-
-@router.get("/dashboard", include_in_schema=False)
-async def serve_dashboard():
-    base_dir = Path(__file__).resolve().parents[2]
-    frontend_dir = base_dir / "frontend"
-    index_file = frontend_dir / "index.html"
-    if index_file.exists():
-        return FileResponse(str(index_file))
-    return RedirectResponse("/docs")
-
-# Simple ping
-@router.get("/api/ping", include_in_schema=False)
-async def ping():
-    return {"ok": True}
+    
+    
 
 # Attach router to app
 app.include_router(router)
+
 
 """
 DO NOT MODIFY - Chiuzu 08/27/2025

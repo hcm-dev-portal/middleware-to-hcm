@@ -2,7 +2,7 @@
 import os
 import json
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from app.services.db_service import SQLServerDatabaseService, DatabaseQueryError
 
 logger = logging.getLogger(__name__)
@@ -40,11 +40,16 @@ def _format_name(row: Dict[str, Optional[str]]) -> str:
 
 class PersonResolver:
     """
-    Resolve PERSONID -> display name (+ optional extras) with 3 layers:
+    Resolve PERSONID -> display info via:
       1) in-memory cache
       2) local JSON index (optional)
-      3) DB fallback (batch or single)
+      3) DB fallback (batch)
+    Tries these person sources (if present): dbo.PSNACCOUNT, dbo.PSNACCOUNT_D, dbo.BIPSNACCOUNTSP
     """
+
+    # keep generous but under SQL Server param limit (2100) with buffer
+    _BATCH_SIZE = 1000
+
     def __init__(
         self,
         db_service: SQLServerDatabaseService,
@@ -56,8 +61,9 @@ class PersonResolver:
         self.cache: Dict[str, Dict[str, Optional[str]]] = {}
         self.storage_dir = storage_dir or os.getenv("STORAGE_DIR", "./storage")
         self._local_index: Dict[str, Dict[str, Optional[str]]] = {}
-        self._tried_fallback_table = False
-        self._fallback_table_exists = False
+
+        # detect once per process
+        self._table_exists_cache: Dict[str, bool] = {}
         self._load_local_index()
 
     # ---------- public ----------
@@ -85,13 +91,13 @@ class PersonResolver:
 
     def resolve_many(self, person_ids: List[str]) -> Dict[str, Dict[str, Optional[str]]]:
         """Batch resolve. Returns {person_id: {...}} for only the input IDs."""
-        clean = [p.strip() for p in person_ids if p and str(p).strip()]
+        clean = [str(p).strip() for p in person_ids if p and str(p).strip()]
         if not clean:
             return {}
 
         out: Dict[str, Dict[str, Optional[str]]] = {}
 
-        # 1) cache hits
+        # 1) cache / local-index hits
         remaining: List[str] = []
         for pid in clean:
             if pid in self.cache:
@@ -105,22 +111,28 @@ class PersonResolver:
         if not remaining:
             return out
 
-        # 2) DB batch
-        db_rows = self._fetch_from_db(remaining)
-        for r in db_rows:
-            pid = r.get("PERSONID")
-            if not pid:
-                continue
-            info = {
-                "person_id": pid,
-                "name": _format_name(r),
-                "employee_id": r.get("EMPLOYEEID"),
-                "email": r.get("COMPANYEMAIL") or r.get("EMAIL") or None,
-            }
+        # 2) DB batch in chunks to avoid 2100 param limit
+        fetched: Dict[str, Dict[str, Optional[str]]] = {}
+        for i in range(0, len(remaining), self._BATCH_SIZE):
+            chunk = remaining[i:i + self._BATCH_SIZE]
+            for row in self._fetch_from_db(chunk):
+                pid = row.get("PERSONID")
+                if not pid:
+                    continue
+                info = {
+                    "person_id": pid,
+                    "name": _format_name(row),
+                    "employee_id": row.get("EMPLOYEEID"),
+                    "email": row.get("COMPANYEMAIL") or row.get("EMAIL") or None,
+                }
+                fetched[pid] = info
+
+        # cache + consolidate
+        for pid, info in fetched.items():
             out[pid] = info
             self._cache_put(pid, info)
 
-        # 3) fill any misses with a bare fallback
+        # 3) fill misses with bare fallback
         for pid in remaining:
             if pid not in out:
                 out[pid] = {"person_id": pid, "name": pid, "employee_id": None, "email": None}
@@ -128,13 +140,18 @@ class PersonResolver:
 
         return out
 
-    def status(self) -> Dict[str, any]:
+    def status(self) -> Dict[str, Any]:
+        ok = False
+        try:
+            ok = bool(self.db.test_connection())
+        except Exception:
+            ok = False
         return {
             "cache_size": len(self.cache),
             "cache_cap": self.cache_cap,
             "local_index_size": len(self._local_index),
             "storage_dir": self.storage_dir,
-            "db_connected": self.db.test_connection(),
+            "db_connected": ok,
         }
 
     # ---------- internals ----------
@@ -150,7 +167,6 @@ class PersonResolver:
         """
         Optionally load a lightweight people index:
             { "P000123": {"person_id":"P000123","name":"王小明","employee_id":"E123","email":"x@corp"} , ... }
-        If you already dumped PSNACCOUNT into JSONL/CSV you can prebuild this file.
         """
         try:
             idx_path = os.path.join(self.storage_dir, "people_index.json")
@@ -159,55 +175,76 @@ class PersonResolver:
                     data = json.load(f)
                 if isinstance(data, dict):
                     self._local_index = data
-                    logger.info(f"Loaded people_index.json with {len(self._local_index)} entries")
+                    logger.info("Loaded people_index.json with %d entries", len(self._local_index))
         except Exception as e:
-            logger.warning(f"Failed loading people_index.json: {e}")
+            logger.warning("Failed loading people_index.json: %s", e)
+
+    def _table_exists(self, schema: str, name: str) -> bool:
+        key = f"{schema}.{name}".lower()
+        if key in self._table_exists_cache:
+            return self._table_exists_cache[key]
+        try:
+            sql = """
+            SELECT 1
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+            """
+            rows, _ = self.db.run_select(sql, params=(schema, name), max_rows=1)
+            exists = bool(rows)
+        except Exception:
+            exists = False
+        self._table_exists_cache[key] = exists
+        return exists
 
     def _fetch_from_db(self, person_ids: List[str]) -> List[Dict[str, Optional[str]]]:
         """
-        Batch fetch from dbo.PSNACCOUNT first; optionally fallback to dbo.PSNACCOUNT_D (if present).
+        Batch fetch using any available person table.
+        We try in this order and fill only missing IDs at each step:
+          1) dbo.PSNACCOUNT
+          2) dbo.PSNACCOUNT_D
+          3) dbo.BIPSNACCOUNTSP
         """
-        cols = [
-            "PERSONID","TRUENAME","FIRSTNAME","MIDDLENAME","LASTNAME","ENGNAME",
-            "EMPLOYEEID","COMPANYEMAIL"
-        ]
-        in_clause = ",".join(["?"] * len(person_ids))
+        targets: List[Tuple[str, List[str]]] = []
 
-        # Try main table
-        sql = f"""
-        SELECT {", ".join(cols)}
-        FROM dbo.PSNACCOUNT
-        WHERE PERSONID IN ({in_clause})
-        """
-        try:
-            rows, headers = self.db.run_select(sql, params=tuple(person_ids), max_rows=10_000)
-            return [dict(zip(headers, r)) for r in rows]
-        except DatabaseQueryError as e:
-            logger.warning(f"PSNACCOUNT lookup failed, trying fallback: {e}")
+        # Common columns across sources (safe set)
+        base_cols = ["PERSONID", "TRUENAME", "EMPLOYEEID"]
+        extraname_cols = ["FIRSTNAME", "MIDDLENAME", "LASTNAME", "ENGNAME"]
+        email_cols = ["COMPANYEMAIL"]
 
-        # Optional fallback (only check once)
-        if not self._tried_fallback_table:
-            self._tried_fallback_table = True
+        have_psn = self._table_exists("dbo", "PSNACCOUNT")
+        have_psn_d = self._table_exists("dbo", "PSNACCOUNT_D")
+        have_bi = self._table_exists("dbo", "BIPSNACCOUNTSP")
+
+        if have_psn:
+            targets.append(("dbo.PSNACCOUNT", base_cols + extraname_cols + email_cols))
+        if have_psn_d:
+            targets.append(("dbo.PSNACCOUNT_D", base_cols + extraname_cols + email_cols))
+        if have_bi:
+            # BI snapshot usually lacks email/name parts beyond TRUENAME
+            targets.append(("dbo.BIPSNACCOUNTSP", base_cols))  # keep minimal and safe
+
+        remaining = set(person_ids)
+        results: Dict[str, Dict[str, Optional[str]]] = {}
+
+        for full_table, cols in targets:
+            if not remaining:
+                break
+            # Only query what's still missing
+            todo = list(remaining)
+            placeholders = ",".join(["?"] * len(todo))
+            sql = f"SELECT {', '.join(cols)} FROM {full_table} WHERE PERSONID IN ({placeholders})"
             try:
-                chk_sql = """
-                SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='PSNACCOUNT_D'
-                """
-                chk_rows, _ = self.db.run_select(chk_sql)
-                self._fallback_table_exists = bool(chk_rows)
-            except Exception:
-                self._fallback_table_exists = False
-
-        if self._fallback_table_exists:
-            sql2 = f"""
-            SELECT {", ".join(cols)}
-            FROM dbo.PSNACCOUNT_D
-            WHERE PERSONID IN ({in_clause})
-            """
-            try:
-                rows, headers = self.db.run_select(sql2, params=tuple(person_ids), max_rows=10_000)
-                return [dict(zip(headers, r)) for r in rows]
+                rows, headers = self.db.run_select(sql, params=tuple(todo), max_rows=10_000)
+                for r in rows:
+                    row = dict(zip(headers, r))
+                    pid = row.get("PERSONID")
+                    if pid:
+                        results[pid] = row
+                        if pid in remaining:
+                            remaining.remove(pid)
             except DatabaseQueryError as e:
-                logger.error(f"PSNACCOUNT_D fallback failed: {e}")
+                logger.warning("%s lookup failed: %s", full_table, e)
+            except Exception as e:
+                logger.error("%s lookup unexpected error: %s", full_table, e)
 
-        return []
+        return list(results.values())
