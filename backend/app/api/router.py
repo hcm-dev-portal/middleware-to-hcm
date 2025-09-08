@@ -15,6 +15,16 @@ from starlette.concurrency import run_in_threadpool
 from app.services.db_service import SQLServerDatabaseService
 from app.services.nlp_service import NLPService
 from app.services.leave_vector import build_leave_index
+from app.home_page_metrics.leave_metrics import _sql_leave_metrics, _sql_leave_trend
+
+# ⬇️ Import report logic & models from the new service module
+from app.reports.service import (
+    ReportAnalysisRequest,
+    ReportGenerationRequest,
+    analyze_report,          # async
+    generate_report,         # async
+    download_report_response # sync
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +44,6 @@ async def lifespan(app: FastAPI):
         app.state.nlp = nlp
         logger.info("App services initialized: db, nlp")
     except Exception as e:
-        # keep the app running; endpoints will return structured errors
         logger.exception(f"Service init failed: {type(e).__name__}: {e}")
 
     try:
@@ -64,10 +73,8 @@ def leave_join_hints(tables: List[str] = Query(..., alias="tables")):
 # Helpers
 # ------------------------------------------------------------------
 def _frontend_paths():
-    # backend/app/api/router.py -> parents[2] = backend/
-    base_dir = Path(__file__).resolve().parents[2]
-    # project root = backend.parent
-    project_root = base_dir.parent
+    base_dir = Path(__file__).resolve().parents[2]     # backend/
+    project_root = base_dir.parent                     # project root
     frontend_dir = project_root / "frontend"
     index_file = frontend_dir / "index.html"
     return base_dir, project_root, frontend_dir, index_file
@@ -111,7 +118,7 @@ async def ping():
 async def health(
     request: Request,
     no_db: bool = Query(False),
-    no_index: bool = Query(False),
+    no_index: bool = Query(False),   # kept for compatibility
     no_vector: bool = Query(False),
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
@@ -121,7 +128,7 @@ async def health(
     if not no_db:
         try:
             t = time.perf_counter()
-            db: SQLServerDatabaseService = getattr(request.app.state, "db", None)
+            db: SQLServerDatabaseService = getattr(request.app.state, "db", None)  # type: ignore
             if db is None:
                 raise RuntimeError("DB service not initialized")
             db_ok = bool(db.test_connection(login_timeout=2))
@@ -141,7 +148,7 @@ async def health(
         logger.info("health: entering vector check")
         try:
             t = time.perf_counter()
-            nlp: NLPService = getattr(request.app.state, "nlp", None)
+            nlp: NLPService = getattr(request.app.state, "nlp", None) # type: ignore
             vec = nlp.vector_status() if nlp else {"ready": False, "error": "NLP missing"}
             if not isinstance(vec, dict):
                 vec = {"info": str(vec)}
@@ -157,6 +164,7 @@ async def health(
     else:
         out["vector_db"] = {"skipped": True}
 
+    # Backward-compat index flag (not computed here)
     db_ok = out.get("database_connection") is True if "database_connection" in out else True
     idx_ok = out.get("index_present") is True if "index_present" in out else True
     vec_ok = bool(out.get("vector_db", {}).get("ready", True))
@@ -177,7 +185,7 @@ async def assistant_query(payload: dict, request: Request):
     t0 = time.perf_counter()
     logger.info(f"rid={rid} /assistant/query start qlen={len(q)} lang={lang}")
 
-    nlp: NLPService = getattr(request.app.state, "nlp", None)
+    nlp: NLPService = getattr(request.app.state, "nlp", None) # type: ignore
     if nlp is None:
         logger.error("rid=%s /assistant/query error: NLP service not initialized on app.state", rid)
         return JSONResponse({"success": False, "error": "NLP service not initialized"}, status_code=200)
@@ -236,31 +244,28 @@ async def leave_data(
     except Exception as e:
         logger.warning("Failed to fetch data window: %s", e)
 
-    # If there is a known window, clamp as_of to it
+    # Clamp as_of to known window
     effective_as_of_str = as_of_str
     if max_date_str and effective_as_of_str > max_date_str:
         effective_as_of_str = max_date_str
     if min_date_str and effective_as_of_str < min_date_str:
         effective_as_of_str = min_date_str
 
-    # For trend, also clamp the start and adjust days to avoid empty data
+    # Trend window
     effective_days = days
     effective_start_str = None
     if kind.lower() == "trend":
         try:
             end_dt = datetime.strptime(effective_as_of_str, "%Y-%m-%d").date()
-            # Default start: end - (days-1)
             start_dt = end_dt - timedelta(days=max(0, days - 1))
             if min_date_str:
                 min_dt = datetime.strptime(min_date_str, "%Y-%m-%d").date()
                 if start_dt < min_dt:
                     start_dt = min_dt
-            # If max_date exists and is earlier than requested end, align the end
             if max_date_str:
                 max_dt = datetime.strptime(max_date_str, "%Y-%m-%d").date()
                 if end_dt > max_dt:
                     end_dt = max_dt
-            # Effective range
             effective_days = max(1, (end_dt - start_dt).days + 1)
             effective_as_of_str = end_dt.strftime("%Y-%m-%d")
             effective_start_str = start_dt.strftime("%Y-%m-%d")
@@ -270,13 +275,12 @@ async def leave_data(
     try:
         # Build SQL with clamped dates
         if kind.lower() == "trend":
-            sql = _sql_leave_trend(effective_as_of_str, effective_days)  # keep your existing helper
+            sql = _sql_leave_trend(effective_as_of_str, effective_days)
         else:
-            sql = _sql_leave_metrics(effective_as_of_str)                # keep your existing helper
+            sql = _sql_leave_metrics(effective_as_of_str)
 
         rows, columns = db.run_select(sql)
         if not rows:
-            # Still return context so the frontend knows the usable window
             base = {
                 "success": True,
                 "data_window": {"min_date": min_date_str, "max_date": max_date_str},
@@ -290,10 +294,7 @@ async def leave_data(
                 base["metrics"] = {}
             return base
 
-        # Expect single-row JSON projection
         row = dict(zip(columns, rows[0]))
-
-        # Common extra context fields
         extra_ctx = {
             "data_window": {"min_date": min_date_str, "max_date": max_date_str},
             "effective_as_of": effective_as_of_str,
@@ -309,7 +310,6 @@ async def leave_data(
             payload = json.loads(row["trend"])
             return {"success": True, "trend": payload, **extra_ctx}
 
-        # Fallback (already materialized)
         return {"success": True, **row, **extra_ctx}
 
     except HTTPException:
@@ -317,157 +317,22 @@ async def leave_data(
     except Exception as e:
         logger.error(f"/api/leave_data failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"leave_data query failed: {str(e)}")
-    
-    
+
+# ------------------------------------------------------------------
+# Reports API — thin endpoints calling report service
+# ------------------------------------------------------------------
+@router.post("/api/reports/analyze")
+async def reports_analyze(payload: ReportAnalysisRequest, request: Request):
+    return await analyze_report(payload, request)
+
+@router.post("/api/reports/generate")
+async def reports_generate(payload: ReportGenerationRequest, request: Request):
+    return await generate_report(payload, request)
+
+@router.get("/api/reports/download/{report_id}")
+async def reports_download(report_id: str, request: Request):
+    # Returns a FileResponse or raises HTTPException
+    return download_report_response(report_id, request)
 
 # Attach router to app
 app.include_router(router)
-
-
-"""
-DO NOT MODIFY - Chiuzu 08/27/2025
-"""
-# ---------- Dashboard Data SQL builders (metrics / trend) ----------
-
-def _sql_leave_metrics(as_of: str) -> str:
-    return f"""
-WITH params AS (
-  SELECT CAST('{as_of}' AS DATE) AS asOf
-),
-wk AS (
-  SELECT
-    asOf,
-    ((DATEPART(weekday, asOf) + 5) % 7) AS w,
-    DATEADD(day, -((DATEPART(weekday, asOf)+5)%7), asOf) AS weekStart,
-    DATEADD(day,  6-((DATEPART(weekday, asOf)+5)%7), asOf) AS weekEnd
-  FROM params
-),
-leave_src AS (
-  SELECT
-    PERSONID,
-    DEPARTMENTID,
-    ATTENDANCETYPE,
-    COALESCE(
-      COALESCE(TRY_CONVERT(date, STARTDATE, 112), TRY_CONVERT(date, STARTDATE, 23), TRY_CONVERT(date, STARTDATE)),
-      COALESCE(TRY_CONVERT(date, WORKDATE, 112),  TRY_CONVERT(date, WORKDATE, 23),  TRY_CONVERT(date, WORKDATE))
-    ) AS SDATE,
-    COALESCE(
-      COALESCE(TRY_CONVERT(date, ENDDATE, 112), TRY_CONVERT(date, ENDDATE, 23), TRY_CONVERT(date, ENDDATE)),
-      COALESCE(TRY_CONVERT(date, WORKDATE, 112), TRY_CONVERT(date, WORKDATE, 23), TRY_CONVERT(date, WORKDATE))
-    ) AS EDATE,
-    VALIDATED
-  FROM dbo.ATDLEAVEDATA
-),
-on_leave_day AS (
-  SELECT l.PERSONID, l.DEPARTMENTID, l.ATTENDANCETYPE AS [type], l.EDATE
-  FROM leave_src l
-  CROSS JOIN params p
-  WHERE l.SDATE <= p.asOf AND l.EDATE >= p.asOf
-),
-pending_reqs AS (
-  SELECT COUNT(*) AS cnt
-  FROM leave_src
-  WHERE (VALIDATED IS NULL OR VALIDATED = 0)
-),
-upcoming_next7 AS (
-  SELECT
-    l.PERSONID AS person_id,
-    l.ATTENDANCETYPE AS [type],
-    l.SDATE AS start_date,
-    l.EDATE AS end_date
-  FROM leave_src l
-  CROSS JOIN params p
-  WHERE l.SDATE BETWEEN DATEADD(day, 1, p.asOf) AND DATEADD(day, 7, p.asOf)
-),
-dept_summary AS (
-  SELECT DEPARTMENTID AS department_id, COUNT(*) AS [count]
-  FROM on_leave_day
-  GROUP BY DEPARTMENTID
-),
-overtime_week AS (
-  SELECT
-    SUM(CAST(HOURS AS DECIMAL(10,2))) AS total_hours,
-    COUNT(DISTINCT PERSONID)          AS people
-  FROM dbo.ATDHISOVERTIME
-  CROSS JOIN wk
-  WHERE COALESCE(TRY_CONVERT(date, OVERTIMEDATE, 112), TRY_CONVERT(date, OVERTIMEDATE, 23), TRY_CONVERT(date, OVERTIMEDATE))
-        BETWEEN wk.weekStart AND wk.weekEnd
-),
-low_balance AS (
-  SELECT COUNT(*) AS low_cnt
-  FROM (
-    SELECT PERSONID, MIN(REMAINDAYS) AS rem
-    FROM (
-      SELECT PERSONID, REMAINDAYS FROM dbo.ATDNONCALCULATEDVACATION
-      UNION ALL
-      SELECT PERSONID, REMAINDAYS FROM dbo.ATDHISNONCALCULATEDVACATION
-    ) X
-    GROUP BY PERSONID
-  ) Y
-  WHERE TRY_CAST(rem AS DECIMAL(10,2)) < 5
-)
-SELECT
-  1 AS success,
-  (
-    SELECT
-      (SELECT COUNT(*) FROM on_leave_day)               AS employees_on_leave_today,
-      (SELECT cnt FROM pending_reqs)                    AS pending_leave_requests,
-      (SELECT low_cnt FROM low_balance)                 AS low_balance_count,
-      (SELECT ISNULL(total_hours,0) FROM overtime_week) AS overtime_hours,
-      (SELECT ISNULL(people,0) FROM overtime_week)      AS overtime_people,
-      (SELECT TOP (50)
-         PERSONID AS person_id, [type], CONVERT(date, EDATE) AS end_date
-       FROM on_leave_day
-       ORDER BY PERSONID
-       FOR JSON PATH)                                   AS on_leave_details,
-      (SELECT
-         person_id, CONVERT(date, start_date) AS start_date,
-         CONVERT(date, end_date)   AS end_date, [type]
-       FROM upcoming_next7
-       ORDER BY start_date, person_id
-       FOR JSON PATH)                                   AS upcoming_leave,
-      (SELECT department_id, [count]
-       FROM dept_summary
-       ORDER BY [count] DESC
-       FOR JSON PATH)                                   AS department_summary
-    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
-  ) AS metrics;
-"""
-
-
-def _sql_leave_trend(as_of: str, days: int) -> str:
-    days = max(1, min(int(days or 7), 31))
-    return f"""
-WITH params AS (
-  SELECT CAST('{as_of}' AS DATE) AS asOf
-),
-s(d) AS (
-  SELECT DATEADD(day, -({days}-1), asOf) FROM params
-  UNION ALL
-  SELECT DATEADD(day, 1, d)
-  FROM s CROSS JOIN params
-  WHERE d < (SELECT asOf FROM params)
-),
-leave_src AS (
-  SELECT
-    COALESCE(
-      COALESCE(TRY_CONVERT(date, STARTDATE, 112), TRY_CONVERT(date, STARTDATE, 23), TRY_CONVERT(date, STARTDATE)),
-      COALESCE(TRY_CONVERT(date, WORKDATE, 112),  TRY_CONVERT(date, WORKDATE, 23),  TRY_CONVERT(date, WORKDATE))
-    ) AS SDATE,
-    COALESCE(
-      COALESCE(TRY_CONVERT(date, ENDDATE, 112), TRY_CONVERT(date, ENDDATE, 23), TRY_CONVERT(date, ENDDATE)),
-      COALESCE(TRY_CONVERT(date, WORKDATE, 112), TRY_CONVERT(date, WORKDATE, 23), TRY_CONVERT(date, WORKDATE))
-    ) AS EDATE
-  FROM dbo.ATDLEAVEDATA
-),
-counts AS (
-  SELECT s.d AS [date],
-         (SELECT COUNT(*) FROM leave_src l WHERE l.SDATE <= s.d AND l.EDATE >= s.d) AS [count]
-  FROM s
-)
-SELECT 1 AS success,
-       (SELECT CONVERT(date, [date]) AS [date], [count]
-        FROM counts ORDER BY [date]
-        FOR JSON PATH) AS trend
-OPTION (MAXRECURSION 200);
-"""

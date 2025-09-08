@@ -1,10 +1,146 @@
 {
+  "app": {
+    "title": "HCM AI Assistant - Dashboard"
+  },
+
   "header": {
     "welcome_title": "Welcome back!",
     "welcome_sub": "Here's your team dashboard - live data updates every 30 seconds",
+
+
+    "last_updated_prefix": "Last updated:",
+
     "last_updated": "Last updated: {time}",
+
     "refresh_data": "Refresh Data"
   },
+
+
+  "buttons": {
+    "refresh": "Refresh Data",
+    "generate_report": "Generate Report",
+    "ask_ai": "Ask AI",
+    "close": "Close",
+    "mic_start": "Start recording",
+    "mic_stop": "Stop recording",
+    "send": "Send",
+    "start_generation": "Start Generation",
+    "download_docx": "Download Report (.docx)",
+    "submit": "Submit"
+  },
+
+
+  "units": {
+    "people": "people",
+    "requests": "requests",
+    "employees": "employees",
+    "hours": "hours"
+  },
+
+
+  "cards": {
+    "leave_today": {
+      "title": "On Leave Today",
+      "loading": "Loading...",
+      "none": "No one on leave"
+    },
+    "pending_approvals": {
+      "title": "Pending Approvals",
+      "cta": "Review now →"
+    },
+    "low_balance": {
+      "title": "Low Balance Alerts",
+      "subtitle": "< 5 days remaining"
+    },
+    "overtime": {
+      "title": "Overtime This Week"
+    }
+  },
+
+
+  "sections": {
+    "whos_out": "Who's Out Today",
+    "leave_trends": "Leave Trends (Last 7 Days)",
+    "upcoming_leave": "Upcoming Leave (Next 7 Days)",
+    "leave_by_dept": "Leave by Department"
+  },
+
+
+  "generic": {
+    "loading": "Loading...",
+    "no_upcoming": "No upcoming leave scheduled",
+    "no_department_data": "No department data available"
+  },
+
+
+  "labels": {
+    "you": "You",
+    "leave": "Leave",
+    "until": "Until",
+    "on_leave": "on leave"
+  },
+
+  "health": {
+    "healthy": "Healthy",
+    "degraded": "Degraded",
+    "offline": "Offline",
+    "ready": "System Ready",
+    "not_ready": "System Not Ready"
+  },
+
+  "errors": {
+    "leave_metrics_failed": "Leave metrics failed",
+    "download_failed": "Download failed. Please try again.",
+    "report_generation_failed": "Sorry, there was an error generating your report. Please try again.",
+    "network": "Network error contacting assistant.",
+    "generic": "Sorry, something went wrong.",
+    "speech_unsupported": "Speech recognition not supported in this browser."
+  },
+
+  "assistant": {
+    "title": "Assistant",
+    "health_checking": "Checking",
+    "placeholder_title": "Try asking about leave data",
+    "examples_title": "Examples:",
+    "example_1": "Who's on leave today?",
+    "example_2": "Show pending leave requests",
+    "example_3": "Vacation balance for employee ID",
+    "input_placeholder": "Ask about leave, attendance, or overtime...",
+    "thinking": "Thinking...",
+    "listening": "Listening..."
+  },
+
+  "report": {
+    "modal_title": "AI Report Generator",
+    "modal_sub": "Describe what report you need and I'll generate it for you",
+
+    "welcome": "Hi! I'm your AI Report Generator. What kind of report would you like me to create? For example:",
+    "example_1": "Monthly leave analysis for HR team",
+    "example_2": "Department overtime summary",
+    "example_3": "Employee vacation balance report",
+    "example_4": "Attendance trends analysis",
+
+    "input_placeholder": "Describe the report you need...",
+    "agent_ready": "AI Agent Ready",
+
+    "generating_title": "Generating Your Report",
+    "step_analyzing": "Analyzing your request",
+    "step_gathering": "Gathering additional information",
+    "step_generating": "Generating report content",
+    "step_formatting": "Formatting document",
+
+    "progress": "Progress",
+
+    "status_analyzing": "Analyzing your request...",
+    "status_gathering": "Gathering additional information...",
+    "status_generating": "Generating report content...",
+    "status_formatting": "Formatting document...",
+
+    "generated_ok": "Report Generated Successfully!",
+    "generated_ready": "Your report has been generated and is ready for download."
+  },
+
+
   "metrics": {
     "on_leave_today": "On Leave Today",
     "people": "people",
@@ -19,7 +155,7 @@
     "loading": "Loading...",
     "no_one_on_leave": "No one on leave"
   },
-  "sections": {
+  "sections_legacy": {
     "whos_out_today": "Who's Out Today",
     "leave_trends": "Leave Trends (Last 7 Days)",
     "upcoming_leave": "Upcoming Leave (Next 7 Days)",
@@ -73,7 +209,7 @@
     "demo_data_notice": "Demo data - API not connected or no data for date",
     "placeholder_data": "Using placeholder data"
   },
-  "errors": {
+  "errors_legacy": {
     "leave_metrics_failed": "Leave metrics failed (HTTP {status})",
     "network_error": "Network error contacting assistant.",
     "something_wrong": "Sorry, something went wrong.",
@@ -85,5 +221,30 @@
     "unknown": "Unknown",
     "loading": "Loading...",
     "count_people": "{count} people"
+  },
+  "report_legacy": {
+    "generate_report": "Generate Report",
+    "ai_greeting": "Hi! I'm your AI Report Generator. What kind of report would you like me to create? For example:",
+    "example_1": "Monthly leave analysis for HR team",
+    "example_2": "Department overtime summary",
+    "example_3": "Employee vacation balance report",
+    "example_4": "Attendance trends analysis",
+    "describe_report": "Describe the report you need...",
+    "start_generation": "Start Generation",
+    "ai_agent_ready": "AI Agent Ready",
+    "generating_report": "Generating Your Report",
+    "analyzing_request": "Analyzing your request",
+    "gathering_info": "Gathering additional information",
+    "generating_content": "Generating report content",
+    "formatting_document": "Formatting document",
+    "progress": "Progress",
+    "analyzing_request_status": "Analyzing your request...",
+    "report_generated": "Report Generated Successfully!",
+    "report_ready": "Your report has been generated and is ready for download.",
+    "download_report": "Download Report (.docx)",
+    "generation_failed": "Sorry, there was an error generating your report. Please try again.",
+    "report_title": "AI Report Generator",
+    "report_subtitle": "Describe what report you need and I'll generate it for you",
+    "close": "Close"
   }
 }

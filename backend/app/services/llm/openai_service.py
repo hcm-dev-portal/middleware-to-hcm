@@ -57,14 +57,14 @@ class OpenAIService:
                 self.llm = ChatOpenAI(
                     model=self.model_name, 
                     temperature=self.temperature, 
-                    api_key=OPENAI_API_KEY
-                )
+                    api_key=OPENAI_API_KEY # type: ignore
+                ) # type: ignore
             except TypeError:
-                self.llm = ChatOpenAI(
-                    model_name=self.model_name, 
+                self.llm = ChatOpenAI( # type: ignore
+                    model_name=self.model_name,  # type: ignore
                     temperature=self.temperature, 
-                    openai_api_key=OPENAI_API_KEY
-                )
+                    openai_api_key=OPENAI_API_KEY # type: ignore
+                ) 
             
             self.memory = ConversationBufferMemory(return_messages=True) if ConversationBufferMemory else None
             logger.info("LLM initialized model=%s", self.model_name)
@@ -83,7 +83,7 @@ class OpenAIService:
         
         # SQL generation prompt
         self.sql_prompt = ChatPromptTemplate.from_messages([
-            SystemMessagePromptTemplate.from_template(
+            SystemMessagePromptTemplate.from_template( # type: ignore
                 "You are an expert SQL analyst for HR leave & attendance data. "
                 "Generate ONE safe SELECT query based on the user's question. "
 
@@ -107,21 +107,21 @@ class OpenAIService:
                 "Available schemas:\n{schema}\n\n"
                 "Join hints:\n{join_hints}"
             ),
-            HumanMessagePromptTemplate.from_template(
+            HumanMessagePromptTemplate.from_template( # type: ignore
                 "Generate a SQL SELECT query for: {query}"
             ),
         ])
         
         # Result explanation prompt
         self.explanation_prompt = ChatPromptTemplate.from_messages([
-            SystemMessagePromptTemplate.from_template(
+            SystemMessagePromptTemplate.from_template( # type: ignore
                 "You are a data analyst for HR leave & attendance. "
                 "Write a short, business-friendly summary of the results. "
                 "Prefer 3–6 bullet points or 2–4 sentences. "
                 "Include the total people/rows, any breakdowns (e.g., by leave type), notable patterns, "
                 "and anything actionable. Do not include SQL or code; be concise."
             ),
-            HumanMessagePromptTemplate.from_template(
+            HumanMessagePromptTemplate.from_template( # type: ignore
                 "Question: {question}\n"
                 "Row count: {row_count}\n"
                 "Columns: {columns}\n"
@@ -191,7 +191,7 @@ class OpenAIService:
             
             if self.memory:
                 last_user = next(
-                    (m for m in reversed(messages) if isinstance(m, HumanMessage)), 
+                    (m for m in reversed(messages) if isinstance(m, HumanMessage)),  # type: ignore
                     None
                 )
                 if last_user:

@@ -1,89 +1,221 @@
 {
+  "app": {
+    "title": "人資系統 AI 助理 - 儀表板"
+  },
   "header": {
     "welcome_title": "歡迎回來！",
-    "welcome_sub": "這是您的團隊儀表板 - 每30秒更新一次即時數據",
+    "welcome_sub": "這是您的團隊儀表板 - 每 30 秒即時更新資料",
+    "last_updated_prefix": "最後更新：",
     "last_updated": "最後更新：{time}",
-    "refresh_data": "重新整理數據"
+    "refresh_data": "重新整理資料"
+  },
+  "buttons": {
+    "refresh": "重新整理",
+    "generate_report": "產生報告",
+    "ask_ai": "詢問 AI",
+    "close": "關閉",
+    "mic_start": "開始錄音",
+    "mic_stop": "停止錄音",
+    "send": "傳送",
+    "start_generation": "開始產生",
+    "download_docx": "下載報告 (.docx)",
+    "submit": "提交"
+  },
+  "units": {
+    "people": "人",
+    "requests": "筆申請",
+    "employees": "名員工",
+    "hours": "小時"
+  },
+  "cards": {
+    "leave_today": {
+      "title": "今日休假",
+      "loading": "載入中...",
+      "none": "今日無人休假"
+    },
+    "pending_approvals": {
+      "title": "待簽核",
+      "cta": "立即檢視 →"
+    },
+    "low_balance": {
+      "title": "低餘額警示",
+      "subtitle": "剩餘天數 < 5 天"
+    },
+    "overtime": {
+      "title": "本週加班"
+    }
+  },
+  "sections": {
+    "whos_out": "今日休假人員",
+    "leave_trends": "休假趨勢 (最近 7 天)",
+    "upcoming_leave": "即將到來的休假 (未來 7 天)",
+    "leave_by_dept": "各部門休假狀況"
+  },
+  "generic": {
+    "loading": "載入中...",
+    "no_upcoming": "無即將到來的休假安排",
+    "no_department_data": "無部門資料"
+  },
+  "labels": {
+    "you": "您",
+    "leave": "休假",
+    "until": "直到",
+    "on_leave": "休假中"
+  },
+  "health": {
+    "healthy": "運作正常",
+    "degraded": "效能下降",
+    "offline": "離線",
+    "ready": "系統準備就緒",
+    "not_ready": "系統尚未就緒"
+  },
+  "errors": {
+    "leave_metrics_failed": "休假指標載入失敗",
+    "download_failed": "下載失敗，請重試。",
+    "report_generation_failed": "抱歉，產生報告時發生錯誤，請重試。",
+    "network": "聯繫助理時發生網路錯誤。",
+    "generic": "抱歉，發生了錯誤。",
+    "speech_unsupported": "此瀏覽器不支援語音辨識。"
+  },
+  "assistant": {
+    "title": "助理",
+    "health_checking": "檢查中",
+    "placeholder_title": "試著詢問關於休假的資料",
+    "examples_title": "範例：",
+    "example_1": "今天誰休假？",
+    "example_2": "顯示待簽核的休假申請",
+    "example_3": "查詢員工 ID 的特休餘額",
+    "input_placeholder": "詢問關於休假、出勤或加班...",
+    "thinking": "思考中...",
+    "listening": "聆聽中..."
+  },
+  "report": {
+    "modal_title": "AI 報告產生器",
+    "modal_sub": "請描述您需要的報告，我將為您產生",
+    "welcome": "您好！我是您的 AI 報告產生器。您想建立哪種類型的報告？例如：",
+    "example_1": "人資團隊的每月休假分析",
+    "example_2": "部門加班總結",
+    "example_3": "員工特休餘額報告",
+    "example_4": "出勤趨勢分析",
+    "input_placeholder": "描述您需要的報告...",
+    "agent_ready": "AI 代理程式準備就緒",
+    "generating_title": "正在產生您的報告",
+    "step_analyzing": "分析您的請求",
+    "step_gathering": "收集額外資訊",
+    "step_generating": "產生報告內容",
+    "step_formatting": "格式化文件",
+    "progress": "進度",
+    "status_analyzing": "正在分析您的請求...",
+    "status_gathering": "正在收集額外資訊...",
+    "status_generating": "正在產生報告內容...",
+    "status_formatting": "正在格式化文件...",
+    "generated_ok": "報告已成功產生！",
+    "generated_ready": "您的報告已產生完畢，可供下載。"
   },
   "metrics": {
-    "on_leave_today": "今日請假",
+    "on_leave_today": "今日休假",
     "people": "人",
-    "pending_approvals": "待核准",
-    "requests": "申請",
-    "review_now": "立即審核 →",
-    "low_balance_alerts": "餘額不足警示",
-    "employees": "員工",
-    "days_remaining": "< 5 天剩餘",
+    "pending_approvals": "待簽核",
+    "requests": "筆申請",
+    "review_now": "立即檢視 →",
+    "low_balance_alerts": "低餘額警示",
+    "employees": "名員工",
+    "days_remaining": "剩餘天數 < 5 天",
     "overtime_this_week": "本週加班",
     "hours": "小時",
     "loading": "載入中...",
-    "no_one_on_leave": "無人請假"
+    "no_one_on_leave": "今日無人休假"
   },
-  "sections": {
-    "whos_out_today": "今日請假人員",
-    "leave_trends": "請假趨勢（過去7天）",
-    "upcoming_leave": "即將請假（未來7天）",
-    "leave_by_department": "各部門請假狀況",
-    "no_employees_on_leave": "今日無員工請假",
-    "no_upcoming_leave": "無即將到來的請假",
+  "sections_legacy": {
+    "whos_out_today": "今日休假人員",
+    "leave_trends": "休假趨勢 (最近 7 天)",
+    "upcoming_leave": "即將到來的休假 (未來 7 天)",
+    "leave_by_department": "各部門休假狀況",
+    "no_employees_on_leave": "今天沒有員工休假",
+    "no_upcoming_leave": "無即將到來的休假安排",
     "no_department_data": "無部門資料"
   },
   "leave_types": {
-    "leave": "請假",
-    "vacation": "年假",
+    "leave": "休假",
+    "vacation": "特休",
     "sick": "病假",
     "personal": "事假",
     "until": "直到 {date}",
-    "on_leave": "請假中"
+    "on_leave": "休假中"
   },
   "ai_assistant": {
     "ask_ai": "詢問 AI",
     "assistant": "助理",
     "checking": "檢查中",
-    "healthy": "正常",
-    "degraded": "降級",
+    "healthy": "運作正常",
+    "degraded": "效能下降",
     "offline": "離線",
     "refresh": "重新整理",
     "close": "關閉",
-    "placeholder_title": "試著詢問請假資料",
+    "placeholder_title": "試著詢問關於休假的資料",
     "placeholder_sub": "範例：",
-    "example_1": "今天誰請假？",
-    "example_2": "顯示待核准的請假申請",
-    "example_3": "查詢員工編號的年假餘額",
-    "query_placeholder": "詢問請假、出勤或加班相關問題...",
+    "example_1": "今天誰休假？",
+    "example_2": "顯示待簽核的休假申請",
+    "example_3": "查詢員工 ID 的特休餘額",
+    "query_placeholder": "詢問關於休假、出勤或加班...",
     "start_recording": "開始錄音",
     "stop_recording": "停止錄音",
-    "send": "發送",
+    "send": "傳送",
     "you": "您",
     "thinking": "思考中...",
     "listening": "聆聽中...",
-    "speech_not_supported": "此瀏覽器不支援語音識別功能。"
+    "speech_not_supported": "此瀏覽器不支援語音辨識。"
   },
   "system_status": {
-    "system_ready": "系統就緒",
-    "system_not_ready": "系統未就緒",
+    "system_ready": "系統準備就緒",
+    "system_not_ready": "系統尚未就緒",
     "database": "資料庫：{status}",
     "index": "索引：{status}",
-    "vector": "向量：{status}",
+    "vector": "向量資料庫：{status}",
     "ok": "正常",
-    "down": "停機",
-    "missing": "缺失",
+    "down": "中斷",
+    "missing": "遺失",
     "off": "關閉",
-    "health_check_failed": "健康檢查失敗。無法連接 API。",
-    "demo_data_notice": "示範資料 - API 未連線或該日期無資料",
-    "placeholder_data": "使用占位資料"
+    "health_check_failed": "健康檢查失敗。無法連線至 API。",
+    "demo_data_notice": "演示資料 - API 未連接或該日期無資料",
+    "placeholder_data": "正在使用預置資料"
   },
-  "errors": {
-    "leave_metrics_failed": "請假指標失敗（HTTP {status}）",
-    "network_error": "連接助理時發生網路錯誤。",
-    "something_wrong": "抱歉，出現了問題。",
+  "errors_legacy": {
+    "leave_metrics_failed": "休假指標載入失敗 (HTTP {status})",
+    "network_error": "聯繫助理時發生網路錯誤。",
+    "something_wrong": "抱歉，發生了錯誤。",
     "done": "完成。"
   },
   "common": {
-    "more": "還有{count}位",
-    "na": "無",
+    "more": "還有 {count} 項",
+    "na": "不適用",
     "unknown": "未知",
     "loading": "載入中...",
     "count_people": "{count} 人"
+  },
+  "report_legacy": {
+    "generate_report": "產生報告",
+    "ai_greeting": "您好！我是您的 AI 報告產生器。您想建立哪種類型的報告？例如：",
+    "example_1": "人資團隊的每月休假分析",
+    "example_2": "部門加班總結",
+    "example_3": "員工特休餘額報告",
+    "example_4": "出勤趨勢分析",
+    "describe_report": "描述您需要的報告...",
+    "start_generation": "開始產生",
+    "ai_agent_ready": "AI 代理程式準備就緒",
+    "generating_report": "正在產生您的報告",
+    "analyzing_request": "分析您的請求",
+    "gathering_info": "收集額外資訊",
+    "generating_content": "產生報告內容",
+    "formatting_document": "格式化文件",
+    "progress": "進度",
+    "analyzing_request_status": "正在分析您的請求...",
+    "report_generated": "報告已成功產生！",
+    "report_ready": "您的報告已產生完畢，可供下載。",
+    "download_report": "下載報告 (.docx)",
+    "generation_failed": "抱歉，產生報告時發生錯誤，請重試。",
+    "report_title": "AI 報告產生器",
+    "report_subtitle": "請描述您需要的報告，我將為您產生",
+    "close": "關閉"
   }
 }

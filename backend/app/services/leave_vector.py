@@ -840,8 +840,8 @@ class LeaveVectorDB:
         ql = query.lower()
         if vi.item_type == VectorItemType.TABLE:
             t: TableSchema = vi.payload["table"]
-            for k in t.kpi_relevance:
-                if k.lower() in ql:
+            for k in t.kpi_relevance:  # type: ignore
+                if k.lower() in ql:  # type: ignore
                     score *= 1.15
 
         if vi.item_type == VectorItemType.KPI:
@@ -1089,12 +1089,12 @@ def build_leave_index() -> LeaveVectorDB:
     Builds the enriched index with your actual tables.
     """
 
-    def T(full: str, cols: List[str], desc: str = "", tags: List[str] = None,
-          pks: List[str] = None, indexed: List[str] = None, rows: int = None,
-          is_hist: bool = False, is_del: bool = False, temporal: List[str] = None,
-          business_context: str = "", common_queries: List[str] = None, key_cols: Dict[str, str] = None,
-          relationships: List[str] = None, kpis: List[str] = None, priority: int = 1,
-          description_zh: str = "", business_context_zh: str = "", common_queries_zh: List[str] = None,
+    def T(full: str, cols: List[str], desc: str = "", tags: List[str] = None,  # type: ignore
+          pks: List[str] = None, indexed: List[str] = None, rows: int = None,  # type: ignore
+          is_hist: bool = False, is_del: bool = False, temporal: List[str] = None,  # type: ignore
+          business_context: str = "", common_queries: List[str] = None, key_cols: Dict[str, str] = None,  # type: ignore
+          relationships: List[str] = None, kpis: List[str] = None, priority: int = 1,  # type: ignore
+          description_zh: str = "", business_context_zh: str = "", common_queries_zh: List[str] = None,  # type: ignore
           row_count_estimate: Optional[str] = None) -> TableSchema:
 
         rce = row_count_estimate or (("large" if (rows or 0) > 200000 else "medium") if rows else "")
