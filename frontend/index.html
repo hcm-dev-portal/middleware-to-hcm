@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- ✅ Your i18n runtime -->
+  <!-- i18n runtime (must be present) -->
   <script src="./translations.js"></script>
 
   <style>
@@ -36,12 +36,9 @@
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
     .animate-spin { animation: spin 1s linear infinite; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    .report-modal { backdrop-filter: blur(8px); }
     .conversation-bubble { max-width: 85%; word-wrap: break-word; }
     .typing-indicator { animation: typing 1.5s infinite; }
     @keyframes typing { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.5; } }
-    .report-progress { background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 50%, #3b82f6 100%); background-size: 200% 100%; animation: progress-shine 2s infinite; }
-    @keyframes progress-shine { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
   </style>
 </head>
 <body class="overflow-hidden">
@@ -75,8 +72,14 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3m2 5.3a10 10 0 01-18.8 4.2"/></svg>
             </button>
 
+            <!-- Request Leave -->
+            <button id="request-leave-btn" class="flex items-center space-x-2 bg-green-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-green-700 transition duration-300" onclick="window.location.href='leave_page.html'">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+              <span data-i18n="buttons.request_leave">Request Leave</span>
+            </button>
+
             <!-- Generate Report -->
-            <button id="generate-report-btn" class="flex items-center space-x-2 bg-purple-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-purple-700 transition duration-300">
+            <button id="generate-report-btn" class="flex items-center space-x-2 bg-purple-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-purple-700 transition duration-300" onclick="window.location.href='generate_report.html'">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
               <span data-i18n="buttons.generate_report">Generate Report</span>
             </button>
@@ -87,7 +90,7 @@
               <span id="ask-ai-label" data-i18n="buttons.ask_ai">Ask AI</span>
             </button>
 
-            <!-- ✅ Global Language Selector -->
+            <!-- Global Language Selector -->
             <select id="global-lang" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none" aria-label="Language">
               <option value="en-US">English (US)</option>
               <option value="zh-TW">中文（繁體）</option>
@@ -97,7 +100,7 @@
           </div>
         </header>
 
-        <!-- Database Status -->
+        <!-- Database / Status banners appear here -->
         <div id="db-status" class="mt-6 mb-4"></div>
 
         <!-- Dashboard Widgets -->
@@ -183,10 +186,11 @@
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
           <!-- Who's out -->
           <div class="bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-4 flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-gray-700 mb-1 flex items-center justify-between">
               <span data-i18n="sections.whos_out">Who's Out Today</span>
-              <span class="text-xs font-normal text-gray-500" id="leave-list-date">Loading...</span>
+              <span class="text-xs font-normal text-gray-500" id="leave-list-date">--</span>
             </h3>
+            <p class="text-xs text-gray-400 mb-4" data-i18n="sections.whos_out_hint">Showing names, IDs, and departments</p>
             <div id="leave-list" class="space-y-3">
               <div class="loading-shimmer h-12 rounded"></div>
               <div class="loading-shimmer h-12 rounded"></div>
@@ -195,7 +199,10 @@
 
           <!-- Leave Trends -->
           <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.leave_trends">Leave Trends (Last 7 Days)</h3>
+            <h3 class="text-lg font-semibold text-gray-700 mb-1 flex items-center justify-between">
+              <span data-i18n="sections.leave_trends">Leave Trends (Last 7 Days)</span>
+              <span id="trend-range" class="text-xs font-normal text-gray-500">--</span>
+            </h3>
             <div class="h-64">
               <canvas id="leaveTrendChart"></canvas>
             </div>
@@ -235,7 +242,6 @@
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <!-- ❌ Language select moved out; only a close button remains -->
           <button id="close-panel-btn" class="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:bg-slate-100" aria-label="Close" data-i18n="buttons.close" data-i18n-type="title">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -245,7 +251,7 @@
       <div class="flex-1 flex flex-col p-4 gap-4 overflow-hidden">
         <div id="results" class="flex-1 bg-white border border-slate-200 rounded-lg p-3 overflow-y-auto custom-scrollbar">
           <div id="placeholder" class="text-slate-500 text-sm h-full flex flex-col justify-center items-center text-center">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-slate-400 mb-4"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1 1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-slate-400 mb-4"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
             <p id="ph-title" class="font-semibold" data-i18n="assistant.placeholder_title">Try asking about leave data</p>
             <p id="ph-sub" class="mt-1" data-i18n="assistant.examples_title">Examples:</p>
             <div class="mt-2 space-y-2">
@@ -279,171 +285,13 @@
     </aside>
   </div>
 
-  <!-- Report Generation Modal -->
-  <div id="report-modal" class="fixed inset-0 bg-black bg-opacity-50 report-modal hidden z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-      <div class="p-6 border-b border-gray-200">
-        <div class="flex justify-between items-center">
-          <div class="flex items-center space-x-3">
-            <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-purple-600">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14,2 14,8 20,8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-                <polyline points="10,9 9,9 8,9"/>
-              </svg>
-            </div>
-            <div>
-              <h2 class="text-2xl font-bold text-gray-900" data-i18n="report.modal_title">AI Report Generator</h2>
-              <p class="text-gray-500" data-i18n="report.modal_sub">Describe what report you need and I'll generate it for you</p>
-            </div>
-          </div>
-          <button id="close-report-modal" class="p-2 hover:bg-gray-100 rounded-lg transition-colors" data-i18n="buttons.close" data-i18n-type="title">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div class="p-6">
-        <!-- Conversation Area -->
-        <div id="report-conversation" class="mb-6 space-y-4 max-h-96 overflow-y-auto custom-scrollbar">
-          <!-- Initial AI message -->
-          <div class="flex items-start space-x-3">
-            <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-purple-600">
-                <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1 1.275-1.275L12 3Z"/>
-              </svg>
-            </div>
-            <div class="conversation-bubble bg-purple-50 border border-purple-200 rounded-xl p-4">
-              <p class="text-sm text-gray-800" data-i18n="report.welcome">Hi! I'm your AI Report Generator. What kind of report would you like me to create? For example:</p>
-              <ul class="mt-2 text-sm text-gray-600 space-y-1">
-                <li data-i18n="report.example_1">• Monthly leave analysis for HR team</li>
-                <li data-i18n="report.example_2">• Engineering Department weekly overtime summary</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        <!-- Input Area -->
-        <div id="report-input-area" class="space-y-4">
-          <div class="flex items-start space-x-3">
-            <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <span class="text-blue-600 text-xs font-bold" data-i18n="labels.you">You</span>
-            </div>
-            <div class="flex-1">
-              <textarea 
-                id="report-query" 
-                rows="3" 
-                class="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
-                data-i18n="report.input_placeholder" data-i18n-type="placeholder"
-                placeholder="Describe the report you need..."
-              ></textarea>
-            </div>
-          </div>
-
-          <div class="flex justify-between items-center">
-            <div class="flex items-center space-x-2 text-sm text-gray-500">
-              <div class="w-2 h-2 bg-green-500 rounded-full"></div>
-              <span data-i18n="report.agent_ready">AI Agent Ready</span>
-            </div>
-            <button 
-              id="start-report-generation" 
-              class="bg-purple-600 text-white px-6 py-3 rounded-xl hover:bg-purple-700 transition-colors font-semibold flex items-center space-x-2"
-            >
-              <span data-i18n="buttons.start_generation">Start Generation</span>
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="m9 18 6-6-6-6"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <!-- Generation Progress -->
-        <div id="generation-progress" class="hidden space-y-4">
-          <div class="bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-xl p-6">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4" data-i18n="report.generating_title">Generating Your Report</h3>
-            <div class="space-y-3">
-              <div id="step-analysis" class="flex items-center space-x-3">
-                <div class="w-6 h-6 rounded-full bg-purple-600 flex items-center justify-center">
-                  <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
-                  </svg>
-                </div>
-                <span class="text-sm text-gray-700" data-i18n="report.step_analyzing">Analyzing your request</span>
-              </div>
-              <div id="step-questions" class="flex items-center space-x-3">
-                <div class="w-6 h-6 rounded-full border-2 border-gray-300 flex items-center justify-center">
-                  <div class="w-2 h-2 bg-gray-300 rounded-full"></div>
-                </div>
-                <span class="text-sm text-gray-400" data-i18n="report.step_gathering">Gathering additional information</span>
-              </div>
-              <div id="step-generation" class="flex items-center space-x-3">
-                <div class="w-6 h-6 rounded-full border-2 border-gray-300 flex items-center justify-center">
-                  <div class="w-2 h-2 bg-gray-300 rounded-full"></div>
-                </div>
-                <span class="text-sm text-gray-400" data-i18n="report.step_generating">Generating report content</span>
-              </div>
-              <div id="step-formatting" class="flex items-center space-x-3">
-                <div class="w-6 h-6 rounded-full border-2 border-gray-300 flex items-center justify-center">
-                  <div class="w-2 h-2 bg-gray-300 rounded-full"></div>
-                </div>
-                <span class="text-sm text-gray-400" data-i18n="report.step_formatting">Formatting document</span>
-              </div>
-            </div>
-
-            <div class="mt-6">
-              <div class="flex justify-between text-sm text-gray-600 mb-2">
-                <span data-i18n="report.progress">Progress</span>
-                <span id="progress-percentage">25%</span>
-              </div>
-              <div class="w-full bg-gray-200 rounded-full h-2">
-                <div id="progress-bar" class="report-progress h-2 rounded-full" style="width: 25%"></div>
-              </div>
-            </div>
-
-            <div class="mt-4 p-3 bg-white rounded-lg border border-gray-200">
-              <div class="flex items-center space-x-2">
-                <div class="animate-spin w-4 h-4 border-2 border-purple-600 border-t-transparent rounded-full"></div>
-                <span id="current-status" class="text-sm text-gray-700" data-i18n="report.status_analyzing">Analyzing your request...</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Download -->
-          <div id="download-area" class="hidden text-center">
-            <div class="bg-green-50 border border-green-200 rounded-xl p-6">
-              <div class="flex items-center justify-center space-x-2 mb-3">
-                <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                </svg>
-                <h3 class="text-xl font-semibold text-green-800" data-i18n="report.generated_ok">Report Generated Successfully!</h3>
-              </div>
-              <p class="text-green-700 mb-4" data-i18n="report.generated_ready">Your report has been generated and is ready for download.</p>
-              <button id="download-report" class="bg-green-600 text-white px-8 py-3 rounded-xl hover:bg-green-700 transition-colors font-semibold flex items-center space-x-2 mx-auto">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="7,10 12,15 17,10"/>
-                  <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                <span data-i18n="buttons.download_docx">Download Report (.docx)</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 <script>
 document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------
   // i18n boot
   // ---------------------------
   const i18n = new window.TranslationManager();
-  await i18n.init('en-US'); // Loads lang packs & restores last selection from localStorage (inside your TranslationManager)
+  await i18n.init('en-US'); // loads packs & restores last selection (inside TranslationManager)
 
   // ---------------------------
   // API config
@@ -461,7 +309,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let refreshInterval;
 
   // ---------------------------
-  // Error Manager (non-blocking banners)
+  // Error Manager (banners)
   // ---------------------------
   const ErrorManager = {
     activeErrors: new Map(),
@@ -515,22 +363,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const openAiBtn   = document.getElementById('ai-dock-btn');
   const closeAiBtn  = document.getElementById('close-panel-btn');
 
-  const refreshBtn      = document.getElementById('refresh-btn');
-  const lastUpdateEl    = document.getElementById('last-update'); // single span in header
-  const refreshHealthBtn= document.getElementById('refresh-health');
-  const globalLangSel   = document.getElementById('global-lang'); // language selector in main header (if present)
-
-  // Report modal
-  const generateReportBtn    = document.getElementById('generate-report-btn');
-  const reportModal          = document.getElementById('report-modal');
-  const closeReportModal     = document.getElementById('close-report-modal');
-  const reportConversation   = document.getElementById('report-conversation');
-  const reportQuery          = document.getElementById('report-query');
-  const startReportGeneration= document.getElementById('start-report-generation');
-  const reportInputArea      = document.getElementById('report-input-area');
-  const generationProgress   = document.getElementById('generation-progress');
-  const downloadArea         = document.getElementById('download-area');
-  const downloadReport       = document.getElementById('download-report');
+  const refreshBtn       = document.getElementById('refresh-btn');
+  const lastUpdateLabel  = document.getElementById('last-update'); // "Last updated:"
+  const lastUpdateTimeEl = document.getElementById('last-update-time');
+  const refreshHealthBtn = document.getElementById('refresh-health');
+  const globalLangSel    = document.getElementById('global-lang');
 
   // Assistant panel
   const healthBadge   = document.getElementById('health-badge');
@@ -553,10 +390,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]
     ));
   }
-  function banner(msg, kind='error') {
-    if (kind === 'error') ErrorManager.showError(msg, 'api');
-    else ErrorManager.showWarning(msg, 'info');
-  }
   function formatDate(dateStr) {
     if (!dateStr) return i18n.t('common.na') || 'N/A';
     try {
@@ -570,21 +403,60 @@ document.addEventListener('DOMContentLoaded', async () => {
       return dateStr;
     }
   }
+  function formatYMD(d) {
+    if (!d) return '--';
+    try { return i18n.formatDate(new Date(d), { year:'numeric', month:'short', day:'numeric' }); }
+    catch { return d; }
+  }
   function updateLastUpdateTime() {
     const now = new Date();
     const time = i18n.formatTime(now, { hour: '2-digit', minute: '2-digit' });
-    // Prefer template "Last updated: {time}" if available
-    const tpl = i18n.t('header.last_updated');
-    lastUpdateEl.textContent = tpl ? tpl.replace('{time}', time) : `Last updated: ${time}`;
+    const tpl = i18n.t('header.last_updated'); // preferred "Last updated: {time}"
+    lastUpdateLabel.textContent = tpl ? tpl.replace('{time}', '') : (i18n.t('header.last_updated_prefix') || 'Last updated:');
+    lastUpdateTimeEl.textContent = time;
   }
-
-  // ---------------------------
-  // Panel open/close
-  // ---------------------------
-  const openPanel  = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
-  const closePanel = () => { mainContent.style.width = '100%'; aiPanel.style.transform = 'translateX(100%)'; };
-  openAiBtn?.addEventListener('click', openPanel);
-  closeAiBtn?.addEventListener('click', closePanel);
+  function decodeJsonField(val, fallback = []) {
+    if (val == null) return fallback;
+    if (Array.isArray(val) || typeof val === 'object') return val;
+    try { return JSON.parse(val); } catch { return fallback; }
+  }
+  function processLeaveData(raw) {
+    const out = { ...raw };
+    out.metrics = decodeJsonField(out.metrics, {});
+    if (out.metrics) {
+      out.metrics.on_leave_details    = decodeJsonField(out.metrics.on_leave_details, []);
+      out.metrics.upcoming_leave      = decodeJsonField(out.metrics.upcoming_leave, []);
+      out.metrics.department_summary  = decodeJsonField(out.metrics.department_summary, []);
+    }
+    return out;
+  }
+  function getDisplayName(p) {
+    return p?.person_name || p?.name || p?.employee_id || p?.cardnum || p?.person_id || 'Unknown';
+  }
+  function initialsFrom(name) {
+    const n = (name || '').trim();
+    if (!n) return '??';
+    try {
+      if (window.Intl && typeof Intl.Segmenter === 'function') {
+        const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+        const it = seg.segment(n)[Symbol.iterator]();
+        const first = it.next().value?.segment || n[0];
+        return first.toUpperCase();
+      }
+    } catch {}
+    return n[0].toUpperCase();
+  }
+  function leaveTypeText(item) {
+    return item?.type_label || item?.type_code || (i18n?.t?.('leave_types.unknown') || 'Leave');
+  }
+  function personIdBadge(item) {
+    if (item?.employee_id) return `ID: ${escapeHtml(String(item.employee_id))}`;
+    if (item?.cardnum)     return `Card: ${escapeHtml(String(item.cardnum))}`;
+    return '';
+  }
+  function safeDept(item) {
+    return item?.department_name || item?.department || item?.department_id || '';
+  }
 
   // ---------------------------
   // Charts
@@ -618,13 +490,182 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   }
-  function updateLeaveTrend(trend) {
-    if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) return;
-    const labels = trend.map(t => i18n.formatDate(new Date(t.date), { weekday: 'short' }));
+  function updateLeaveTrend(trend, range) {
+    const rangeEl = document.getElementById('trend-range');
+    if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) {
+      if (rangeEl) rangeEl.textContent = '--';
+      return;
+    }
+    const labels = trend.map(t => i18n.formatDate(new Date(t.date), { month: 'short', day: 'numeric' }));
     const values = trend.map(t => Number(t.count || 0));
     leaveTrendChart.data.labels = labels;
     leaveTrendChart.data.datasets[0].data = values;
     leaveTrendChart.update();
+
+    if (rangeEl && range && range.start && range.end) {
+      rangeEl.textContent = `${formatYMD(range.start)} – ${formatYMD(range.end)}`;
+    } else if (rangeEl) {
+      rangeEl.textContent = `${formatYMD(trend[0].date)} – ${formatYMD(trend[trend.length - 1].date)}`;
+    }
+  }
+
+  // ---------------------------
+  // Data loaders
+  // ---------------------------
+  async function loadLeaveMetrics() {
+    try {
+      const url = new URL(`${API_BASE}/api/leave_data`);
+      url.searchParams.set('kind', 'metrics');
+      if (AS_OF) url.searchParams.set('as_of', AS_OF);
+      const response = await fetch(url.toString(), { credentials: 'include' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const raw = await response.json();
+      if (!raw || raw.success !== true) throw new Error('Invalid response');
+
+      // normalize
+      const data = processLeaveData(raw);
+      const m = data.metrics || {};
+
+      ErrorManager.clearError('api');
+
+      // Top metrics
+      document.getElementById('leave-today-count').textContent =
+        i18n.formatNumber(m.employees_on_leave_today ?? 0);
+      document.getElementById('pending-leave-count').textContent =
+        i18n.formatNumber(m.pending_leave_requests ?? 0);
+      document.getElementById('low-balance-count').textContent  =
+        i18n.formatNumber(m.low_balance_count ?? 0);
+      document.getElementById('overtime-hours').textContent     =
+        i18n.formatNumber(m.overtime_hours ?? 0);
+      document.getElementById('overtime-people').textContent    =
+        `${i18n.formatNumber(m.overtime_people ?? 0)} ${
+          (i18n.t && i18n.t('common.count_people'))
+            ? i18n.t('common.count_people').replace('{count}','').trim()
+            : (i18n.t && i18n.t('units.people')) || 'people'
+        }`.trim();
+
+      // "As of" date for Who's Out Today
+      const asOfLabel = raw.effective_as_of || new Date().toISOString().slice(0,10);
+      document.getElementById('leave-list-date').textContent =
+        `${(i18n.t('common.as_of') || 'As of')} ${formatYMD(asOfLabel)}`;
+
+      // Who's Out list
+      const leaveDetails = Array.isArray(m.on_leave_details) ? m.on_leave_details : [];
+      if (leaveDetails.length > 0) {
+        const names = leaveDetails.slice(0, 3).map(p => getDisplayName(p)).join(', ');
+        const extra = leaveDetails.length > 3 ? ` +${i18n.formatNumber(leaveDetails.length - 3)}` : '';
+        document.getElementById('leave-today-details').textContent = `${names}${extra}`;
+      } else {
+        document.getElementById('leave-today-details').textContent =
+          (i18n.t && i18n.t('metrics.no_one_on_leave')) || 'No one on leave';
+      }
+
+      const leaveListHtml = leaveDetails.length
+        ? leaveDetails.map(person => {
+            const name = getDisplayName(person);
+            const token = initialsFrom(name);
+            const typeText = leaveTypeText(person);
+            const idText = personIdBadge(person);
+            const deptText = safeDept(person);
+            return `
+              <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <div class="flex items-center space-x-3">
+                  <div class="w-8 h-8 bg-amber-200 rounded-full flex items-center justify-center text-amber-700 font-medium text-xs">
+                    ${escapeHtml(token)}
+                  </div>
+                  <div>
+                    <p class="text-sm font-medium text-gray-900">${escapeHtml(name)}</p>
+                    <p class="text-xs text-gray-500">
+                      ${idText}${idText && deptText ? ' · ' : ''}${deptText ? `${i18n.t('common.department') || 'Dept'}: ${escapeHtml(deptText)}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <p class="text-xs text-gray-500">${escapeHtml(typeText)}</p>
+                  <p class="text-xs text-gray-400">${
+                    ((i18n.t && i18n.t('leave_types.until')) || 'Until {date}')
+                      .replace('{date}', formatDate(person.end_date))
+                  }</p>
+                </div>
+              </div>`;
+          }).join('')
+        : `<div class="text-center text-gray-500 py-8" data-i18n="sections.no_employees_on_leave">${
+            (i18n.t && i18n.t('sections.no_employees_on_leave')) || 'No employees on leave today'
+          }</div>`;
+      const leaveListEl = document.getElementById('leave-list');
+      if (leaveListEl) {
+        leaveListEl.innerHTML = leaveListHtml;
+        i18n?.updateDynamicContent?.('leave-list');
+      }
+
+      // Upcoming leave (with department)
+      const up = Array.isArray(m.upcoming_leave) ? m.upcoming_leave : [];
+      const upcomingHtml = up.length
+        ? up.map(item => {
+            const name = getDisplayName(item);
+            const typeText = leaveTypeText(item);
+            const idText = personIdBadge(item);
+            const deptText = safeDept(item);
+            return `
+              <div class="border-l-4 border-blue-400 pl-3 py-2">
+                <p class="text-sm font-medium text-gray-900">${escapeHtml(name)}</p>
+                <p class="text-xs text-gray-500">${formatDate(item.start_date)} - ${formatDate(item.end_date)}</p>
+                <div class="flex justify-between mt-1">
+                  <p class="text-xs text-gray-400">${(i18n.t && i18n.t('common.type')) || 'Type'}: ${escapeHtml(typeText)}</p>
+                  <div class="text-right text-xs text-gray-400">
+                    ${deptText ? `<div>${i18n.t('common.department') || 'Dept'}: ${escapeHtml(deptText)}</div>` : ''}
+                    ${idText ? `<div>${idText}</div>` : ''}
+                  </div>
+                </div>
+              </div>`;
+          }).join('')
+        : `<div class="text-sm text-gray-500" data-i18n="sections.no_upcoming_leave">${
+            (i18n.t && i18n.t('sections.no_upcoming_leave')) || 'No upcoming leave scheduled'
+          }</div>`;
+      const upEl = document.getElementById('upcoming-leave');
+      if (upEl) {
+        upEl.innerHTML = upcomingHtml;
+        i18n?.updateDynamicContent?.('upcoming-leave');
+      }
+
+      // Department summary
+      const dept = Array.isArray(m.department_summary) ? m.department_summary : [];
+      const deptHtml = dept.length
+        ? dept.map(d => `
+            <div class="flex justify-between items-center py-2">
+              <span class="text-sm text-gray-700">${escapeHtml(d.department_id || (i18n.t && i18n.t('common.unknown')) || 'Unknown')}</span>
+              <span class="text-sm font-medium text-gray-900">${i18n.formatNumber(d.count)} ${(i18n.t && i18n.t('leave_types.on_leave')) || 'on leave'}</span>
+            </div>`
+          ).join('')
+        : `<div class="text-sm text-gray-500" data-i18n="sections.no_department_data">${
+            (i18n.t && i18n.t('sections.no_department_data')) || 'No department data available'
+          }</div>`;
+      const deptEl = document.getElementById('dept-leave-summary');
+      if (deptEl) {
+        deptEl.innerHTML = deptHtml;
+        i18n?.updateDynamicContent?.('dept-leave-summary');
+      }
+
+      updateLastUpdateTime?.();
+
+      // Debug
+      console.log('Upcoming leave data (first 2):', up.slice(0, 2));
+    } catch (err) {
+      console.error('Failed to load leave metrics:', err);
+      ErrorManager?.showError?.(
+        ((i18n.t && i18n.t('errors.leave_metrics_failed')) || 'Leave metrics failed')
+          .replace('{status}', err.message || ''),
+        'api'
+      );
+      // Reset counters to placeholders
+      document.getElementById('leave-today-count').textContent = '--';
+      document.getElementById('pending-leave-count').textContent = '--';
+      document.getElementById('low-balance-count').textContent  = '--';
+      document.getElementById('overtime-hours').textContent     = '--';
+      document.getElementById('overtime-people').textContent    =
+        `-- ${(i18n.t && i18n.t('units.people')) || 'people'}`;
+    }
   }
 
   // ---------------------------
@@ -639,7 +680,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       ErrorManager.clearError('health');
 
-      healthBadge.textContent = ready ? (i18n.t('ai_assistant.healthy') || 'Healthy') : (i18n.t('ai_assistant.degraded') || 'Degraded');
+      healthBadge.textContent = ready ? (i18n.t('ai_assistant.healthy') || 'Healthy')
+                                      : (i18n.t('ai_assistant.degraded') || 'Degraded');
       healthBadge.className = `px-2 py-0.5 rounded-full text-white text-[10px] ${ready ? 'bg-emerald-600' : 'bg-yellow-500'}`;
 
       const parts = [
@@ -659,7 +701,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       statusDiv.innerHTML = `
         <span class="pulse-dot"></span>
         <div>
-          <div class="font-semibold">${ready ? (i18n.t('system_status.system_ready') || 'System Ready') : (i18n.t('system_status.system_not_ready') || 'System Not Ready')}</div>
+          <div class="font-semibold">${ready ? (i18n.t('system_status.system_ready') || 'System Ready')
+                                              : (i18n.t('system_status.system_not_ready') || 'System Not Ready')}</div>
           <div class="text-sm">${parts.join(' · ')}</div>
         </div>`;
       dbStatus.insertBefore(statusDiv, dbStatus.firstChild);
@@ -669,145 +712,194 @@ document.addEventListener('DOMContentLoaded', async () => {
       ErrorManager.showError(i18n.t('system_status.health_check_failed') || 'Health check failed. API not reachable.', 'health');
     }
   }
-  refreshHealthBtn?.addEventListener('click', checkHealth);
+  document.getElementById('refresh-health')?.addEventListener('click', checkHealth);
 
   // ---------------------------
-  // Dashboard data
+  // Trend fetch helper (DRY)
   // ---------------------------
-  async function loadLeaveMetrics() {
+  async function fetchAndRenderTrend() {
     try {
       const url = new URL(`${API_BASE}/api/leave_data`);
-      url.searchParams.set('kind', 'metrics');
+      url.searchParams.set('kind', 'trend');
       if (AS_OF) url.searchParams.set('as_of', AS_OF);
-      const response = await fetch(url.toString());
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const data = await response.json();
-      if (!data?.success) throw new Error('Invalid response');
-
-      ErrorManager.clearError('api');
-
-      const m = data.metrics || {};
-      // Top metrics
-      document.getElementById('leave-today-count').textContent = i18n.formatNumber(m.employees_on_leave_today ?? 0);
-      document.getElementById('pending-leave-count').textContent = i18n.formatNumber(m.pending_leave_requests ?? 0);
-      document.getElementById('low-balance-count').textContent  = i18n.formatNumber(m.low_balance_count ?? 0);
-      document.getElementById('overtime-hours').textContent     = i18n.formatNumber(m.overtime_hours ?? 0);
-      document.getElementById('overtime-people').textContent    = `${i18n.formatNumber(m.overtime_people ?? 0)} ${i18n.t('common.count_people') ? i18n.t('common.count_people').replace('{count}','').trim() : i18n.t('units.people') || 'people'}`.trim();
-
-      // Today details text on card
-      const leaveDetails = m.on_leave_details || [];
-      if (leaveDetails.length > 0) {
-        const personIds = leaveDetails.slice(0, 3).map(p => String(p.person_id || '').substring(0, 6)).join(', ');
-        const extra = leaveDetails.length > 3 ? ` +${i18n.formatNumber(leaveDetails.length - 3)}` : '';
-        document.getElementById('leave-today-details').textContent = `${personIds}${extra}`;
-      } else {
-        document.getElementById('leave-today-details').textContent = i18n.t('metrics.no_one_on_leave') || 'No one on leave';
+      url.searchParams.set('days', TREND_DAYS);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.success) updateLeaveTrend(data.trend, data.effective_range);
       }
-
-      // Who's out list
-      const leaveListHtml = leaveDetails.length
-        ? leaveDetails.map(person => `
-            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div class="flex items-center space-x-3">
-                <div class="w-8 h-8 bg-amber-200 rounded-full flex items-center justify-center text-amber-700 font-medium text-xs">
-                  ${String(person.person_id || '').substring(0, 2).toUpperCase()}
-                </div>
-                <div>
-                  <p class="text-sm font-medium text-gray-900">${escapeHtml(person.display_name || person.person_id || '')}</p>
-                  <p class="text-xs text-gray-500">${escapeHtml(person.type || i18n.t('leave_types.leave') || 'Leave')}</p>
-                </div>
-              </div>
-              <span class="text-xs text-gray-500">${(i18n.t('leave_types.until') || 'Until {date}').replace('{date}', formatDate(person.end_date))}</span>
-            </div>`).join('')
-        : `<div class="text-center text-gray-500 py-8" data-i18n="sections.no_employees_on_leave">${i18n.t('sections.no_employees_on_leave') || 'No employees on leave today'}</div>`;
-      document.getElementById('leave-list').innerHTML = leaveListHtml;
-      i18n.updateDynamicContent('leave-list');
-
-      // Upcoming leave
-      const up = m.upcoming_leave || [];
-      document.getElementById('upcoming-leave').innerHTML = up.length
-        ? up.map(item => `
-            <div class="border-l-4 border-blue-400 pl-3 py-2">
-              <p class="text-sm font-medium text-gray-900">${escapeHtml(item.display_name || item.person_id || '')}</p>
-              <p class="text-xs text-gray-500">${formatDate(item.start_date)} - ${formatDate(item.end_date)}</p>
-              <p class="text-xs text-gray-400">${escapeHtml(item.type || i18n.t('leave_types.leave') || 'Leave')}</p>
-            </div>`).join('')
-        : `<div class="text-sm text-gray-500" data-i18n="sections.no_upcoming_leave">${i18n.t('sections.no_upcoming_leave') || 'No upcoming leave scheduled'}</div>`;
-      i18n.updateDynamicContent('upcoming-leave');
-
-      // Department summary
-      const dept = m.department_summary || [];
-      document.getElementById('dept-leave-summary').innerHTML = dept.length
-        ? dept.map(d => `
-            <div class="flex justify-between items-center py-2">
-              <span class="text-sm text-gray-700">${escapeHtml(d.department_id || (i18n.t('common.unknown') || 'Unknown'))}</span>
-              <span class="text-sm font-medium text-gray-900">${i18n.formatNumber(d.count)} ${i18n.t('leave_types.on_leave') || 'on leave'}</span>
-            </div>`).join('')
-        : `<div class="text-sm text-gray-500" data-i18n="sections.no_department_data">${i18n.t('sections.no_department_data') || 'No department data available'}</div>`;
-      i18n.updateDynamicContent('dept-leave-summary');
-
-      updateLastUpdateTime();
     } catch (err) {
-      console.error('Failed to load leave metrics:', err);
-      ErrorManager.showError(
-        (i18n.t('errors.leave_metrics_failed') || 'Leave metrics failed').replace('{status}', err.message || ''),
-        'api'
-      );
-      // Reset counters to placeholders
-      document.getElementById('leave-today-count').textContent = '--';
-      document.getElementById('pending-leave-count').textContent = '--';
-      document.getElementById('low-balance-count').textContent  = '--';
-      document.getElementById('overtime-hours').textContent     = '--';
-      document.getElementById('overtime-people').textContent    = `-- ${i18n.t('units.people') || 'people'}`;
+      console.error('Trend fetch failed:', err);
     }
   }
 
   // ---------------------------
-  // Assistant chat
+  // Panel open/close
+  // ---------------------------
+  const openPanel  = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
+  const closePanel = () => { mainContent.style.width = '100%'; aiPanel.style.transform = 'translateX(100%)'; };
+  openAiBtn?.addEventListener('click', openPanel);
+  closeAiBtn?.addEventListener('click', closePanel);
+
+  // ---------------------------
+  // Refresh & scheduling
+  // ---------------------------
+  function scheduleRefresh() {
+    if (refreshInterval) clearInterval(refreshInterval);
+    refreshInterval = setInterval(async () => {
+      await loadLeaveMetrics().catch(err => console.error('Scheduled metrics refresh failed:', err));
+      await fetchAndRenderTrend();
+    }, 30000);
+  }
+
+  document.getElementById('refresh-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('refresh-btn');
+    btn.classList.add('animate-spin');
+    try {
+      ErrorManager.clearAll();
+      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
+      await fetchAndRenderTrend();
+    } finally {
+      setTimeout(() => btn.classList.remove('animate-spin'), 500);
+    }
+  });
+
+  // ---------------------------
+  // Language switching
+  // ---------------------------
+  function applyLanguage(lang) {
+    i18n.switchLanguage(lang);
+    i18n.scanAndRegisterElements();
+    i18n.applyTranslations();
+    updateLastUpdateTime();
+    if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
+  }
+  const globalSel = document.getElementById('global-lang');
+  if (globalSel) {
+    globalSel.value = i18n.getCurrentLanguage();
+    globalSel.addEventListener('change', (e) => applyLanguage(e.target.value));
+  }
+  window.addEventListener('languageChanged', updateLastUpdateTime);
+
+  // ---------------------------
+  // Assistant chat (minimal)
   // ---------------------------
   function appendMessage(role, text) {
-    placeholder.classList.add('hidden');
+    const placeholder = document.getElementById('placeholder');
+    placeholder?.classList.add('hidden');
     const bubble = document.createElement('div');
     bubble.className = `mb-3 p-3 rounded-lg border ${role === 'user' ? 'bg-blue-50 border-blue-200 text-blue-900' : 'bg-white border-slate-200 text-slate-800'}`;
     const roleLabel = role === 'user' ? (i18n.t('ai_assistant.you') || 'You') : (i18n.t('ai_assistant.assistant') || 'Assistant');
     bubble.innerHTML = `<div class="text-xs mb-1 ${role==='user'?'text-blue-600':'text-slate-500'}">${roleLabel}</div><div class="text-sm leading-6">${escapeHtml(text)}</div>`;
+    const results = document.getElementById('results');
     results.appendChild(bubble);
     results.scrollTop = results.scrollHeight;
   }
-  async function sendQuery() {
-    const q = (queryTA.value || '').trim();
+  function el(html) {
+    const t = document.createElement('template');
+    t.innerHTML = html.trim();
+    return t.content.firstElementChild;
+  }
+  function copyToClipboard(text) {
+    if (!text) return;
+    navigator.clipboard?.writeText(text).catch(() => {});
+  }
+  function renderAssistantCard(html) {
+    const results = document.getElementById('results');
+    const card = el(`<div class="mb-3 p-4 rounded-lg border bg-white border-slate-200 text-slate-700 text-sm leading-relaxed"></div>`);
+    card.innerHTML = html;
+    results.appendChild(card);
+    results.scrollTop = results.scrollHeight;
+    return card;
+  }
+  function classifyBackendError(data, httpStatus) {
+    const cat = (data?.error_category || "").toLowerCase();
+    const errMsg = (data?.execution_error || data?.error || "").toString();
+    const make = (category, title, advice, retry = false, backoffMs = 0) => ({ category, title, advice, retry, backoffMs, raw: errMsg });
+    if (cat) {
+      switch (cat) {
+        case "connection": return make(cat, "Can't reach the database", "Please check VPN/Network and server availability.", true, 1500);
+        case "authz":      return make(cat, "Login/permission issue", "Your DB credentials or table permissions may be incorrect.");
+        case "timeout":    return make(cat, "The query took too long", "Try narrowing the date range or filters, then retry.", true, 0);
+        case "deadlock":   return make(cat, "Database was busy", "Safe to retry the same query.", true, 800);
+        case "not_found":  return make(cat, "Field or table not found", "We’ll auto-fix the SQL; review the generated SQL if needed.", true, 0);
+        case "syntax":
+        case "semantic":   return make(cat, "The generated SQL was invalid", "We can retry and auto-fix the SQL for SQL Server.", true, 0);
+        default:           return make(cat, "Something went wrong", "You can retry or copy the details below.");
+      }
+    }
+    if (httpStatus === 429) return make('rate_limit', "Too many requests", "Please wait a moment and retry.", true, 1000);
+    if (httpStatus >= 500)  return make('server', "Server error", "Please retry. If it persists, contact support.", true, 1000);
+    if (/timeout/i.test(errMsg)) return make('timeout', "The query took too long", "Try narrower filters, then retry.", true, 0);
+    if (/login failed|denied|permission/i.test(errMsg)) return make('authz', "Login/permission issue", "Your DB credentials or table permissions may be incorrect.");
+    return make('unknown', "Something went wrong", "You can retry or copy the details below.", true, 500);
+  }
+  async function sendQuery(forcedText, fromRetry = false) {
+    const q = (forcedText ?? (queryTA.value || '')).trim();
     if (!q) return;
-    appendMessage('user', q);
-    queryTA.value = '';
-
+    if (!fromRetry) {
+      appendMessage('user', q);
+      queryTA.value = '';
+    }
     const typing = document.createElement('div');
     typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
     typing.innerHTML = `<span class="inline-flex items-center gap-2"><span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>${i18n.t('ai_assistant.thinking') || 'Thinking...'}</span>`;
-    results.appendChild(typing);
-    results.scrollTop = results.scrollHeight;
-
+    const resultsEl = document.getElementById('results');
+    resultsEl.appendChild(typing);
+    resultsEl.scrollTop = resultsEl.scrollHeight;
+    const payload = { query: q, lang: i18n.getCurrentLanguage() };
     try {
       const res = await fetch(`${API_BASE}/api/assistant/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, lang: i18n.getCurrentLanguage() })
+        body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error(`Assistant query failed (${res.status})`);
-      const data = await res.json();
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
       typing.remove();
-      if (data?.success) {
-        appendMessage('assistant', data.summary || data.explanation_localized || data.explanation_english || (i18n.t('errors.done') || 'Done.'));
-      } else {
-        appendMessage('assistant', data?.error || i18n.t('errors.something_wrong') || 'Sorry, something went wrong.');
+      if (res.ok && data?.success) {
+        appendMessage('assistant', data.summary || data.explanation_localized || data.explanation_english || 'Done.');
+        return;
+      }
+      const classified = classifyBackendError(data, res.status);
+      const html = `
+        <div class="flex items-start gap-3">
+          <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
+            <span class="text-red-600 text-xs">!</span>
+          </div>
+          <div class="flex-1">
+            <div class="font-medium text-slate-900">${classified.title}</div>
+            <div class="mt-1 text-slate-600">${classified.advice}</div>
+            ${classified.retry ? `<button class="mt-2 px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs hover:bg-slate-800" id="retry-btn">Retry</button>` : ''}
+          </div>
+        </div>`;
+      const card = renderAssistantCard(html);
+      if (classified.retry) {
+        card.querySelector('#retry-btn')?.addEventListener('click', async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          btn.textContent = 'Retrying...';
+          if (classified.backoffMs) await new Promise(r => setTimeout(r, classified.backoffMs));
+          try { await sendQuery(q, true); } finally { btn.disabled = false; btn.textContent = 'Retry'; }
+        });
       }
     } catch (err) {
       typing.remove();
-      appendMessage('assistant', i18n.t('errors.network_error') || 'Network error contacting assistant.');
+      const html = `
+        <div class="flex items-start gap-3">
+          <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
+            <span class="text-red-600 text-xs">!</span>
+          </div>
+          <div class="flex-1">
+            <div class="font-medium text-slate-900">Network error</div>
+            <div class="mt-1 text-slate-600">Please check your internet connection and retry.</div>
+          </div>
+        </div>`;
+      renderAssistantCard(html);
     }
   }
-  sendBtn?.addEventListener('click', sendQuery);
-  queryTA?.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery(); });
+  document.getElementById('send')?.addEventListener('click', () => sendQuery());
+  document.getElementById('query')?.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery(); });
   document.getElementById('pending-action')?.addEventListener('click', () => {
     openPanel();
     queryTA.value = i18n.t('ai_assistant.example_2') || 'Show pending leave requests';
@@ -815,7 +907,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // ---------------------------
-  // Voice
+  // Voice (optional)
   // ---------------------------
   let recognition = null, listening = false;
   function supportsSpeech(){ return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window; }
@@ -874,481 +966,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     vuBar.style.width = `${w}px`;
     setTimeout(vuTick, 80);
   }
-  micBtn?.addEventListener('click', startListening);
-  stopBtn?.addEventListener('click', stopListening);
-
-  // ---------------------------
-  // Report FSM + de-dup clarifications
-  // ---------------------------
-  const ReportState = { IDLE:'idle', ANALYZING:'analyzing', ASKING:'asking', GENERATING:'generating', FORMATTING:'formatting', COMPLETE:'complete', ERROR:'error' };
-
-  const ReportFSM = {
-    state: ReportState.IDLE,
-    asked: new Set(),            // de-dup question texts
-    clarifications: [],          // {question, answer}
-    analysis: null,              // server analysis object
-    reset() {
-      this.state = ReportState.IDLE;
-      this.asked.clear();
-      this.clarifications = [];
-      this.analysis = null;
-    }
-  };
-
-  function qKey(question) {
-    return (question || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  }
-
-  // ---- UI for conversation ----
-  function addConversationMessage(sender, message, isAI = false) {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'flex items-start space-x-3';
-
-    const avatar = isAI
-      ? `<div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0">
-           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-purple-600">
-             <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
-           </svg>
-         </div>`
-      : `<div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-           <span class="text-blue-600 text-xs font-bold">${i18n.t('ai_assistant.you') || 'You'}</span>
-         </div>`;
-
-    const bgColor = isAI ? 'bg-purple-50 border-purple-200' : 'bg-blue-50 border-blue-200';
-
-    messageDiv.innerHTML = `${avatar}
-      <div class="conversation-bubble ${bgColor} border rounded-xl p-4">
-        <p class="text-sm text-gray-800">${escapeHtml(message)}</p>
-      </div>`;
-    reportConversation.appendChild(messageDiv);
-    reportConversation.scrollTop = reportConversation.scrollHeight;
-    i18n.updateDynamicContent('report-conversation');
-  }
-
-  function addClarificationPrompt(question, suggestions = [], onSubmit) {
-    // De-dup: only render if unseen
-    const key = qKey(question);
-    if (ReportFSM.asked.has(key)) return;
-    ReportFSM.asked.add(key);
-
-    // Suggestions auto-fill (heuristics)
-    const qLower = (question || '').toLowerCase();
-    if (!suggestions || suggestions.length === 0) {
-      if (qLower.includes('time') || qLower.includes('period') || qLower.includes('month') || qLower.includes('range')) {
-        const now = new Date();
-        const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-        suggestions = [
-          'This month',
-          'Last month',
-          `${months[now.getMonth()]} ${now.getFullYear()}`,
-          `${months[(now.getMonth()+11)%12]} ${now.getFullYear()}`,
-          `Q${Math.ceil((now.getMonth()+1)/3)} ${now.getFullYear()}`,
-          'Last 30 days',
-          'Custom dates'
-        ];
-      } else if (qLower.includes('department') || qLower.includes('team')) {
-        suggestions = ['All departments','HR','Engineering','Sales','Marketing','Finance','Operations'];
-      } else if (qLower.includes('metric')) {
-        suggestions = ['Overtime hours','Overtime cost','Avg overtime per person','Top 5 overtime employees','By week','By department'];
-      } else if (qLower.includes('format') || qLower.includes('detail')) {
-        suggestions = ['Detailed analysis','Summary only','With charts','Executive brief'];
-      }
-    }
-
-    const wrap = document.createElement('div');
-    wrap.className = 'flex items-start space-x-3';
-    wrap.innerHTML = `
-      <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-purple-600">
-          <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
-        </svg>
-      </div>
-      <div class="conversation-bubble bg-purple-50 border border-purple-200 rounded-xl p-4 w-full">
-        <p class="text-sm text-gray-800 font-medium mb-2">${escapeHtml(question)}</p>
-        ${suggestions.length ? `
-          <div class="mb-3">
-            <p class="text-xs text-gray-600 mb-2">Quick select:</p>
-            <div class="flex flex-wrap gap-2">
-              ${suggestions.map(s => `
-                <button class="suggestion-chip px-3 py-1.5 text-xs bg-white border border-purple-300 text-purple-700 rounded-full hover:bg-purple-100 transition-colors">
-                  ${escapeHtml(s)}
-                </button>`).join('')}
-            </div>
-          </div>` : ''
-        }
-        <div class="flex gap-2">
-          <input class="clarify-input flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" placeholder="Type your answer or select above..." />
-          <button class="clarify-submit px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition-colors font-medium">Continue</button>
-        </div>
-      </div>
-    `;
-    reportConversation.appendChild(wrap);
-    reportConversation.scrollTop = reportConversation.scrollHeight;
-
-    const input = wrap.querySelector('.clarify-input');
-    const btn   = wrap.querySelector('.clarify-submit');
-    const chips = wrap.querySelectorAll('.suggestion-chip');
-
-    chips.forEach(chip => {
-      chip.addEventListener('click', () => {
-        input.value = chip.textContent.trim();
-        chips.forEach(c => c.classList.remove('bg-purple-100', 'border-purple-500'));
-        chip.classList.add('bg-purple-100', 'border-purple-500');
-      });
-    });
-
-    const submit = () => {
-      const val = (input.value || '').trim();
-      if (!val) {
-        input.classList.add('border-red-400');
-        setTimeout(() => input.classList.remove('border-red-400'), 900);
-        return;
-      }
-      input.disabled = true; btn.disabled = true; btn.textContent = 'Processing...';
-      ReportFSM.clarifications.push({ question, answer: val });
-      addConversationMessage('You', val, false);
-      onSubmit?.(val);
-    };
-
-    btn.addEventListener('click', submit);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
-    });
-    setTimeout(() => input.focus(), 80);
-  }
-
-  function updateProgressStep(stepId, completed = false, active = false) {
-    const step = document.getElementById(stepId);
-    if (!step) return;
-    const circle = step.querySelector('div');
-    const text = step.querySelector('span');
-    if (completed) {
-      circle.className = 'w-6 h-6 rounded-full bg-purple-600 flex items-center justify-center';
-      circle.innerHTML = `<svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>`;
-      text.className = 'text-sm text-gray-700';
-    } else if (active) {
-      circle.className = 'w-6 h-6 rounded-full border-2 border-purple-600 flex items-center justify-center';
-      circle.innerHTML = '<div class="w-2 h-2 bg-purple-600 rounded-full animate-pulse"></div>';
-      text.className = 'text-sm text-gray-700 font-medium';
-    } else {
-      circle.className = 'w-6 h-6 rounded-full border-2 border-gray-300 flex items-center justify-center';
-      circle.innerHTML = '<div class="w-2 h-2 bg-gray-300 rounded-full"></div>';
-      text.className = 'text-sm text-gray-400';
-    }
-  }
-  function updateProgress(percentage, statusKeyOrText, isKey = true) {
-    document.getElementById('progress-percentage').textContent = `${percentage}%`;
-    document.getElementById('progress-bar').style.width = `${percentage}%`;
-    const el = document.getElementById('current-status');
-    el.textContent = isKey ? (i18n.t(statusKeyOrText) || statusKeyOrText) : statusKeyOrText;
-  }
-
-  function buildRefinedQuery(originalQuery, clarifications) {
-    let refined = originalQuery;
-    (clarifications || []).forEach(({ question, answer }) => {
-      const qLower = (question || '').toLowerCase();
-      if (qLower.includes('time') || qLower.includes('period') || qLower.includes('month') || qLower.includes('range')) {
-        refined += `. Time period: ${answer}`;
-      } else if (qLower.includes('department') || qLower.includes('team')) {
-        refined += `. Department: ${answer}`;
-      } else if (qLower.includes('format') || qLower.includes('detail')) {
-        refined += `. Format preference: ${answer}`;
-      } else if (qLower.includes('metric')) {
-        refined += `. Metrics: ${answer}`;
-      } else {
-        refined += `. ${answer}`;
-      }
-    });
-    return refined;
-  }
-
-  async function analyzeQueryAPI(q) {
-    const res = await fetch(`${API_BASE}/api/reports/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, language: i18n.getCurrentLanguage() })
-    });
-    if (!res.ok) throw new Error(`Analysis failed (${res.status})`);
-    return res.json();
-  }
-
-  // ---- Start report generation flow (fixed, de-duplicated) ----
-  async function startReportGenerationProcess() {
-    const q = reportQuery.value.trim();
-    if (!q) {
-      reportQuery.classList.add('border-red-400');
-      setTimeout(() => reportQuery.classList.remove('border-red-400'), 900);
-      return;
-    }
-
-    // Reset UI + FSM
-    ReportFSM.reset();
-    const clearErrors = reportConversation.querySelectorAll('.error-message'); clearErrors.forEach(el => el.remove());
-    addConversationMessage('You', q);
-    reportInputArea.classList.add('hidden');
-    generationProgress.classList.remove('hidden');
-
-    try {
-      // Step 1: Analyze
-      ReportFSM.state = ReportState.ANALYZING;
-      updateProgressStep('step-analysis', false, true);
-      updateProgress(20, 'report.analyzing_request_status');
-
-      let analysisResponse = await analyzeQueryAPI(q);
-      ReportFSM.analysis = analysisResponse.analysis || null;
-      updateProgressStep('step-analysis', true);
-
-      // Step 2: Ask clarifications (if any) with de-dup + single rendering of each question
-      if (analysisResponse.needs_clarification) {
-        ReportFSM.state = ReportState.ASKING;
-        updateProgressStep('step-questions', false, true);
-        updateProgress(45, 'report.status_gathering');
-
-        // Normalize questions array
-        let questions = analysisResponse.clarification_questions && analysisResponse.clarification_questions.length
-          ? analysisResponse.clarification_questions
-          : (analysisResponse.clarification_question ? [analysisResponse.clarification_question] : []);
-
-        // Ask sequentially
-        for (const question of questions) {
-          await new Promise((resolve) => {
-            addClarificationPrompt(question, [], async (answer) => {
-              // Store & refine
-              const refinedQuery = buildRefinedQuery(q, [{ question, answer }]);
-              ReportFSM.clarifications.push({ question, answer });
-              updateProgress(55, i18n.t('report.gathering_info') || 'Gathering additional information...');
-              // Re-run analysis after each answer so server can stop asking once enough info is provided
-              const next = await analyzeQueryAPI(refinedQuery);
-              ReportFSM.analysis = next.analysis || ReportFSM.analysis;
-              // If server returns new questions, append unseen ones
-              const newQs = next.clarification_questions && next.clarification_questions.length
-                ? next.clarification_questions
-                : (next.clarification_question ? [next.clarification_question] : []);
-              const deduped = newQs.filter(qq => !ReportFSM.asked.has(qKey(qq)));
-              if (deduped.length) {
-                questions.push(...deduped); // push to loop tail
-              }
-              resolve();
-            });
-          });
-        }
-        updateProgressStep('step-questions', true);
-        addConversationMessage('AI Agent',
-          `Great! I have the details needed. Preparing your ${ReportFSM?.analysis?.report_type?.replace('_',' ') || 'report'}${ReportFSM?.analysis?.time_period ? ' (' + ReportFSM.analysis.time_period + ')' : ''}...`,
-          true
-        );
-      }
-
-      // Step 3: Generate
-      ReportFSM.state = ReportState.GENERATING;
-      updateProgressStep('step-generation', false, true);
-      updateProgress(75, 'report.status_generating');
-
-      const finalQuery = buildRefinedQuery(q, ReportFSM.clarifications);
-      const generationRes = await fetch(`${API_BASE}/api/reports/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: finalQuery,
-          analysis: ReportFSM.analysis,   // ✅ only the analysis object
-          format: 'docx',
-          language: i18n.getCurrentLanguage()
-        })
-      });
-      if (!generationRes.ok) throw new Error(`Generation failed (${generationRes.status})`);
-      const generationData = await generationRes.json();
-      updateProgressStep('step-generation', true);
-
-      // Step 4: Formatting (UI polish)
-      ReportFSM.state = ReportState.FORMATTING;
-      updateProgressStep('step-formatting', false, true);
-      updateProgress(95, 'report.status_formatting');
-      await new Promise(r => setTimeout(r, 800));
-      updateProgressStep('step-formatting', true);
-
-      // Done
-      ReportFSM.state = ReportState.COMPLETE;
-      updateProgress(100, 'report.report_generated');
-      addConversationMessage('AI Agent', `✅ ${i18n.t('report.report_ready') || 'Your report is ready for download.'}`, true);
-
-      // Save session for download
-      reportGenerationSession = {
-        reportId: generationData.report_id,
-        title: generationData.title,
-        downloadUrl: generationData.download_url,
-        analysis: ReportFSM.analysis,
-        clarifications: ReportFSM.clarifications
-      };
-      downloadArea.classList.remove('hidden');
-
-    } catch (error) {
-      console.error('Report generation failed:', error);
-      ReportFSM.state = ReportState.ERROR;
-      addConversationMessage('AI Agent',
-        `${i18n.t('report.generation_failed') || 'Sorry, there was an error generating your report.'} (${error.message || 'Unknown error'})`,
-        true
-      );
-      // Let the user retry
-      reportInputArea.classList.remove('hidden');
-      generationProgress.classList.add('hidden');
-      const retryBtn = document.createElement('button');
-      retryBtn.className = 'mt-3 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm';
-      retryBtn.textContent = i18n.t('common.retry') || 'Try Again';
-      retryBtn.onclick = () => { resetReportModal(); reportQuery.value = q; };
-      reportConversation.appendChild(retryBtn);
-    }
-  }
-
-  // Report modal open/close/reset
-  function resetReportModal() {
-    reportInputArea.classList.remove('hidden');
-    generationProgress.classList.add('hidden');
-    downloadArea.classList.add('hidden');
-    reportQuery.value = '';
-    reportGenerationSession = null;
-    ReportFSM.reset();
-    // Reset initial message (translatable)
-    reportConversation.innerHTML = `
-      <div class="flex items-start space-x-3">
-        <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-purple-600">
-            <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
-          </svg>
-        </div>
-        <div class="conversation-bubble bg-purple-50 border border-purple-200 rounded-xl p-4">
-          <p class="text-sm text-gray-800" data-i18n="report.ai_greeting">Hi! I'm your AI Report Generator. What kind of report would you like me to create? For example:</p>
-          <ul class="mt-2 text-sm text-gray-600 space-y-1">
-            <li data-i18n="report.example_1">• Monthly leave analysis for HR team</li>
-            <li data-i18n="report.example_2">• Department overtime summary</li>
-            <li data-i18n="report.example_3">• Employee vacation balance report</li>
-            <li data-i18n="report.example_4">• Attendance trends analysis</li>
-          </ul>
-        </div>
-      </div>`;
-    i18n.updateDynamicContent('report-conversation');
-  }
-  const openReportModal = () => { reportModal.classList.remove('hidden'); reportQuery.focus(); };
-  const closeReportModalHandler = () => { reportModal.classList.add('hidden'); resetReportModal(); };
-  generateReportBtn?.addEventListener('click', openReportModal);
-  closeReportModal?.addEventListener('click', closeReportModalHandler);
-  reportModal?.addEventListener('click', (e) => { if (e.target === reportModal) closeReportModalHandler(); });
-
-  // Download
-  async function downloadGeneratedReport() {
-    if (!reportGenerationSession) return;
-    const btn = document.getElementById('download-report');
-    const original = btn.innerHTML;
-    try {
-      btn.disabled = true;
-      btn.innerHTML = `
-        <svg class="animate-spin w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <span>${i18n.t('report.download_report') || 'Download Report (.docx)'}</span>`;
-      const res = await fetch(`${API_BASE}/api/reports/download/${reportGenerationSession.reportId}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      if (blob.size === 0) throw new Error('Empty file');
-
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${reportGenerationSession.title || 'report'}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      }, 100);
-
-      addConversationMessage('AI Agent', '📥 Report downloaded successfully!', true);
-      const anotherBtn = document.createElement('button');
-      anotherBtn.className = 'mt-3 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm';
-      anotherBtn.textContent = i18n.t('report.generate_report') || 'Generate Report';
-      anotherBtn.onclick = () => resetReportModal();
-      reportConversation.appendChild(anotherBtn);
-    } catch (err) {
-      const errorMsg = document.createElement('div');
-      errorMsg.className = 'error-message mt-3';
-      errorMsg.textContent = `${i18n.t('errors.download_failed') || 'Download failed, please try again.'} (${err.message || ''})`;
-      downloadArea.appendChild(errorMsg);
-      setTimeout(() => errorMsg.remove(), 5000);
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = original;
-    }
-  }
-  downloadReport?.addEventListener('click', downloadGeneratedReport);
-  reportQuery?.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') startReportGenerationProcess(); });
-  startReportGeneration?.addEventListener('click', startReportGenerationProcess);
-
-  // ---------------------------
-  // Refresh & scheduling
-  // ---------------------------
-  function scheduleRefresh() {
-    if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(async () => {
-      await loadLeaveMetrics().catch(err => console.error('Scheduled metrics refresh failed:', err));
-      try {
-        const url = new URL(`${API_BASE}/api/leave_data`);
-        url.searchParams.set('kind', 'trend');
-        if (AS_OF) url.searchParams.set('as_of', AS_OF);
-        url.searchParams.set('days', TREND_DAYS);
-        const res = await fetch(url.toString());
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.success) updateLeaveTrend(data.trend);
-        }
-      } catch {}
-    }, 30000);
-  }
-
-  refreshBtn?.addEventListener('click', async () => {
-    refreshBtn.classList.add('animate-spin');
-    try {
-      ErrorManager.clearAll();
-      await Promise.all([
-        loadLeaveMetrics(),
-        checkHealth()
-      ]);
-      // trend
-      try {
-        const url = new URL(`${API_BASE}/api/leave_data`);
-        url.searchParams.set('kind', 'trend');
-        if (AS_OF) url.searchParams.set('as_of', AS_OF);
-        url.searchParams.set('days', TREND_DAYS);
-        const res = await fetch(url.toString());
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.success) updateLeaveTrend(data.trend);
-        }
-      } catch (trendError) {
-        console.error('Trend refresh failed:', trendError);
-      }
-    } finally {
-      setTimeout(() => refreshBtn.classList.remove('animate-spin'), 500);
-    }
-  });
-
-  // ---------------------------
-  // Language switching
-  // ---------------------------
-  function applyLanguage(lang) {
-    i18n.switchLanguage(lang);
-    // Global static
-    i18n.scanAndRegisterElements();
-    i18n.applyTranslations();
-    // Dynamic bits
-    updateLastUpdateTime();
-    // Reset speech (so SR picks new lang)
-    if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
-  }
-  if (globalLangSel) {
-    globalLangSel.value = i18n.getCurrentLanguage();
-    globalLangSel.addEventListener('change', (e) => applyLanguage(e.target.value));
-  }
-  window.addEventListener('languageChanged', updateLastUpdateTime);
+  document.getElementById('mic')?.addEventListener('click', startListening);
+  document.getElementById('stop')?.addEventListener('click', stopListening);
 
   // ---------------------------
   // Init
@@ -1356,31 +975,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   (async function init() {
     try {
       initializeCharts();
+
       // initial loads
-      await Promise.all([
-        loadLeaveMetrics(),
-        checkHealth()
-      ]);
+      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
+      await fetchAndRenderTrend();
 
-      // trend initial
-      try {
-        const url = new URL(`${API_BASE}/api/leave_data`);
-        url.searchParams.set('kind', 'trend');
-        if (AS_OF) url.searchParams.set('as_of', AS_OF);
-        url.searchParams.set('days', TREND_DAYS);
-        const res = await fetch(url.toString());
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.success) updateLeaveTrend(data.trend);
-        }
-      } catch (err) {
-        console.error('Initial trend load failed:', err);
-      }
-
+      // schedule live refresh
       scheduleRefresh();
       updateLastUpdateTime();
 
-      // Welcome subline (kept dynamic)
+      // Welcome subline details
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
       const dateLabel = AS_OF ? AS_OF : 'auto';
       const sub = document.getElementById('welcome-sub');
@@ -1398,9 +1002,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   })();
 
-  // ---------------------------
-  // Global error guards
-  // ---------------------------
+  // Global guards
   window.addEventListener('error', (event) => {
     console.error('Global error:', event.error);
     ErrorManager.showError('An unexpected error occurred. Please refresh the page.', 'critical');

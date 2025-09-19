@@ -77,23 +77,29 @@ class LLMClient:
         lang = self._normalize_lang(preferred_lang or self.default_lang)
 
         # Optional: detect + translate to English for better intent extraction
-        detected_lang, _ = self.translator.detect_language(user_query)
-        source_lang = self._normalize_lang(detected_lang)
-        english_query = (
-            self.translator.translate_to_english(user_query, source_lang)
-            if source_lang != "en-US"
-            else user_query
-        )
+        try:
+            detected_lang, _ = self.translator.detect_language(user_query)
+            source_lang = self._normalize_lang(detected_lang)
+        except Exception:
+            source_lang = "en-US"
 
-        if self.llm.llm_enabled and self._prompt_layer_ready():
+        try:
+            english_query = (
+                self.translator.translate_to_english(user_query, source_lang)
+                if source_lang != "en-US"
+                else user_query
+            )
+        except Exception:
+            english_query = user_query
+
+        if getattr(self.llm, "llm_enabled", False) and self._prompt_layer_ready():
             try:
                 intent = self._llm_extract_intent(english_query)
-                # Keep user language preference on departments/labels if needed
                 return intent
             except Exception as e:
                 logger.warning("LLM intent extraction failed, falling back. %s", e)
 
-        # Fallback: deterministic heuristics (keeps your existing behavior aligned)
+        # Fallback: deterministic heuristics
         return self._rule_based_intent(english_query)
 
     def build_narrative(
@@ -104,23 +110,33 @@ class LLMClient:
         data_bucket: Dict[str, Any],
         title: Optional[str] = None,
         target_language: Optional[str] = None,
+        clarifications: Optional[List[Dict[str, str]]] = None,  # NEW
     ) -> Narrative:
         """
         Produce a formal Narrative: executive summary, methodology, insights, risks, recommendations.
         Uses OpenAI when available, otherwise deterministic templates.
         """
         lang = self._normalize_lang(target_language or self.default_lang)
-        title = title or self._title_from_intent(intent) #type: ignore
+        title = title or self._title_from_intent(intent, lang)
+
+        # Normalize/clean departments
+        depts = intent.departments or []
+        if depts == ["all"]:
+            depts = []
 
         # Build a compact context object for the LLM / fallback
-        context = {
+        context: Dict[str, Any] = {
             "query": query,
-            "intent": intent.__dict__,
+            "intent": {
+                **intent.__dict__,
+                "departments": depts,
+            },
             "data": data_bucket,  # whatever your tools produced
+            "clarifications": clarifications or [],
             "generated_at": datetime.now().isoformat(timespec="seconds"),
         }
 
-        if self.llm.llm_enabled and self._prompt_layer_ready():
+        if getattr(self.llm, "llm_enabled", False) and self._prompt_layer_ready():
             try:
                 narrative = self._llm_narrative(context, lang, title)
                 return narrative
@@ -160,7 +176,6 @@ class LLMClient:
             "Default conservatively if unspecified; do not hallucinate dates."
         )
 
-        # Use the same chat client with a minimal custom call
         try:
             from langchain.schema import SystemMessage, HumanMessage  # type: ignore
         except Exception:
@@ -175,22 +190,15 @@ class LLMClient:
         if not raw:
             return self._rule_based_intent(english_query)
 
-        # Be robust to code fences
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.strip("`").split("\n", 1)[-1]
             if cleaned.strip().startswith("{") is False:
                 cleaned = cleaned.split("```", 1)[0]
-        try:
-            obj = json.loads(cleaned)
-        except Exception:
-            # Try to locate first {...} block
-            start = cleaned.find("{")
-            end = cleaned.rfind("}")
-            if start >= 0 and end > start:
-                obj = json.loads(cleaned[start : end + 1])
-            else:
-                return self._rule_based_intent(english_query)
+
+        obj = _try_extract_json(cleaned)
+        if not obj:
+            return self._rule_based_intent(english_query)
 
         # Normalize → Intent
         tr = obj.get("time_range") or {}
@@ -212,8 +220,9 @@ class LLMClient:
         """
         Use the LLM to write a formal narrative. We leverage the 'explanation' pathway for consistency,
         but provide a precise instruction to output a structured JSON block of sections.
+        Clarifications (if present) must be treated as authoritative constraints.
         """
-        # Compose a compact pseudo-aggregate to fit the OpenAIService API
+        # Small aggregate sample to provide flavor without over-sharing data
         aggregates = {
             "row_count": _safe_int(context, ["data", "row_count"], 0),
             "unique_people": _safe_int(context, ["data", "unique_people"], None),
@@ -221,8 +230,14 @@ class LLMClient:
             "total_hours": _safe_int(context, ["data", "ot_metrics", "total_hours"], None),
         }
 
-        # We piggyback on generate_explanation (which already handles LLM call),
-        # but we pass a special instruction asking it to produce JSON sections.
+        # Clarifications summary (authoritative)
+        clar_list: List[Dict[str, str]] = context.get("clarifications", []) or []
+        if clar_list:
+            clar_text = "; ".join([f"{c.get('question','').strip()}: {c.get('answer','').strip()}" for c in clar_list if (c.get('answer') or '').strip()])
+        else:
+            clar_text = ""
+
+        # Instruction for JSON sections, steering with clarifications
         instruction = (
             "Return a JSON with keys: "
             "executive_summary (string, 2–4 sentences, formal), "
@@ -230,13 +245,15 @@ class LLMClient:
             "key_insights (array of 4–7 concise bullets), "
             "risks (array of 2–4 bullets), "
             "recommendations (array of 3–6 action bullets). "
-            "Do not include code fences."
+            "Do not include code fences. "
+            "Incorporate these authoritative clarifications if provided: "
+            f"{clar_text if clar_text else 'None'}"
         )
-        columns = ["field", "value"]  # Placeholder, unused but required
-        sample_text = json.dumps(_safe_dict(context, ["data"]), ensure_ascii=False)[:1500]
 
-        # Use the same function to generate content; prepend instruction to question
+        columns = ["field", "value"]  # placeholder
+        sample_text = json.dumps(_safe_dict(context, ["data"]), ensure_ascii=False)[:1500]
         question = f"{instruction}\n\nOriginal request: {context.get('query','')}"
+
         raw = self.llm.generate_explanation(
             question=question,
             row_count=int(aggregates.get("row_count") or 0),
@@ -245,8 +262,7 @@ class LLMClient:
             sample_text=sample_text,
         )
 
-        # Try to parse JSON; if not, fallback
-        payload = _try_extract_json(raw)
+        payload = _try_extract_json(raw or "")
         if not payload:
             return self._template_narrative(context, lang, title)
 
@@ -255,16 +271,15 @@ class LLMClient:
             title=title,
             executive_summary=str(payload.get("executive_summary") or "").strip(),
             methodology=str(payload.get("methodology") or "").strip(),
-            key_insights=[str(x).strip() for x in payload.get("key_insights") or []],
-            risks=[str(x).strip() for x in payload.get("risks") or []],
-            recommendations=[str(x).strip() for x in payload.get("recommendations") or []],
+            key_insights=[str(x).strip() for x in (payload.get("key_insights") or [])],
+            risks=[str(x).strip() for x in (payload.get("risks") or [])],
+            recommendations=[str(x).strip() for x in (payload.get("recommendations") or [])],
             appendix_notes=[
                 f"Generated at {context.get('generated_at')}",
                 f"Time period: {context.get('intent', {}).get('time_period', 'monthly')}",
-            ],
+            ] + ([f"Clarifications applied: {clar_text}"] if clar_text else []),
         )
 
-        # Translate when target is zh-TW
         if lang == "zh-TW":
             narrative = self._maybe_translate_narrative(narrative, "zh-TW")
 
@@ -295,7 +310,7 @@ class LLMClient:
         # Period
         if "week" in q:
             tp = "weekly"
-        elif "quarter" in q or "q1" in q or "q2" in q or "q3" in q or "q4" in q:
+        elif "quarter" in q or any(k in q for k in ["q1", "q2", "q3", "q4"]):
             tp = "quarterly"
         elif "year" in q or "annual" in q:
             tp = "yearly"
@@ -305,9 +320,7 @@ class LLMClient:
         needs = rt in ("unknown",)  # ask when unsure
         clarify = []
         if needs:
-            clarify.append(
-                "What time period should I use? (weekly, monthly, quarterly, yearly)"
-            )
+            clarify.append("What time period should I use? (weekly, monthly, quarterly, yearly)")
 
         return Intent(
             report_type=rt,
@@ -322,8 +335,13 @@ class LLMClient:
 
     def _template_narrative(self, context: Dict[str, Any], lang: str, title: str) -> Narrative:
         intent = context.get("intent", {}) or {}
-        rt = intent.get("report_type", "unknown").replace("_", " ")
         tp = intent.get("time_period", "monthly")
+        rt = (intent.get("report_type", "unknown") or "unknown").replace("_", " ")
+
+        clar_list: List[Dict[str, str]] = context.get("clarifications", []) or []
+        clar_summary = [f"{c.get('question','').strip()}: {c.get('answer','').strip()}"
+                        for c in clar_list if (c.get('answer') or '').strip()]
+
         # Heuristic bullets from available data
         bullets: List[str] = []
 
@@ -369,9 +387,10 @@ class LLMClient:
                 "No critical anomalies were observed in the current period."
             ]
 
+        clar_line = f" Clarifications applied: {'; '.join(clar_summary)}." if clar_summary else ""
         executive = (
-            f"This {rt} covering the {tp} period summarizes current performance and patterns. "
-            f"The overview below highlights notable signals and areas of interest."
+            f"This {rt} covering the {tp} period summarizes current performance and patterns."
+            f" The overview below highlights notable signals and areas of interest.{clar_line}"
         )
         methodology = (
             "Methodology: We analyzed aggregated HR system records for the selected period, "
@@ -399,7 +418,7 @@ class LLMClient:
             appendix_notes=[
                 f"Generated at {context.get('generated_at')}",
                 f"Time period: {tp}",
-            ],
+            ] + ([f"Clarifications applied: {'; '.join(clar_summary)}"] if clar_summary else []),
         )
 
         if lang == "zh-TW":
@@ -435,9 +454,29 @@ class LLMClient:
     # -----------------------------
     @staticmethod
     def _normalize_lang(code: Optional[str]) -> str:
-        if not code:
-            return "en-US"
-        return AWSTranslationService.normalize_language_code(code)
+        try:
+            return AWSTranslationService.normalize_language_code(code or "en-US")
+        except Exception:
+            return (code or "en-US")
+
+    @staticmethod
+    def _title_from_intent(intent: Intent, lang: str) -> str:
+        """Derive a human title from the intent (language-aware)."""
+        tp = (intent.time_period or "period").title()
+        mapping_en = {
+            "leave_analysis": f"{tp} Leave Analysis Report",
+            "overtime_analysis": f"{tp} Overtime Summary Report",
+            "attendance_analysis": f"{tp} Attendance Analysis Report",
+            "balance_report": "Employee Balance Summary Report",
+            "unknown": "Custom HR Analytics Report",
+        }
+        title_en = mapping_en.get(intent.report_type or "unknown", "HR Report")
+        if lang == "zh-TW":
+            try:
+                return AWSTranslationService().translate_from_english(title_en, "zh-TW")
+            except Exception:
+                return title_en
+        return title_en
 
 
 # =========================

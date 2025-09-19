@@ -4,15 +4,16 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-fastapi = "*"
 dotenv = "*"
 boto3 = "*"
 langchain-openai = "*"
-langchain = "*"
 sentence-transformers = "*"
 pyodbc = "*"
 uvicorn = "*"
 python-docx = "*"
+fastapi = "*"
+langdetect = "*"
+langchain = "*"
 
 [dev-packages]
 

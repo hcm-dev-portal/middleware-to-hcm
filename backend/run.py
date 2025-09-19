@@ -1,4 +1,4 @@
-# backend/run.py
+import os
 import logging
 import time
 import uuid
@@ -10,48 +10,107 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 
-from starlette.concurrency import run_in_threadpool
-
 from app.api.router import router as api_router
-from app.services.db_service import set_request_id, SQLServerDatabaseService
-from app.services.nlp_service import NLPService
+
+# ✅ Use the enhanced, Unicode-ready DB service
+from app.services.db_service import SQLServerDatabaseService, set_request_id
+
+# ✅ Use your optimized NLP v2
+from app.services.nlp_service_2 import LanguageNativeNLPService
+
+# Optional: vector bootstrapper for warming up vector indexes at startup
+try:
+    from app.vector_bootstrap import VectorBootstrapper
+except Exception:
+    VectorBootstrapper = None  # Guarded by checks
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("app.http")
 
-BASE_DIR = Path(__file__).resolve().parent         # backend/
-FRONTEND_DIR = BASE_DIR.parent / "frontend"
+BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BASE_DIR.parent
+FRONTEND_DIR = REPO_ROOT / "frontend"
 STATIC_DIR   = FRONTEND_DIR / "static"
 ASSETS_DIR   = FRONTEND_DIR / "assets"
-LANG_DIR     = FRONTEND_DIR / "lang"       # <repo-root>/frontend
+LANG_DIR     = FRONTEND_DIR / "lang"
+INDEX_HTML   = FRONTEND_DIR / "index.html"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create long-lived services once and store them on app.state."""
+    """
+    Startup:
+      - Initialize DB (Unicode-enabled)
+      - Initialize LanguageNativeNLPService (v2) as primary NLP
+      - Warm vector DBs/indexes so health is green on first load
+    """
+    t0 = time.perf_counter()
     try:
+        # DB service
         db = SQLServerDatabaseService()
-        nlp = NLPService(db_service=db)
         app.state.db = db
+
+        # ✅ Primary NLP = v2 only
+        nlp = LanguageNativeNLPService(db_service=db)
         app.state.nlp = nlp
-        logger.info("App services initialized: db, nlp")
+
+        # --- Vector warmup ---
+        warm_timeout_s = int(os.getenv("VECTOR_WARMUP_TIMEOUT_S", "20"))
+        warm_block = os.getenv("VECTOR_WARMUP_BLOCKING", "true").lower() == "true"
+
+        if VectorBootstrapper:
+            app.state.vector_bootstrap = VectorBootstrapper({
+                "primary": getattr(app.state, "nlp", None),
+                # We are no longer using any legacy/original services.
+            })
+            try:
+                if warm_block:
+                    logger.info("Vector warmup (blocking, timeout=%ss) starting ...", warm_timeout_s)
+                    result = await app.state.vector_bootstrap.start()
+                    logger.info("Vector warmup completed: %s", result)
+                else:
+                    logger.info("Vector warmup (background) scheduled.")
+                    import asyncio
+                    asyncio.create_task(app.state.vector_bootstrap.start(timeout_s=warm_timeout_s))
+            except Exception as e:
+                logger.exception("Vector warmup error: %s", e)
+        else:
+            # Fallback: warm via nlp service if exposed
+            try:
+                if hasattr(nlp, "vector_search") and hasattr(nlp.vector_search, "warmup"):
+                    logger.info("Vector warmup via NLP service starting ...")
+                    maybe = nlp.vector_search.warmup()
+                    if hasattr(maybe, "__await__"):
+                        import asyncio
+                        await asyncio.wait_for(maybe, timeout=warm_timeout_s)
+                    logger.info("Vector warmup via NLP service completed.")
+            except Exception as e:
+                logger.exception("Vector warmup (fallback) error: %s", e)
+
+        logger.info("Startup complete in %dms", int((time.perf_counter() - t0) * 1000))
     except Exception as e:
-        logger.exception(f"Service init failed: {type(e).__name__}: {e}")
+        logger.exception("Service initialization failed: %s", e)
+
     try:
         yield
     finally:
-        logger.info("App services shutting down")
+        logger.info("Shutting down services ...")
+
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="HCM AI Portal API", version="0.2", lifespan=lifespan)
+    app = FastAPI(
+        title="HCM AI Portal API",
+        version=os.getenv("APP_VERSION", "0.4"),
+        lifespan=lifespan,
+    )
 
-    # Request ID + access logging
     @app.middleware("http")
     async def rid_and_access_log(request: Request, call_next):
-        rid = request.headers.get("x-request-id") or uuid.uuid4().hex
-        set_request_id(rid)
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        set_request_id(request_id)
         start = time.perf_counter()
         response = None
         try:
@@ -61,66 +120,62 @@ def create_app() -> FastAPI:
             dur_ms = int((time.perf_counter() - start) * 1000)
             status = getattr(response, "status_code", "?")
             logger.info("HTTP %s %s -> %s rid=%s dur=%dms",
-                        request.method, request.url.path, status, rid, dur_ms)
+                        request.method, request.url.path, status, request_id, dur_ms)
             try:
                 if response is not None:
-                    response.headers["x-request-id"] = rid
+                    response.headers["x-request-id"] = request_id
             except Exception:
                 pass
 
-    # CORS (wide open for dev)
+    # CORS (configurable)
+    raw_origins = os.getenv("CORS_ORIGINS", "*").strip()
+    allow_origins = ["*"] if raw_origins == "*" else [o.strip() for o in raw_origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allow_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Mount static assets for SPA (optional convenience; router also serves "/")
+    # Static mounts
     if FRONTEND_DIR.exists():
-        assets = FRONTEND_DIR / "assets"
-        if assets.exists():
-            app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
-        index_file = FRONTEND_DIR / "index.html"
-
-        # Static mounts
         if ASSETS_DIR.exists():
             app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
-
         if STATIC_DIR.exists():
             app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
         if LANG_DIR.exists():
             app.mount("/lang", StaticFiles(directory=str(LANG_DIR)), name="lang")
-            # Serve translations.js at /translations.js (root of frontend or inside /static)
-            @app.get("/translations.js", include_in_schema=False)
-            async def serve_translations_js():
-                cand = FRONTEND_DIR / "translations.js"
-                if cand.exists():
-                    return FileResponse(str(cand))
-                cand2 = STATIC_DIR / "translations.js"
-                if cand2.exists():
-                    return FileResponse(str(cand2))
-                return Response(status_code=404)
 
-        if index_file.exists():
+        @app.get("/translations.js", include_in_schema=False)
+        async def serve_translations_js():
+            cand = FRONTEND_DIR / "translations.js"
+            if cand.exists():
+                return FileResponse(str(cand))
+            cand2 = STATIC_DIR / "translations.js"
+            if cand2.exists():
+                return FileResponse(str(cand2))
+            return Response(status_code=404)
+
+        if INDEX_HTML.exists():
             @app.get("/", include_in_schema=False)
             async def root_index():
-                # If you prefer the router's "/" handler, delete this endpoint.
-                return FileResponse(str(index_file))
-        logger.info(f"Frontend dir: {FRONTEND_DIR} (exists={FRONTEND_DIR.exists()})")
+                return FileResponse(str(INDEX_HTML))
+        logger.info("Frontend dir: %s (exists=%s)", FRONTEND_DIR, True)
     else:
-        logger.warning(f"Frontend dir not found at {FRONTEND_DIR}")
+        logger.warning("Frontend dir not found at %s", FRONTEND_DIR)
 
-    # API routes (all endpoints live in app/api/router.py)
+    # API routes
     app.include_router(api_router)
 
     return app
+
 
 app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    # Pass the app object to avoid module-name confusion
-    uvicorn.run(app, host="0.0.0.0", port=8899, reload=False)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8899"))
+    reload = os.getenv("RELOAD", "false").lower() == "true"
+    uvicorn.run(app, host=host, port=port, reload=reload)

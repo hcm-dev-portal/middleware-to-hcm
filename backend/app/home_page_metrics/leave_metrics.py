@@ -1,11 +1,3 @@
-
-
-
-"""
-DO NOT MODIFY - Chiuzu 08/27/2025
-"""
-# ---------- Dashboard Data SQL builders (metrics / trend) ----------
-
 def _sql_leave_metrics(as_of: str) -> str:
     return f"""
 WITH params AS (
@@ -36,10 +28,14 @@ leave_src AS (
   FROM dbo.ATDLEAVEDATA
 ),
 on_leave_day AS (
-  SELECT l.PERSONID, l.DEPARTMENTID, l.ATTENDANCETYPE AS [type], l.EDATE
+  SELECT 
+    l.PERSONID,
+    l.DEPARTMENTID,
+    l.ATTENDANCETYPE AS type_code,
+    l.EDATE
   FROM leave_src l
-  CROSS JOIN params p
-  WHERE l.SDATE <= p.asOf AND l.EDATE >= p.asOf
+  CROSS JOIN params p0
+  WHERE l.SDATE <= p0.asOf AND l.EDATE >= p0.asOf
 ),
 pending_reqs AS (
   SELECT COUNT(*) AS cnt
@@ -48,13 +44,13 @@ pending_reqs AS (
 ),
 upcoming_next7 AS (
   SELECT
-    l.PERSONID AS person_id,
-    l.ATTENDANCETYPE AS [type],
-    l.SDATE AS start_date,
-    l.EDATE AS end_date
+    l.PERSONID                AS person_id,
+    l.ATTENDANCETYPE          AS type_code,
+    l.SDATE                   AS start_date,
+    l.EDATE                   AS end_date
   FROM leave_src l
-  CROSS JOIN params p
-  WHERE l.SDATE BETWEEN DATEADD(day, 1, p.asOf) AND DATEADD(day, 7, p.asOf)
+  CROSS JOIN params p0
+  WHERE l.SDATE BETWEEN DATEADD(day, 1, p0.asOf) AND DATEADD(day, 7, p0.asOf)
 ),
 dept_summary AS (
   SELECT DEPARTMENTID AS department_id, COUNT(*) AS [count]
@@ -92,17 +88,25 @@ SELECT
       (SELECT low_cnt FROM low_balance)                 AS low_balance_count,
       (SELECT ISNULL(total_hours,0) FROM overtime_week) AS overtime_hours,
       (SELECT ISNULL(people,0) FROM overtime_week)      AS overtime_people,
+
+      -- IDs only; Python will enrich with names/cardnum
       (SELECT TOP (50)
-         PERSONID AS person_id, [type], CONVERT(date, EDATE) AS end_date
+         PERSONID                 AS person_id,
+         type_code,
+         CONVERT(date, EDATE)     AS end_date
        FROM on_leave_day
        ORDER BY PERSONID
        FOR JSON PATH)                                   AS on_leave_details,
+
       (SELECT
-         person_id, CONVERT(date, start_date) AS start_date,
-         CONVERT(date, end_date)   AS end_date, [type]
+         person_id,
+         type_code,
+         CONVERT(date, start_date) AS start_date,
+         CONVERT(date, end_date)   AS end_date
        FROM upcoming_next7
        ORDER BY start_date, person_id
        FOR JSON PATH)                                   AS upcoming_leave,
+
       (SELECT department_id, [count]
        FROM dept_summary
        ORDER BY [count] DESC
@@ -110,6 +114,7 @@ SELECT
     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
   ) AS metrics;
 """
+
 
 
 def _sql_leave_trend(as_of: str, days: int) -> str:
@@ -127,6 +132,7 @@ s(d) AS (
 ),
 leave_src AS (
   SELECT
+    PERSONID,
     COALESCE(
       COALESCE(TRY_CONVERT(date, STARTDATE, 112), TRY_CONVERT(date, STARTDATE, 23), TRY_CONVERT(date, STARTDATE)),
       COALESCE(TRY_CONVERT(date, WORKDATE, 112),  TRY_CONVERT(date, WORKDATE, 23),  TRY_CONVERT(date, WORKDATE))
@@ -134,17 +140,47 @@ leave_src AS (
     COALESCE(
       COALESCE(TRY_CONVERT(date, ENDDATE, 112), TRY_CONVERT(date, ENDDATE, 23), TRY_CONVERT(date, ENDDATE)),
       COALESCE(TRY_CONVERT(date, WORKDATE, 112), TRY_CONVERT(date, WORKDATE, 23), TRY_CONVERT(date, WORKDATE))
-    ) AS EDATE
+    ) AS EDATE,
+    ATTENDANCETYPE
   FROM dbo.ATDLEAVEDATA
 ),
-counts AS (
-  SELECT s.d AS [date],
-         (SELECT COUNT(*) FROM leave_src l WHERE l.SDATE <= s.d AND l.EDATE >= s.d) AS [count]
+daily_leave_details AS (
+  SELECT 
+    s.d AS [date],
+    l.PERSONID       AS person_id,
+    l.ATTENDANCETYPE AS type_code
   FROM s
+  LEFT JOIN leave_src l ON l.SDATE <= s.d AND l.EDATE >= s.d
+  WHERE l.PERSONID IS NOT NULL
+),
+counts AS (
+  SELECT 
+    [date],
+    COUNT(*) AS [count],
+    (SELECT 
+       person_id,
+       type_code
+     FROM daily_leave_details d2 
+     WHERE d2.[date] = daily_leave_details.[date]
+     FOR JSON PATH) AS people_on_leave
+  FROM daily_leave_details
+  GROUP BY [date]
+),
+all_dates AS (
+  SELECT 
+    s.d AS [date],
+    COALESCE(c.[count], 0) AS [count],
+    COALESCE(c.people_on_leave, '[]') AS people_on_leave
+  FROM s
+  LEFT JOIN counts c ON c.[date] = s.d
 )
 SELECT 1 AS success,
-       (SELECT CONVERT(date, [date]) AS [date], [count]
-        FROM counts ORDER BY [date]
+       (SELECT 
+          CONVERT(date, [date]) AS [date], 
+          [count],
+          JSON_QUERY(people_on_leave) AS people_on_leave
+        FROM all_dates 
+        ORDER BY [date]
         FOR JSON PATH) AS trend
 OPTION (MAXRECURSION 200);
 """

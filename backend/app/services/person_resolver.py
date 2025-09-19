@@ -1,12 +1,17 @@
 # backend/app/services/person_resolver.py
+from __future__ import annotations
+
 import os
 import json
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any, Tuple
 from app.services.db_service import SQLServerDatabaseService, DatabaseQueryError
 
 logger = logging.getLogger(__name__)
 
+# ------------------------------
+# Helpers
+# ------------------------------
 def _coalesce_str(*vals) -> Optional[str]:
     for v in vals:
         if v is None:
@@ -18,18 +23,21 @@ def _coalesce_str(*vals) -> Optional[str]:
 
 def _format_name(row: Dict[str, Optional[str]]) -> str:
     """
-    Priority:
+    Display name priority (within one table: dbo.PSNACCOUNT):
       1) TRUENAME
-      2) FIRST + MIDDLE + LAST (collapsed)
+      2) FIRSTNAME + MIDDLENAME + LASTNAME (collapsed, skipping empties)
       3) ENGNAME
       4) EMPLOYEEID
       5) PERSONID
     """
-    full_en = " ".join([p for p in [
-        (row.get("FIRSTNAME") or "").strip(),
-        (row.get("MIDDLENAME") or "").strip(),
-        (row.get("LASTNAME") or "").strip(),
-    ] if p])
+    full_en = " ".join(
+        p for p in [
+            (row.get("FIRSTNAME") or "").strip(),
+            (row.get("MIDDLENAME") or "").strip(),
+            (row.get("LASTNAME") or "").strip(),
+        ]
+        if p
+    )
     return _coalesce_str(
         row.get("TRUENAME"),
         full_en if full_en else None,
@@ -38,17 +46,29 @@ def _format_name(row: Dict[str, Optional[str]]) -> str:
         row.get("PERSONID"),
     ) or (row.get("PERSONID") or "")
 
+# ------------------------------
+# Resolver (PSNACCOUNT-only)
+# ------------------------------
 class PersonResolver:
     """
-    Resolve PERSONID -> display info via:
+    Resolve PERSONID -> display info using only dbo.PSNACCOUNT.
+
+    Resolution order:
       1) in-memory cache
-      2) local JSON index (optional)
-      3) DB fallback (batch)
-    Tries these person sources (if present): dbo.PSNACCOUNT, dbo.PSNACCOUNT_D, dbo.BIPSNACCOUNTSP
+      2) local JSON index (optional) — supports fields: person_id, name, employee_id, email, cardnum
+      3) DB batch lookup in dbo.PSNACCOUNT
+
+    Returned dict per person_id:
+      {
+        "person_id": str,
+        "name": str | None,          # from TRUENAME / name parts / ENGNAME
+        "employee_id": str | None,   # EMPLOYEEID
+        "email": str | None,         # COMPANYEMAIL
+        "cardnum": str | None        # CARDNUM  (new)
+      }
     """
 
-    # keep generous but under SQL Server param limit (2100) with buffer
-    _BATCH_SIZE = 1000
+    _BATCH_SIZE = 1000  # keep well under 2100 param limit
 
     def __init__(
         self,
@@ -64,15 +84,18 @@ class PersonResolver:
 
         # detect once per process
         self._table_exists_cache: Dict[str, bool] = {}
+        self._have_psnaccount = self._table_exists("dbo", "PSNACCOUNT")
+        if not self._have_psnaccount:
+            logger.warning("dbo.PSNACCOUNT not found. PersonResolver will only serve from cache/local index.")
         self._load_local_index()
 
     # ---------- public ----------
 
     def resolve(self, person_id: str) -> Dict[str, Optional[str]]:
-        """Resolve one PERSONID to {'person_id','name','employee_id','email'}."""
+        """Resolve a single PERSONID."""
         pid = (person_id or "").strip()
         if not pid:
-            return {"person_id": person_id, "name": None, "employee_id": None, "email": None}
+            return {"person_id": person_id, "name": None, "employee_id": None, "email": None, "cardnum": None}
 
         # 1) cache
         hit = self.cache.get(pid)
@@ -80,14 +103,22 @@ class PersonResolver:
             return hit
 
         # 2) local index
-        if pid in self._local_index:
-            info = self._local_index[pid]
+        li = self._local_index.get(pid)
+        if li:
+            # normalize/ensure required keys
+            info = {
+                "person_id": pid,
+                "name": li.get("name"),
+                "employee_id": li.get("employee_id"),
+                "email": li.get("email"),
+                "cardnum": li.get("cardnum"),
+            }
             self._cache_put(pid, info)
             return info
 
         # 3) DB
         results = self.resolve_many([pid])
-        return results.get(pid, {"person_id": pid, "name": pid, "employee_id": None, "email": None})
+        return results.get(pid, {"person_id": pid, "name": pid, "employee_id": None, "email": None, "cardnum": None})
 
     def resolve_many(self, person_ids: List[str]) -> Dict[str, Dict[str, Optional[str]]]:
         """Batch resolve. Returns {person_id: {...}} for only the input IDs."""
@@ -103,19 +134,27 @@ class PersonResolver:
             if pid in self.cache:
                 out[pid] = self.cache[pid]
             elif pid in self._local_index:
-                out[pid] = self._local_index[pid]
-                self._cache_put(pid, out[pid])
+                li = self._local_index[pid]
+                info = {
+                    "person_id": pid,
+                    "name": li.get("name"),
+                    "employee_id": li.get("employee_id"),
+                    "email": li.get("email"),
+                    "cardnum": li.get("cardnum"),
+                }
+                out[pid] = info
+                self._cache_put(pid, info)
             else:
                 remaining.append(pid)
 
-        if not remaining:
+        if not remaining or not self._have_psnaccount:
             return out
 
-        # 2) DB batch in chunks to avoid 2100 param limit
+        # 2) DB batch in chunks
         fetched: Dict[str, Dict[str, Optional[str]]] = {}
         for i in range(0, len(remaining), self._BATCH_SIZE):
             chunk = remaining[i:i + self._BATCH_SIZE]
-            for row in self._fetch_from_db(chunk):
+            for row in self._fetch_from_psnaccount(chunk):
                 pid = row.get("PERSONID")
                 if not pid:
                     continue
@@ -123,7 +162,8 @@ class PersonResolver:
                     "person_id": pid,
                     "name": _format_name(row),
                     "employee_id": row.get("EMPLOYEEID"),
-                    "email": row.get("COMPANYEMAIL") or row.get("EMAIL") or None,
+                    "email": row.get("COMPANYEMAIL") or None,
+                    "cardnum": row.get("CARDNUM") or None,
                 }
                 fetched[pid] = info
 
@@ -135,7 +175,7 @@ class PersonResolver:
         # 3) fill misses with bare fallback
         for pid in remaining:
             if pid not in out:
-                out[pid] = {"person_id": pid, "name": pid, "employee_id": None, "email": None}
+                out[pid] = {"person_id": pid, "name": pid, "employee_id": None, "email": None, "cardnum": None}
                 self._cache_put(pid, out[pid])
 
         return out
@@ -152,6 +192,7 @@ class PersonResolver:
             "local_index_size": len(self._local_index),
             "storage_dir": self.storage_dir,
             "db_connected": ok,
+            "psnaccount_present": self._have_psnaccount,
         }
 
     # ---------- internals ----------
@@ -165,8 +206,17 @@ class PersonResolver:
 
     def _load_local_index(self):
         """
-        Optionally load a lightweight people index:
-            { "P000123": {"person_id":"P000123","name":"王小明","employee_id":"E123","email":"x@corp"} , ... }
+        Optional people index JSON structure:
+          {
+            "P000123": {
+              "person_id": "P000123",
+              "name": "王小明",
+              "employee_id": "E123",
+              "email": "x@corp",
+              "cardnum": "12345678"
+            },
+            ...
+          }
         """
         try:
             idx_path = os.path.join(self.storage_dir, "people_index.json")
@@ -174,7 +224,22 @@ class PersonResolver:
                 with open(idx_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    self._local_index = data
+                    # normalize entries defensively
+                    normalized = {}
+                    for k, v in data.items():
+                        if not isinstance(v, dict):
+                            continue
+                        pid = (v.get("person_id") or k or "").strip()
+                        if not pid:
+                            continue
+                        normalized[pid] = {
+                            "person_id": pid,
+                            "name": v.get("name"),
+                            "employee_id": v.get("employee_id"),
+                            "email": v.get("email"),
+                            "cardnum": v.get("cardnum"),
+                        }
+                    self._local_index = normalized
                     logger.info("Loaded people_index.json with %d entries", len(self._local_index))
         except Exception as e:
             logger.warning("Failed loading people_index.json: %s", e)
@@ -196,55 +261,40 @@ class PersonResolver:
         self._table_exists_cache[key] = exists
         return exists
 
-    def _fetch_from_db(self, person_ids: List[str]) -> List[Dict[str, Optional[str]]]:
+    def _fetch_from_psnaccount(self, person_ids: List[str]) -> List[Dict[str, Optional[str]]]:
         """
-        Batch fetch using any available person table.
-        We try in this order and fill only missing IDs at each step:
-          1) dbo.PSNACCOUNT
-          2) dbo.PSNACCOUNT_D
-          3) dbo.BIPSNACCOUNTSP
+        Batch fetch from dbo.PSNACCOUNT only.
+        Columns used:
+          PERSONID, TRUENAME, CARDNUM, EMPLOYEEID, COMPANYEMAIL, FIRSTNAME, MIDDLENAME, LASTNAME, ENGNAME
         """
-        targets: List[Tuple[str, List[str]]] = []
+        if not person_ids:
+            return []
 
-        # Common columns across sources (safe set)
-        base_cols = ["PERSONID", "TRUENAME", "EMPLOYEEID"]
-        extraname_cols = ["FIRSTNAME", "MIDDLENAME", "LASTNAME", "ENGNAME"]
-        email_cols = ["COMPANYEMAIL"]
+        cols = [
+            "PERSONID",
+            "TRUENAME",
+            "CARDNUM",
+            "EMPLOYEEID",
+            "COMPANYEMAIL",
+            "FIRSTNAME",
+            "MIDDLENAME",
+            "LASTNAME",
+            "ENGNAME",
+        ]
 
-        have_psn = self._table_exists("dbo", "PSNACCOUNT")
-        have_psn_d = self._table_exists("dbo", "PSNACCOUNT_D")
-        have_bi = self._table_exists("dbo", "BIPSNACCOUNTSP")
-
-        if have_psn:
-            targets.append(("dbo.PSNACCOUNT", base_cols + extraname_cols + email_cols))
-        if have_psn_d:
-            targets.append(("dbo.PSNACCOUNT_D", base_cols + extraname_cols + email_cols))
-        if have_bi:
-            # BI snapshot usually lacks email/name parts beyond TRUENAME
-            targets.append(("dbo.BIPSNACCOUNTSP", base_cols))  # keep minimal and safe
-
-        remaining = set(person_ids)
-        results: Dict[str, Dict[str, Optional[str]]] = {}
-
-        for full_table, cols in targets:
-            if not remaining:
-                break
-            # Only query what's still missing
-            todo = list(remaining)
-            placeholders = ",".join(["?"] * len(todo))
-            sql = f"SELECT {', '.join(cols)} FROM {full_table} WHERE PERSONID IN ({placeholders})"
+        out: List[Dict[str, Optional[str]]] = []
+        remaining = [str(p).strip() for p in person_ids if p and str(p).strip()]
+        for i in range(0, len(remaining), self._BATCH_SIZE):
+            chunk = remaining[i:i + self._BATCH_SIZE]
+            placeholders = ",".join(["?"] * len(chunk))
+            sql = f"SELECT {', '.join(cols)} FROM dbo.PSNACCOUNT WHERE PERSONID IN ({placeholders})"
             try:
-                rows, headers = self.db.run_select(sql, params=tuple(todo), max_rows=10_000)
+                rows, headers = self.db.run_select(sql, params=tuple(chunk), max_rows=10_000)
                 for r in rows:
-                    row = dict(zip(headers, r))
-                    pid = row.get("PERSONID")
-                    if pid:
-                        results[pid] = row
-                        if pid in remaining:
-                            remaining.remove(pid)
+                    out.append(dict(zip(headers, r)))
             except DatabaseQueryError as e:
-                logger.warning("%s lookup failed: %s", full_table, e)
+                logger.warning("PSNACCOUNT lookup failed: %s", e)
             except Exception as e:
-                logger.error("%s lookup unexpected error: %s", full_table, e)
+                logger.error("PSNACCOUNT lookup unexpected error: %s", e)
 
-        return list(results.values())
+        return out
