@@ -1,0 +1,21 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+dotenv = "*"
+boto3 = "*"
+langchain-openai = "*"
+sentence-transformers = "*"
+pyodbc = "*"
+uvicorn = "*"
+python-docx = "*"
+fastapi = "*"
+langdetect = "*"
+langchain = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.13"
