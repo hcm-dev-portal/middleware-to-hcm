@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- i18n runtime (must be present) -->
+  <!-- ✅ Your i18n runtime -->
   <script src="./translations.js"></script>
 
   <style>
@@ -72,13 +72,13 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3m2 5.3a10 10 0 01-18.8 4.2"/></svg>
             </button>
 
-            <!-- Request Leave -->
+            <!-- Request Leave Button -->
             <button id="request-leave-btn" class="flex items-center space-x-2 bg-green-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-green-700 transition duration-300" onclick="window.location.href='leave_page.html'">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-              <span data-i18n="buttons.request_leave">Request Leave</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                <span data-i18n="buttons.request_leave">Request Leave</span>
             </button>
 
-            <!-- Generate Report -->
+            <!-- Generate Report Button - Now redirects to separate page -->
             <button id="generate-report-btn" class="flex items-center space-x-2 bg-purple-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-purple-700 transition duration-300" onclick="window.location.href='generate_report.html'">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
               <span data-i18n="buttons.generate_report">Generate Report</span>
@@ -90,7 +90,7 @@
               <span id="ask-ai-label" data-i18n="buttons.ask_ai">Ask AI</span>
             </button>
 
-            <!-- Global Language Selector -->
+            <!-- ✅ Global Language Selector -->
             <select id="global-lang" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none" aria-label="Language">
               <option value="en-US">English (US)</option>
               <option value="zh-TW">中文（繁體）</option>
@@ -100,7 +100,7 @@
           </div>
         </header>
 
-        <!-- Database / Status banners appear here -->
+        <!-- Database Status -->
         <div id="db-status" class="mt-6 mb-4"></div>
 
         <!-- Dashboard Widgets -->
@@ -186,11 +186,10 @@
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
           <!-- Who's out -->
           <div class="bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-1 flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4 flex items-center justify-between">
               <span data-i18n="sections.whos_out">Who's Out Today</span>
-              <span class="text-xs font-normal text-gray-500" id="leave-list-date">--</span>
+              <span class="text-xs font-normal text-gray-500" id="leave-list-date">Loading...</span>
             </h3>
-            <p class="text-xs text-gray-400 mb-4" data-i18n="sections.whos_out_hint">Showing names, IDs, and departments</p>
             <div id="leave-list" class="space-y-3">
               <div class="loading-shimmer h-12 rounded"></div>
               <div class="loading-shimmer h-12 rounded"></div>
@@ -199,10 +198,7 @@
 
           <!-- Leave Trends -->
           <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-1 flex items-center justify-between">
-              <span data-i18n="sections.leave_trends">Leave Trends (Last 7 Days)</span>
-              <span id="trend-range" class="text-xs font-normal text-gray-500">--</span>
-            </h3>
+            <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.leave_trends">Leave Trends (Last 7 Days)</h3>
             <div class="h-64">
               <canvas id="leaveTrendChart"></canvas>
             </div>
@@ -242,6 +238,7 @@
           </div>
         </div>
         <div class="flex items-center gap-2">
+          <!-- ❌ Language select moved out; only a close button remains -->
           <button id="close-panel-btn" class="p-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:bg-slate-100" aria-label="Close" data-i18n="buttons.close" data-i18n-type="title">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -251,7 +248,7 @@
       <div class="flex-1 flex flex-col p-4 gap-4 overflow-hidden">
         <div id="results" class="flex-1 bg-white border border-slate-200 rounded-lg p-3 overflow-y-auto custom-scrollbar">
           <div id="placeholder" class="text-slate-500 text-sm h-full flex flex-col justify-center items-center text-center">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-slate-400 mb-4"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-slate-400 mb-4"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1 1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
             <p id="ph-title" class="font-semibold" data-i18n="assistant.placeholder_title">Try asking about leave data</p>
             <p id="ph-sub" class="mt-1" data-i18n="assistant.examples_title">Examples:</p>
             <div class="mt-2 space-y-2">
@@ -291,7 +288,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // i18n boot
   // ---------------------------
   const i18n = new window.TranslationManager();
-  await i18n.init('en-US'); // loads packs & restores last selection (inside TranslationManager)
+  await i18n.init('en-US'); // Loads lang packs & restores last selection from localStorage (inside your TranslationManager)
 
   // ---------------------------
   // API config
@@ -309,7 +306,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let refreshInterval;
 
   // ---------------------------
-  // Error Manager (banners)
+  // Error Manager (non-blocking banners)
   // ---------------------------
   const ErrorManager = {
     activeErrors: new Map(),
@@ -363,11 +360,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const openAiBtn   = document.getElementById('ai-dock-btn');
   const closeAiBtn  = document.getElementById('close-panel-btn');
 
-  const refreshBtn       = document.getElementById('refresh-btn');
-  const lastUpdateLabel  = document.getElementById('last-update'); // "Last updated:"
-  const lastUpdateTimeEl = document.getElementById('last-update-time');
-  const refreshHealthBtn = document.getElementById('refresh-health');
-  const globalLangSel    = document.getElementById('global-lang');
+  const refreshBtn      = document.getElementById('refresh-btn');
+  const lastUpdateEl    = document.getElementById('last-update'); // single span in header
+  const refreshHealthBtn= document.getElementById('refresh-health');
+  const globalLangSel   = document.getElementById('global-lang'); // language selector in main header (if present)
 
   // Assistant panel
   const healthBadge   = document.getElementById('health-badge');
@@ -390,6 +386,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]
     ));
   }
+  function banner(msg, kind='error') {
+    if (kind === 'error') ErrorManager.showError(msg, 'api');
+    else ErrorManager.showWarning(msg, 'info');
+  }
   function formatDate(dateStr) {
     if (!dateStr) return i18n.t('common.na') || 'N/A';
     try {
@@ -403,60 +403,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       return dateStr;
     }
   }
-  function formatYMD(d) {
-    if (!d) return '--';
-    try { return i18n.formatDate(new Date(d), { year:'numeric', month:'short', day:'numeric' }); }
-    catch { return d; }
-  }
   function updateLastUpdateTime() {
     const now = new Date();
     const time = i18n.formatTime(now, { hour: '2-digit', minute: '2-digit' });
-    const tpl = i18n.t('header.last_updated'); // preferred "Last updated: {time}"
-    lastUpdateLabel.textContent = tpl ? tpl.replace('{time}', '') : (i18n.t('header.last_updated_prefix') || 'Last updated:');
-    lastUpdateTimeEl.textContent = time;
+    // Prefer template "Last updated: {time}" if available
+    const tpl = i18n.t('header.last_updated');
+    lastUpdateEl.textContent = tpl ? tpl.replace('{time}', time) : `Last updated: ${time}`;
   }
-  function decodeJsonField(val, fallback = []) {
-    if (val == null) return fallback;
-    if (Array.isArray(val) || typeof val === 'object') return val;
-    try { return JSON.parse(val); } catch { return fallback; }
-  }
-  function processLeaveData(raw) {
-    const out = { ...raw };
-    out.metrics = decodeJsonField(out.metrics, {});
-    if (out.metrics) {
-      out.metrics.on_leave_details    = decodeJsonField(out.metrics.on_leave_details, []);
-      out.metrics.upcoming_leave      = decodeJsonField(out.metrics.upcoming_leave, []);
-      out.metrics.department_summary  = decodeJsonField(out.metrics.department_summary, []);
-    }
-    return out;
-  }
-  function getDisplayName(p) {
-    return p?.person_name || p?.name || p?.employee_id || p?.cardnum || p?.person_id || 'Unknown';
-  }
-  function initialsFrom(name) {
-    const n = (name || '').trim();
-    if (!n) return '??';
-    try {
-      if (window.Intl && typeof Intl.Segmenter === 'function') {
-        const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-        const it = seg.segment(n)[Symbol.iterator]();
-        const first = it.next().value?.segment || n[0];
-        return first.toUpperCase();
-      }
-    } catch {}
-    return n[0].toUpperCase();
-  }
-  function leaveTypeText(item) {
-    return item?.type_label || item?.type_code || (i18n?.t?.('leave_types.unknown') || 'Leave');
-  }
-  function personIdBadge(item) {
-    if (item?.employee_id) return `ID: ${escapeHtml(String(item.employee_id))}`;
-    if (item?.cardnum)     return `Card: ${escapeHtml(String(item.cardnum))}`;
-    return '';
-  }
-  function safeDept(item) {
-    return item?.department_name || item?.department || item?.department_id || '';
-  }
+
+  // ---------------------------
+  // Panel open/close
+  // ---------------------------
+  const openPanel  = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
+  const closePanel = () => { mainContent.style.width = '100%'; aiPanel.style.transform = 'translateX(100%)'; };
+  openAiBtn?.addEventListener('click', openPanel);
+  closeAiBtn?.addEventListener('click', closePanel);
 
   // ---------------------------
   // Charts
@@ -490,182 +451,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   }
-  function updateLeaveTrend(trend, range) {
-    const rangeEl = document.getElementById('trend-range');
-    if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) {
-      if (rangeEl) rangeEl.textContent = '--';
-      return;
-    }
-    const labels = trend.map(t => i18n.formatDate(new Date(t.date), { month: 'short', day: 'numeric' }));
+  function updateLeaveTrend(trend) {
+    if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) return;
+    const labels = trend.map(t => i18n.formatDate(new Date(t.date), { weekday: 'short' }));
     const values = trend.map(t => Number(t.count || 0));
     leaveTrendChart.data.labels = labels;
     leaveTrendChart.data.datasets[0].data = values;
     leaveTrendChart.update();
-
-    if (rangeEl && range && range.start && range.end) {
-      rangeEl.textContent = `${formatYMD(range.start)} – ${formatYMD(range.end)}`;
-    } else if (rangeEl) {
-      rangeEl.textContent = `${formatYMD(trend[0].date)} – ${formatYMD(trend[trend.length - 1].date)}`;
-    }
-  }
-
-  // ---------------------------
-  // Data loaders
-  // ---------------------------
-  async function loadLeaveMetrics() {
-    try {
-      const url = new URL(`${API_BASE}/api/leave_data`);
-      url.searchParams.set('kind', 'metrics');
-      if (AS_OF) url.searchParams.set('as_of', AS_OF);
-      const response = await fetch(url.toString(), { credentials: 'include' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const raw = await response.json();
-      if (!raw || raw.success !== true) throw new Error('Invalid response');
-
-      // normalize
-      const data = processLeaveData(raw);
-      const m = data.metrics || {};
-
-      ErrorManager.clearError('api');
-
-      // Top metrics
-      document.getElementById('leave-today-count').textContent =
-        i18n.formatNumber(m.employees_on_leave_today ?? 0);
-      document.getElementById('pending-leave-count').textContent =
-        i18n.formatNumber(m.pending_leave_requests ?? 0);
-      document.getElementById('low-balance-count').textContent  =
-        i18n.formatNumber(m.low_balance_count ?? 0);
-      document.getElementById('overtime-hours').textContent     =
-        i18n.formatNumber(m.overtime_hours ?? 0);
-      document.getElementById('overtime-people').textContent    =
-        `${i18n.formatNumber(m.overtime_people ?? 0)} ${
-          (i18n.t && i18n.t('common.count_people'))
-            ? i18n.t('common.count_people').replace('{count}','').trim()
-            : (i18n.t && i18n.t('units.people')) || 'people'
-        }`.trim();
-
-      // "As of" date for Who's Out Today
-      const asOfLabel = raw.effective_as_of || new Date().toISOString().slice(0,10);
-      document.getElementById('leave-list-date').textContent =
-        `${(i18n.t('common.as_of') || 'As of')} ${formatYMD(asOfLabel)}`;
-
-      // Who's Out list
-      const leaveDetails = Array.isArray(m.on_leave_details) ? m.on_leave_details : [];
-      if (leaveDetails.length > 0) {
-        const names = leaveDetails.slice(0, 3).map(p => getDisplayName(p)).join(', ');
-        const extra = leaveDetails.length > 3 ? ` +${i18n.formatNumber(leaveDetails.length - 3)}` : '';
-        document.getElementById('leave-today-details').textContent = `${names}${extra}`;
-      } else {
-        document.getElementById('leave-today-details').textContent =
-          (i18n.t && i18n.t('metrics.no_one_on_leave')) || 'No one on leave';
-      }
-
-      const leaveListHtml = leaveDetails.length
-        ? leaveDetails.map(person => {
-            const name = getDisplayName(person);
-            const token = initialsFrom(name);
-            const typeText = leaveTypeText(person);
-            const idText = personIdBadge(person);
-            const deptText = safeDept(person);
-            return `
-              <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <div class="flex items-center space-x-3">
-                  <div class="w-8 h-8 bg-amber-200 rounded-full flex items-center justify-center text-amber-700 font-medium text-xs">
-                    ${escapeHtml(token)}
-                  </div>
-                  <div>
-                    <p class="text-sm font-medium text-gray-900">${escapeHtml(name)}</p>
-                    <p class="text-xs text-gray-500">
-                      ${idText}${idText && deptText ? ' · ' : ''}${deptText ? `${i18n.t('common.department') || 'Dept'}: ${escapeHtml(deptText)}` : ''}
-                    </p>
-                  </div>
-                </div>
-                <div class="text-right">
-                  <p class="text-xs text-gray-500">${escapeHtml(typeText)}</p>
-                  <p class="text-xs text-gray-400">${
-                    ((i18n.t && i18n.t('leave_types.until')) || 'Until {date}')
-                      .replace('{date}', formatDate(person.end_date))
-                  }</p>
-                </div>
-              </div>`;
-          }).join('')
-        : `<div class="text-center text-gray-500 py-8" data-i18n="sections.no_employees_on_leave">${
-            (i18n.t && i18n.t('sections.no_employees_on_leave')) || 'No employees on leave today'
-          }</div>`;
-      const leaveListEl = document.getElementById('leave-list');
-      if (leaveListEl) {
-        leaveListEl.innerHTML = leaveListHtml;
-        i18n?.updateDynamicContent?.('leave-list');
-      }
-
-      // Upcoming leave (with department)
-      const up = Array.isArray(m.upcoming_leave) ? m.upcoming_leave : [];
-      const upcomingHtml = up.length
-        ? up.map(item => {
-            const name = getDisplayName(item);
-            const typeText = leaveTypeText(item);
-            const idText = personIdBadge(item);
-            const deptText = safeDept(item);
-            return `
-              <div class="border-l-4 border-blue-400 pl-3 py-2">
-                <p class="text-sm font-medium text-gray-900">${escapeHtml(name)}</p>
-                <p class="text-xs text-gray-500">${formatDate(item.start_date)} - ${formatDate(item.end_date)}</p>
-                <div class="flex justify-between mt-1">
-                  <p class="text-xs text-gray-400">${(i18n.t && i18n.t('common.type')) || 'Type'}: ${escapeHtml(typeText)}</p>
-                  <div class="text-right text-xs text-gray-400">
-                    ${deptText ? `<div>${i18n.t('common.department') || 'Dept'}: ${escapeHtml(deptText)}</div>` : ''}
-                    ${idText ? `<div>${idText}</div>` : ''}
-                  </div>
-                </div>
-              </div>`;
-          }).join('')
-        : `<div class="text-sm text-gray-500" data-i18n="sections.no_upcoming_leave">${
-            (i18n.t && i18n.t('sections.no_upcoming_leave')) || 'No upcoming leave scheduled'
-          }</div>`;
-      const upEl = document.getElementById('upcoming-leave');
-      if (upEl) {
-        upEl.innerHTML = upcomingHtml;
-        i18n?.updateDynamicContent?.('upcoming-leave');
-      }
-
-      // Department summary
-      const dept = Array.isArray(m.department_summary) ? m.department_summary : [];
-      const deptHtml = dept.length
-        ? dept.map(d => `
-            <div class="flex justify-between items-center py-2">
-              <span class="text-sm text-gray-700">${escapeHtml(d.department_id || (i18n.t && i18n.t('common.unknown')) || 'Unknown')}</span>
-              <span class="text-sm font-medium text-gray-900">${i18n.formatNumber(d.count)} ${(i18n.t && i18n.t('leave_types.on_leave')) || 'on leave'}</span>
-            </div>`
-          ).join('')
-        : `<div class="text-sm text-gray-500" data-i18n="sections.no_department_data">${
-            (i18n.t && i18n.t('sections.no_department_data')) || 'No department data available'
-          }</div>`;
-      const deptEl = document.getElementById('dept-leave-summary');
-      if (deptEl) {
-        deptEl.innerHTML = deptHtml;
-        i18n?.updateDynamicContent?.('dept-leave-summary');
-      }
-
-      updateLastUpdateTime?.();
-
-      // Debug
-      console.log('Upcoming leave data (first 2):', up.slice(0, 2));
-    } catch (err) {
-      console.error('Failed to load leave metrics:', err);
-      ErrorManager?.showError?.(
-        ((i18n.t && i18n.t('errors.leave_metrics_failed')) || 'Leave metrics failed')
-          .replace('{status}', err.message || ''),
-        'api'
-      );
-      // Reset counters to placeholders
-      document.getElementById('leave-today-count').textContent = '--';
-      document.getElementById('pending-leave-count').textContent = '--';
-      document.getElementById('low-balance-count').textContent  = '--';
-      document.getElementById('overtime-hours').textContent     = '--';
-      document.getElementById('overtime-people').textContent    =
-        `-- ${(i18n.t && i18n.t('units.people')) || 'people'}`;
-    }
   }
 
   // ---------------------------
@@ -680,8 +472,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       ErrorManager.clearError('health');
 
-      healthBadge.textContent = ready ? (i18n.t('ai_assistant.healthy') || 'Healthy')
-                                      : (i18n.t('ai_assistant.degraded') || 'Degraded');
+      healthBadge.textContent = ready ? (i18n.t('ai_assistant.healthy') || 'Healthy') : (i18n.t('ai_assistant.degraded') || 'Degraded');
       healthBadge.className = `px-2 py-0.5 rounded-full text-white text-[10px] ${ready ? 'bg-emerald-600' : 'bg-yellow-500'}`;
 
       const parts = [
@@ -701,8 +492,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       statusDiv.innerHTML = `
         <span class="pulse-dot"></span>
         <div>
-          <div class="font-semibold">${ready ? (i18n.t('system_status.system_ready') || 'System Ready')
-                                              : (i18n.t('system_status.system_not_ready') || 'System Not Ready')}</div>
+          <div class="font-semibold">${ready ? (i18n.t('system_status.system_ready') || 'System Ready') : (i18n.t('system_status.system_not_ready') || 'System Not Ready')}</div>
           <div class="text-sm">${parts.join(' · ')}</div>
         </div>`;
       dbStatus.insertBefore(statusDiv, dbStatus.firstChild);
@@ -712,202 +502,347 @@ document.addEventListener('DOMContentLoaded', async () => {
       ErrorManager.showError(i18n.t('system_status.health_check_failed') || 'Health check failed. API not reachable.', 'health');
     }
   }
-  document.getElementById('refresh-health')?.addEventListener('click', checkHealth);
+  refreshHealthBtn?.addEventListener('click', checkHealth);
 
   // ---------------------------
-  // Trend fetch helper (DRY)
+  // Dashboard data
   // ---------------------------
-  async function fetchAndRenderTrend() {
+  async function loadLeaveMetrics() {
     try {
       const url = new URL(`${API_BASE}/api/leave_data`);
-      url.searchParams.set('kind', 'trend');
+      url.searchParams.set('kind', 'metrics');
       if (AS_OF) url.searchParams.set('as_of', AS_OF);
-      url.searchParams.set('days', TREND_DAYS);
-      const res = await fetch(url.toString(), { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.success) updateLeaveTrend(data.trend, data.effective_range);
+      const response = await fetch(url.toString());
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const data = await response.json();
+      if (!data?.success) throw new Error('Invalid response');
+
+      ErrorManager.clearError('api');
+
+      const m = data.metrics || {};
+      // Top metrics
+      document.getElementById('leave-today-count').textContent = i18n.formatNumber(m.employees_on_leave_today ?? 0);
+      document.getElementById('pending-leave-count').textContent = i18n.formatNumber(m.pending_leave_requests ?? 0);
+      document.getElementById('low-balance-count').textContent  = i18n.formatNumber(m.low_balance_count ?? 0);
+      document.getElementById('overtime-hours').textContent     = i18n.formatNumber(m.overtime_hours ?? 0);
+      document.getElementById('overtime-people').textContent    = `${i18n.formatNumber(m.overtime_people ?? 0)} ${i18n.t('common.count_people') ? i18n.t('common.count_people').replace('{count}','').trim() : i18n.t('units.people') || 'people'}`.trim();
+
+      // Today details text on card
+      const leaveDetails = m.on_leave_details || [];
+      if (leaveDetails.length > 0) {
+        const personIds = leaveDetails.slice(0, 3).map(p => String(p.person_id || '').substring(0, 6)).join(', ');
+        const extra = leaveDetails.length > 3 ? ` +${i18n.formatNumber(leaveDetails.length - 3)}` : '';
+        document.getElementById('leave-today-details').textContent = `${personIds}${extra}`;
+      } else {
+        document.getElementById('leave-today-details').textContent = i18n.t('metrics.no_one_on_leave') || 'No one on leave';
       }
+
+      // Who's out list
+      const leaveListHtml = leaveDetails.length
+        ? leaveDetails.map(person => `
+            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 bg-amber-200 rounded-full flex items-center justify-center text-amber-700 font-medium text-xs">
+                  ${String(person.person_id || '').substring(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <p class="text-sm font-medium text-gray-900">${escapeHtml(person.display_name || person.person_id || '')}</p>
+                  <p class="text-xs text-gray-500">${escapeHtml(person.type || i18n.t('leave_types.leave') || 'Leave')}</p>
+                </div>
+              </div>
+              <span class="text-xs text-gray-500">${(i18n.t('leave_types.until') || 'Until {date}').replace('{date}', formatDate(person.end_date))}</span>
+            </div>`).join('')
+        : `<div class="text-center text-gray-500 py-8" data-i18n="sections.no_employees_on_leave">${i18n.t('sections.no_employees_on_leave') || 'No employees on leave today'}</div>`;
+      document.getElementById('leave-list').innerHTML = leaveListHtml;
+      i18n.updateDynamicContent('leave-list');
+
+      // Upcoming leave
+      const up = m.upcoming_leave || [];
+      document.getElementById('upcoming-leave').innerHTML = up.length
+        ? up.map(item => `
+            <div class="border-l-4 border-blue-400 pl-3 py-2">
+              <p class="text-sm font-medium text-gray-900">${escapeHtml(item.display_name || item.person_id || '')}</p>
+              <p class="text-xs text-gray-500">${formatDate(item.start_date)} - ${formatDate(item.end_date)}</p>
+              <p class="text-xs text-gray-400">${escapeHtml(item.type || i18n.t('leave_types.leave') || 'Leave')}</p>
+            </div>`).join('')
+        : `<div class="text-sm text-gray-500" data-i18n="sections.no_upcoming_leave">${i18n.t('sections.no_upcoming_leave') || 'No upcoming leave scheduled'}</div>`;
+      i18n.updateDynamicContent('upcoming-leave');
+
+      // Department summary
+      const dept = m.department_summary || [];
+      document.getElementById('dept-leave-summary').innerHTML = dept.length
+        ? dept.map(d => `
+            <div class="flex justify-between items-center py-2">
+              <span class="text-sm text-gray-700">${escapeHtml(d.department_id || (i18n.t('common.unknown') || 'Unknown'))}</span>
+              <span class="text-sm font-medium text-gray-900">${i18n.formatNumber(d.count)} ${i18n.t('leave_types.on_leave') || 'on leave'}</span>
+            </div>`).join('')
+        : `<div class="text-sm text-gray-500" data-i18n="sections.no_department_data">${i18n.t('sections.no_department_data') || 'No department data available'}</div>`;
+      i18n.updateDynamicContent('dept-leave-summary');
+
+      updateLastUpdateTime();
     } catch (err) {
-      console.error('Trend fetch failed:', err);
+      console.error('Failed to load leave metrics:', err);
+      ErrorManager.showError(
+        (i18n.t('errors.leave_metrics_failed') || 'Leave metrics failed').replace('{status}', err.message || ''),
+        'api'
+      );
+      // Reset counters to placeholders
+      document.getElementById('leave-today-count').textContent = '--';
+      document.getElementById('pending-leave-count').textContent = '--';
+      document.getElementById('low-balance-count').textContent  = '--';
+      document.getElementById('overtime-hours').textContent     = '--';
+      document.getElementById('overtime-people').textContent    = `-- ${i18n.t('units.people') || 'people'}`;
     }
   }
 
   // ---------------------------
-  // Panel open/close
-  // ---------------------------
-  const openPanel  = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
-  const closePanel = () => { mainContent.style.width = '100%'; aiPanel.style.transform = 'translateX(100%)'; };
-  openAiBtn?.addEventListener('click', openPanel);
-  closeAiBtn?.addEventListener('click', closePanel);
-
-  // ---------------------------
-  // Refresh & scheduling
-  // ---------------------------
-  function scheduleRefresh() {
-    if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(async () => {
-      await loadLeaveMetrics().catch(err => console.error('Scheduled metrics refresh failed:', err));
-      await fetchAndRenderTrend();
-    }, 30000);
-  }
-
-  document.getElementById('refresh-btn')?.addEventListener('click', async () => {
-    const btn = document.getElementById('refresh-btn');
-    btn.classList.add('animate-spin');
-    try {
-      ErrorManager.clearAll();
-      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
-      await fetchAndRenderTrend();
-    } finally {
-      setTimeout(() => btn.classList.remove('animate-spin'), 500);
-    }
-  });
-
-  // ---------------------------
-  // Language switching
-  // ---------------------------
-  function applyLanguage(lang) {
-    i18n.switchLanguage(lang);
-    i18n.scanAndRegisterElements();
-    i18n.applyTranslations();
-    updateLastUpdateTime();
-    if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
-  }
-  const globalSel = document.getElementById('global-lang');
-  if (globalSel) {
-    globalSel.value = i18n.getCurrentLanguage();
-    globalSel.addEventListener('change', (e) => applyLanguage(e.target.value));
-  }
-  window.addEventListener('languageChanged', updateLastUpdateTime);
-
-  // ---------------------------
-  // Assistant chat (minimal)
+  // Assistant chat
   // ---------------------------
   function appendMessage(role, text) {
-    const placeholder = document.getElementById('placeholder');
-    placeholder?.classList.add('hidden');
+    placeholder.classList.add('hidden');
     const bubble = document.createElement('div');
     bubble.className = `mb-3 p-3 rounded-lg border ${role === 'user' ? 'bg-blue-50 border-blue-200 text-blue-900' : 'bg-white border-slate-200 text-slate-800'}`;
     const roleLabel = role === 'user' ? (i18n.t('ai_assistant.you') || 'You') : (i18n.t('ai_assistant.assistant') || 'Assistant');
     bubble.innerHTML = `<div class="text-xs mb-1 ${role==='user'?'text-blue-600':'text-slate-500'}">${roleLabel}</div><div class="text-sm leading-6">${escapeHtml(text)}</div>`;
-    const results = document.getElementById('results');
     results.appendChild(bubble);
     results.scrollTop = results.scrollHeight;
   }
-  function el(html) {
-    const t = document.createElement('template');
-    t.innerHTML = html.trim();
-    return t.content.firstElementChild;
-  }
-  function copyToClipboard(text) {
-    if (!text) return;
-    navigator.clipboard?.writeText(text).catch(() => {});
-  }
-  function renderAssistantCard(html) {
-    const results = document.getElementById('results');
-    const card = el(`<div class="mb-3 p-4 rounded-lg border bg-white border-slate-200 text-slate-700 text-sm leading-relaxed"></div>`);
-    card.innerHTML = html;
-    results.appendChild(card);
-    results.scrollTop = results.scrollHeight;
-    return card;
-  }
-  function classifyBackendError(data, httpStatus) {
-    const cat = (data?.error_category || "").toLowerCase();
-    const errMsg = (data?.execution_error || data?.error || "").toString();
-    const make = (category, title, advice, retry = false, backoffMs = 0) => ({ category, title, advice, retry, backoffMs, raw: errMsg });
-    if (cat) {
-      switch (cat) {
-        case "connection": return make(cat, "Can't reach the database", "Please check VPN/Network and server availability.", true, 1500);
-        case "authz":      return make(cat, "Login/permission issue", "Your DB credentials or table permissions may be incorrect.");
-        case "timeout":    return make(cat, "The query took too long", "Try narrowing the date range or filters, then retry.", true, 0);
-        case "deadlock":   return make(cat, "Database was busy", "Safe to retry the same query.", true, 800);
-        case "not_found":  return make(cat, "Field or table not found", "We’ll auto-fix the SQL; review the generated SQL if needed.", true, 0);
-        case "syntax":
-        case "semantic":   return make(cat, "The generated SQL was invalid", "We can retry and auto-fix the SQL for SQL Server.", true, 0);
-        default:           return make(cat, "Something went wrong", "You can retry or copy the details below.");
-      }
-    }
-    if (httpStatus === 429) return make('rate_limit', "Too many requests", "Please wait a moment and retry.", true, 1000);
-    if (httpStatus >= 500)  return make('server', "Server error", "Please retry. If it persists, contact support.", true, 1000);
-    if (/timeout/i.test(errMsg)) return make('timeout', "The query took too long", "Try narrower filters, then retry.", true, 0);
-    if (/login failed|denied|permission/i.test(errMsg)) return make('authz', "Login/permission issue", "Your DB credentials or table permissions may be incorrect.");
-    return make('unknown', "Something went wrong", "You can retry or copy the details below.", true, 500);
-  }
-  async function sendQuery(forcedText, fromRetry = false) {
-    const q = (forcedText ?? (queryTA.value || '')).trim();
-    if (!q) return;
-    if (!fromRetry) {
-      appendMessage('user', q);
-      queryTA.value = '';
-    }
-    const typing = document.createElement('div');
-    typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
-    typing.innerHTML = `<span class="inline-flex items-center gap-2"><span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>${i18n.t('ai_assistant.thinking') || 'Thinking...'}</span>`;
-    const resultsEl = document.getElementById('results');
-    resultsEl.appendChild(typing);
-    resultsEl.scrollTop = resultsEl.scrollHeight;
-    const payload = { query: q, lang: i18n.getCurrentLanguage() };
-    try {
-      const res = await fetch(`${API_BASE}/api/assistant/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      let data = null;
-      try { data = await res.json(); } catch { data = null; }
-      typing.remove();
-      if (res.ok && data?.success) {
-        appendMessage('assistant', data.summary || data.explanation_localized || data.explanation_english || 'Done.');
-        return;
-      }
-      const classified = classifyBackendError(data, res.status);
-      const html = `
-        <div class="flex items-start gap-3">
-          <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
-            <span class="text-red-600 text-xs">!</span>
-          </div>
-          <div class="flex-1">
-            <div class="font-medium text-slate-900">${classified.title}</div>
-            <div class="mt-1 text-slate-600">${classified.advice}</div>
-            ${classified.retry ? `<button class="mt-2 px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs hover:bg-slate-800" id="retry-btn">Retry</button>` : ''}
-          </div>
-        </div>`;
-      const card = renderAssistantCard(html);
-      if (classified.retry) {
-        card.querySelector('#retry-btn')?.addEventListener('click', async (e) => {
-          const btn = e.currentTarget;
-          btn.disabled = true;
-          btn.textContent = 'Retrying...';
-          if (classified.backoffMs) await new Promise(r => setTimeout(r, classified.backoffMs));
-          try { await sendQuery(q, true); } finally { btn.disabled = false; btn.textContent = 'Retry'; }
-        });
-      }
-    } catch (err) {
-      typing.remove();
-      const html = `
-        <div class="flex items-start gap-3">
-          <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
-            <span class="text-red-600 text-xs">!</span>
-          </div>
-          <div class="flex-1">
-            <div class="font-medium text-slate-900">Network error</div>
-            <div class="mt-1 text-slate-600">Please check your internet connection and retry.</div>
-          </div>
-        </div>`;
-      renderAssistantCard(html);
-    }
-  }
-  document.getElementById('send')?.addEventListener('click', () => sendQuery());
-  document.getElementById('query')?.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery(); });
-  document.getElementById('pending-action')?.addEventListener('click', () => {
-    openPanel();
-    queryTA.value = i18n.t('ai_assistant.example_2') || 'Show pending leave requests';
-    queryTA.focus();
+  // --- helpers ---------------------------------------------------------------
+
+function el(html) {
+  const t = document.createElement('template');
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+}
+
+function copyToClipboard(text) {
+  if (!text) return;
+  navigator.clipboard?.writeText(text).catch(() => {});
+}
+
+function renderAssistantCard(html) {
+  const card = el(`
+    <div class="mb-3 p-4 rounded-lg border bg-white border-slate-200 text-slate-700 text-sm leading-relaxed"></div>
+  `);
+  card.innerHTML = html;
+  results.appendChild(card);
+  results.scrollTop = results.scrollHeight;
+  return card;
+}
+
+function classifyBackendError(data, httpStatus) {
+  // Backend (recommended shape from our server changes)
+  //   data.execution_successful: boolean
+  //   data.execution_error: string
+  //   data.error_category: "connection" | "authz" | "timeout" | "deadlock" | "not_found" | "syntax" | "semantic" | "data" | "datatype" | "integrity" | "operational"
+  //   data.sqlstate, data.db_code, data.rid, data.generated_sql
+  // If not present, we infer from strings.
+
+  const cat = (data?.error_category || "").toLowerCase();
+  const errMsg = (data?.execution_error || data?.error || "").toString();
+  const sqlstate = data?.sqlstate || null;
+  const dbcode = data?.db_code ?? null;
+  const rid = data?.rid || null;
+  const genSql = data?.generated_sql || null;
+
+  const make = (category, title, advice, retry = false, backoffMs = 0) => ({
+    category, title, advice, retry, backoffMs, sqlstate, dbcode, rid, genSql, raw: errMsg
   });
 
+  if (cat) {
+    switch (cat) {
+      case "connection":
+        return make(cat, i18n.t('errors.db_connection_title') || "Can't reach the database",
+          i18n.t('errors.db_connection_advice') || "Please check VPN/Network and server availability.", true, 1500);
+      case "authz":
+        return make(cat, i18n.t('errors.auth_title') || "Login/permission issue",
+          i18n.t('errors.auth_advice') || "Your DB credentials or table permissions may be incorrect.");
+      case "timeout":
+        return make(cat, i18n.t('errors.timeout_title') || "The query took too long",
+          i18n.t('errors.timeout_advice') || "Try narrowing the date range or filters, then retry.", true, 0);
+      case "deadlock":
+        return make(cat, i18n.t('errors.deadlock_title') || "Database was busy",
+          i18n.t('errors.deadlock_advice') || "Safe to retry the same query.", true, 800);
+      case "not_found":
+        return make(cat, i18n.t('errors.not_found_title') || "Field or table not found",
+          i18n.t('errors.not_found_advice') || "We'll auto-fix the SQL; review the generated SQL if needed.", true, 0);
+      case "syntax":
+      case "semantic":
+        return make(cat, i18n.t('errors.sql_invalid_title') || "The generated SQL was invalid",
+          i18n.t('errors.sql_invalid_advice') || "We can retry and auto-fix the SQL for SQL Server.", true, 0);
+      case "data":
+      case "datatype":
+      case "integrity":
+        return make(cat, i18n.t('errors.data_title') || "Data/type issue",
+          i18n.t('errors.data_advice') || "We'll try to cast/convert automatically on retry.", true, 0);
+      default:
+        return make(cat, i18n.t('errors.generic_title') || "Something went wrong",
+          i18n.t('errors.generic_advice') || "You can retry or copy the details below.");
+    }
+  }
+
+  // Fallback inference by HTTP status and message text
+  if (httpStatus === 429) {
+    return make('rate_limit',
+      i18n.t('errors.rate_title') || "Too many requests",
+      i18n.t('errors.rate_advice') || "Please wait a moment and retry.", true, 1000);
+  }
+  if (httpStatus >= 500) {
+    return make('server',
+      i18n.t('errors.server_title') || "Server error",
+      i18n.t('errors.server_advice') || "Please retry. If it persists, contact support.", true, 1000);
+  }
+  if (/timeout/i.test(errMsg)) {
+    return make('timeout',
+      i18n.t('errors.timeout_title') || "The query took too long",
+      i18n.t('errors.timeout_advice') || "Try narrower filters, then retry.", true, 0);
+  }
+  if (/login failed|denied|permission/i.test(errMsg)) {
+    return make('authz',
+      i18n.t('errors.auth_title') || "Login/permission issue",
+      i18n.t('errors.auth_advice') || "Your DB credentials or table permissions may be incorrect.");
+  }
+  return make('unknown',
+    i18n.t('errors.generic_title') || "Something went wrong",
+    i18n.t('errors.generic_advice') || "You can retry or copy the details below.", true, 500);
+}
+
+function renderErrorPanel(classified, originalQuery) {
+  const title = classified.title;
+  const advice = classified.advice;
+  const rid = classified.rid ? `<span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">${classified.rid}</span>` : '';
+  const techBits = [];
+  if (classified.sqlstate) techBits.push(`SQLSTATE ${classified.sqlstate}`);
+  if (classified.dbcode !== null && classified.dbcode !== undefined) techBits.push(`DB Code ${classified.dbcode}`);
+
+  const detailsId = `err-details-${Math.random().toString(36).slice(2)}`;
+  const sqlId = `sql-details-${Math.random().toString(36).slice(2)}`;
+  const retryId = `retry-${Math.random().toString(36).slice(2)}`;
+
+  const html = `
+    <div class="flex items-start gap-3">
+      <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
+        <span class="text-red-600 text-xs">!</span>
+      </div>
+      <div class="flex-1">
+        <div class="flex items-center gap-2">
+          <div class="font-medium text-slate-900">${title}</div>
+          ${rid}
+        </div>
+        <div class="mt-1 text-slate-600">${advice}</div>
+
+        ${techBits.length ? `<div class="mt-2 text-xs text-slate-500">${techBits.join(' • ')}</div>` : ''}
+
+        <div class="mt-3 flex items-center gap-2 flex-wrap">
+          ${classified.retry ? `<button id="${retryId}" class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs hover:bg-slate-800">${i18n.t('actions.retry') || 'Retry'}</button>` : ''}
+          <button class="px-3 py-1.5 rounded-md border text-xs hover:bg-slate-50" onclick="copyToClipboard('${(classified.rid || '').replace(/'/g, "\\'")}')">${i18n.t('actions.copy_rid') || 'Copy RID'}</button>
+          ${classified.genSql ? `<button class="px-3 py-1.5 rounded-md border text-xs hover:bg-slate-50" onclick="copyToClipboard(\`${classified.genSql.replace(/`/g, '\\`')}\`)">${i18n.t('actions.copy_sql') || 'Copy SQL'}</button>` : ''}
+          <button class="px-3 py-1.5 rounded-md border text-xs hover:bg-slate-50" onclick="copyToClipboard(\`${(classified.raw || '').replace(/`/g,'\\`')}\`)">${i18n.t('actions.copy_error') || 'Copy error'}</button>
+          ${classified.genSql ? `<button class="px-3 py-1.5 rounded-md border text-xs hover:bg-slate-50" onclick="document.getElementById('${sqlId}').classList.toggle('hidden')">${i18n.t('actions.view_sql') || 'View SQL'}</button>` : ''}
+          <button class="px-3 py-1.5 rounded-md border text-xs hover:bg-slate-50" onclick="document.getElementById('${detailsId}').classList.toggle('hidden')">${i18n.t('actions.details') || 'Details'}</button>
+        </div>
+
+        ${classified.genSql ? `
+        <pre id="${sqlId}" class="hidden mt-3 overflow-x-auto rounded bg-slate-50 p-3 text-[11px] text-slate-800"><code>${classified.genSql.replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}</code></pre>` : ''}
+
+        <div id="${detailsId}" class="hidden mt-3 text-xs text-slate-600 whitespace-pre-wrap">${(classified.raw || '').slice(0, 4000)}</div>
+      </div>
+    </div>
+  `;
+
+  const card = renderAssistantCard(html);
+
+  // Wire retry
+  if (classified.retry) {
+    const btn = card.querySelector(`#${retryId}`);
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = i18n.t('actions.retrying') || 'Retrying...';
+        if (classified.backoffMs) await new Promise(r => setTimeout(r, classified.backoffMs));
+        try {
+          await sendQuery(originalQuery, /*fromRetry*/ true);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      });
+    }
+  }
+
+  return card;
+}
+
+// --- main send --------------------------------------------------------------
+
+async function sendQuery(forcedText, fromRetry = false) {
+  const q = (forcedText ?? (queryTA.value || '')).trim();
+  if (!q) return;
+
+  if (!fromRetry) {
+    appendMessage('user', q);
+    queryTA.value = '';
+  }
+
+  const typing = document.createElement('div');
+  typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
+  typing.innerHTML = `<span class="inline-flex items-center gap-2"><span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>${i18n.t('ai_assistant.thinking') || 'Thinking...'}</span>`;
+  results.appendChild(typing);
+  results.scrollTop = results.scrollHeight;
+
+  const payload = { query: q, lang: i18n.getCurrentLanguage() };
+
+  try {
+    const res = await fetch(`${API_BASE}/api/assistant/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    // Try to parse JSON even for non-2xx
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+
+    typing.remove();
+
+    if (res.ok && data?.success) {
+      appendMessage('assistant', data.summary || data.explanation_localized || data.explanation_english || (i18n.t('errors.done') || 'Done.'));
+      return;
+    }
+
+    // Structured backend error or non-OK
+    const classified = classifyBackendError(data, res.status);
+    renderErrorPanel(classified, q);
+
+  } catch (err) {
+    typing.remove();
+    // network-level failure
+    const classified = {
+      category: 'network',
+      title: i18n.t('errors.network_error_title') || 'Network error',
+      advice: i18n.t('errors.network_error_advice') || 'Please check your internet connection and retry.',
+      retry: true,
+      backoffMs: 800,
+      rid: null, sqlstate: null, dbcode: null, genSql: null, raw: String(err || '')
+    };
+    renderErrorPanel(classified, q);
+  }
+}
+
+// keep your existing bindings
+sendBtn?.addEventListener('click', () => sendQuery());
+queryTA?.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery(); });
+document.getElementById('pending-action')?.addEventListener('click', () => {
+  openPanel();
+  queryTA.value = i18n.t('ai_assistant.example_2') || 'Show pending leave requests';
+  queryTA.focus();
+});
+
+
   // ---------------------------
-  // Voice (optional)
+  // Voice
   // ---------------------------
   let recognition = null, listening = false;
   function supportsSpeech(){ return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window; }
@@ -966,8 +901,73 @@ document.addEventListener('DOMContentLoaded', async () => {
     vuBar.style.width = `${w}px`;
     setTimeout(vuTick, 80);
   }
-  document.getElementById('mic')?.addEventListener('click', startListening);
-  document.getElementById('stop')?.addEventListener('click', stopListening);
+  micBtn?.addEventListener('click', startListening);
+  stopBtn?.addEventListener('click', stopListening);
+
+  // ---------------------------
+  // Refresh & scheduling
+  // ---------------------------
+  function scheduleRefresh() {
+    if (refreshInterval) clearInterval(refreshInterval);
+    refreshInterval = setInterval(async () => {
+      await loadLeaveMetrics().catch(err => console.error('Scheduled metrics refresh failed:', err));
+      try {
+        const url = new URL(`${API_BASE}/api/leave_data`);
+        url.searchParams.set('days', TREND_DAYS);
+        const res = await fetch(url.toString());
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.success) updateLeaveTrend(data.trend);
+        }
+      } catch {}
+    }, 30000);
+  }
+
+  refreshBtn?.addEventListener('click', async () => {
+    refreshBtn.classList.add('animate-spin');
+    try {
+      ErrorManager.clearAll();
+      await Promise.all([
+        loadLeaveMetrics(),
+        checkHealth()
+      ]);
+      // trend
+      try {
+        const url = new URL(`${API_BASE}/api/leave_data`);
+        url.searchParams.set('kind', 'trend');
+        if (AS_OF) url.searchParams.set('as_of', AS_OF);
+        url.searchParams.set('days', TREND_DAYS);
+        const res = await fetch(url.toString());
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.success) updateLeaveTrend(data.trend);
+        }
+      } catch (trendError) {
+        console.error('Trend refresh failed:', trendError);
+      }
+    } finally {
+      setTimeout(() => refreshBtn.classList.remove('animate-spin'), 500);
+    }
+  });
+
+  // ---------------------------
+  // Language switching
+  // ---------------------------
+  function applyLanguage(lang) {
+    i18n.switchLanguage(lang);
+    // Global static
+    i18n.scanAndRegisterElements();
+    i18n.applyTranslations();
+    // Dynamic bits
+    updateLastUpdateTime();
+    // Reset speech (so SR picks new lang)
+    if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
+  }
+  if (globalLangSel) {
+    globalLangSel.value = i18n.getCurrentLanguage();
+    globalLangSel.addEventListener('change', (e) => applyLanguage(e.target.value));
+  }
+  window.addEventListener('languageChanged', updateLastUpdateTime);
 
   // ---------------------------
   // Init
@@ -975,16 +975,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   (async function init() {
     try {
       initializeCharts();
-
       // initial loads
-      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
-      await fetchAndRenderTrend();
+      await Promise.all([
+        loadLeaveMetrics(),
+        checkHealth()
+      ]);
 
-      // schedule live refresh
+      // trend initial
+      try {
+        const url = new URL(`${API_BASE}/api/leave_data`);
+        url.searchParams.set('kind', 'trend');
+        if (AS_OF) url.searchParams.set('as_of', AS_OF);
+        url.searchParams.set('days', TREND_DAYS);
+        const res = await fetch(url.toString());
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.success) updateLeaveTrend(data.trend);
+        }
+      } catch (err) {
+        console.error('Initial trend load failed:', err);
+      }
+
       scheduleRefresh();
       updateLastUpdateTime();
 
-      // Welcome subline details
+      // Welcome subline (kept dynamic)
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
       const dateLabel = AS_OF ? AS_OF : 'auto';
       const sub = document.getElementById('welcome-sub');
@@ -1002,7 +1017,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   })();
 
-  // Global guards
+  // ---------------------------
+  // Global error guards
+  // ---------------------------
   window.addEventListener('error', (event) => {
     console.error('Global error:', event.error);
     ErrorManager.showError('An unexpected error occurred. Please refresh the page.', 'critical');
@@ -1016,4 +1033,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 </script>
 </body>
-</html>
+</html>kind', 'trend');
+        if (AS_OF) url.searchParams.set('as_of', AS_OF);
+        url.searchParams.set('

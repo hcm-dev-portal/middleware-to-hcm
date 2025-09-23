@@ -64,7 +64,6 @@ async def lifespan(app: FastAPI):
         if VectorBootstrapper:
             app.state.vector_bootstrap = VectorBootstrapper({
                 "primary": getattr(app.state, "nlp", None),
-                # We are no longer using any legacy/original services.
             })
             try:
                 if warm_block:
@@ -78,7 +77,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.exception("Vector warmup error: %s", e)
         else:
-            # Fallback: warm via nlp service if exposed
             try:
                 if hasattr(nlp, "vector_search") and hasattr(nlp.vector_search, "warmup"):
                     logger.info("Vector warmup via NLP service starting ...")
@@ -146,6 +144,12 @@ def create_app() -> FastAPI:
             app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
         if LANG_DIR.exists():
             app.mount("/lang", StaticFiles(directory=str(LANG_DIR)), name="lang")
+
+        LEAVE_HTML = FRONTEND_DIR / "leave_page.html"
+        if LEAVE_HTML.exists():
+            @app.get("/leave", include_in_schema=False)
+            async def leave_page():
+                return FileResponse(str(LEAVE_HTML))
 
         @app.get("/translations.js", include_in_schema=False)
         async def serve_translations_js():

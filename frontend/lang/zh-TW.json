@@ -304,107 +304,151 @@
     "details": "詳細資訊"
   },
 
-  "leave": {
-      "page_title": "申請休假 - HCM AI 助理",
-      "main_title": "申請休假",
-      "main_subtitle": "在AI助理協助下提交您的休假申請",
-      "ai_ready": "AI 助理就緒",
+  "hcm": {
+      "page_title": "HCM 服務請求 - AI 助理",
+      "main_title": "HCM 服務請求",
+      "main_subtitle": "透過 AI 助理提交 HCM 請求",
+      "ai_ready": "HCM 助理已就緒",
+      
+      "employee_id": "員工編號：",
+      "login_name": "登入名稱：",
+      "status": "狀態：",
+      "services_title": "可用服務",
+      
+      "no_requests_title": "尚未提交請求",
+      "no_requests_desc": "您的 HCM 服務請求將顯示在這裡",
+      "no_requests_hint": "與 AI 助理對話以提交請求",
+      
+      "assistant_title": "HCM 助理",
+      "assistant_desc": "我將逐步協助您提交 HCM 服務請求",
+      "status_online": "線上",
+      
+      "welcome_msg": "您好！我是您的 HCM 助理。我可以協助您向 HCM 系統提交服務請求。以下是我能做的：",
+      "feature_1": "• 處理如「我需要 applyformleave 服務」等請求",
+      "feature_2": "• 根據 HCM 服務需求生成動態表單",
+      "feature_3": "• 自動處理複雜的嵌套數據結構",
+      "feature_4": "• 確保過期日期始終為最新且有效",
+      "feature_5": "• 直接向 HCM 系統提交請求",
+      "what_help": "今天您想使用哪項 HCM 服務？",
+      
+      "mic_button": "語音輸入",
+      "input_placeholder": "詢問我 HCM 服務相關問題...（例如：「我需要使用 applyformleave」、「幫我處理 createleave」）",
+      "send_button": "發送訊息",
+      
+      "suggestion_1": "「我需要 applyformleave」",
+      "suggestion_2": "「幫我處理 createleave」",
+      "suggestion_3": "「顯示 createformleave」",
+      "suggestion_4": "「我需要 checkovertime」",
+      
+      "modal_success_title": "請求已提交！",
+      "modal_success_desc": "您的 HCM 請求已成功處理。",
+      "modal_continue": "繼續",
+      
+      "you_label": "您",
+      "thinking": "助理正在思考...",
+      
+      "prepare_form": "完美！我將為您準備 {name} 表單。請檢視並根據需要修改欄位：",
+      "available_services": "以下是我可以協助您的 HCM 服務：\n\n{serviceList}\n\n請告訴我您想使用哪項服務，例如：「我需要 applyformleave」",
+      "clarification": "我可以協助您處理 HCM 服務請求。我支援這些服務：\n\n• applyformleave\n• createformleave\n• createleave\n• checkovertime\n\n您想使用哪項服務？",
+      
+      "form_cancelled": "表單已取消。還有什麼我可以幫助您的嗎？",
+      
+      "success_default": "HCM 請求提交成功！",
+      "error_default": "請求失敗",
+      "network_error": "網路錯誤：{error}。請重試。",
+      "error_processing": "我在處理您的請求時遇到困難。請重試。",
+      
+      "speech_not_supported": "此瀏覽器不支援語音識別",
+      
+      "services": {
+        "applyformleave": {
+          "name": "申請表單請假",
+          "description": "提交帶表單核准的請假請求"
+        },
+        "createformleave": {
+          "name": "建立表單請假",
+          "description": "建立請假表單但不申請"
+        },
+        "createleave": {
+          "name": "建立請假",
+          "description": "直接建立請假"
+        },
+        "checkovertime": {
+          "name": "檢查加班",
+          "description": "驗證加班資格和時數"
+        }
+      },
+      
+      "fields": {
+        "formno": "表單號碼",
+        "reason": "原因",
+        "detail": "詳細資料",
+        "employeeid": "員工編號",
+        "leavetypeid": "請假類型編號",
+        "begindate": "開始日期",
+        "begintime": "開始時間",
+        "enddate": "結束日期",
+        "endtime": "結束時間",
+        "checkdate": "檢查日期",
+        "hours": "小時數"
+      },
+      
+      "common": {
+        "submit": "提交至 HCM",
+        "preview": "更新預覽",
+        "cancel": "取消",
+        "submitting": "提交中...",
+        "success": "成功",
+        "failed": "失敗",
+        "message": "訊息",
+        "code": "代碼",
+        "raw_response": "原始回應"
+      }
+    },
+    
+    "leave": {
+      "page_title": "請假申請 - HCM AI 助理",
+      "main_title": "請假申請",
+      "main_subtitle": "透過 AI 助理提交請假申請",
+      "ai_ready": "AI 助理已就緒",
       
       "employee_id": "員工編號：",
       "department": "部門：",
       "manager": "主管：",
-      "balance_title": "休假餘額",
+      "balance_title": "請假餘額",
       "annual_leave": "年假",
       "sick_leave": "病假",
       "personal_leave": "事假",
       "emergency_leave": "緊急假",
       "days": "天",
       
-      "no_requests_title": "無進行中申請",
-      "no_requests_desc": "您的休假申請和批准狀態將顯示在此處",
-      "no_requests_hint": "開始與AI助理對話以申請休假",
+      "no_requests_title": "無進行中的請求",
+      "no_requests_desc": "您的請假申請和核准將顯示在這裡",
+      "no_requests_hint": "開始與 AI 助理對話以申請請假",
       
-      "assistant_title": "休假助理",
-      "assistant_desc": "我將協助您逐步提交休假申請",
-      "status_online": "在線",
+      "assistant_title": "請假助理",
+      "assistant_desc": "我將逐步協助您提交請假申請",
+      "status_online": "線上",
       
-      "welcome_msg": "您好，John！我在這裡協助您提交休假申請。我可以做以下事情：",
+      "welcome_msg": "您好！我在這裡協助您提交請假申請。以下是我能做的：",
       "feature_1": "• 處理自然語言請求，如「我明天需要請假」",
-      "feature_2": "• 根據您的情況協助選擇正確的休假類型",
+      "feature_2": "• 根據您的情況幫助選擇正確的請假類型",
       "feature_3": "• 檢查您的餘額並建議替代方案",
-      "feature_4": "• 指導您了解公司政策和要求",
-      "feature_5": "• 直接向HR系統提交申請",
-      "what_help": "今天我可以為您做什麼？",
+      "feature_4": "• 引導您了解公司政策和要求",
+      "feature_5": "• 直接向 HR 系統提交請求",
+      "what_help": "今天您想做什麼？",
       
       "mic_button": "語音輸入",
-      "input_placeholder": "在此輸入您的休假申請...（例如：「我下週需要請3天假去度假」）",
-      "send_button": "發送消息",
+      "input_placeholder": "在此輸入您的請假申請...（例如：「我下週需要請假3天去度假」）",
+      "send_button": "發送訊息",
       
       "suggestion_1": "「我明天需要請假」",
       "suggestion_2": "「下週度假」",
-      "suggestion_3": "「查看我的餘額」",
+      "suggestion_3": "「檢查我的餘額」",
       "suggestion_4": "「今天請病假」",
       
-      "modal_success_title": "申請已提交！",
-      "modal_success_desc": "您的休假申請已提交，正在等待批准。",
-      "modal_continue": "繼續",
-      
-      "you_label": "您",
-      "thinking": "助理正在思考...",
-      
-      "request_title": "休假申請",
-      "id_label": "編號",
-      "type_label": "類型",
-      "duration_label": "期間",
-      "dates_label": "日期",
-      "reason_label": "原因",
-      "submitted_label": "提交時間",
-      "awaiting_approval": "等待批准",
-      "status_pending": "待處理",
-      "status_approved": "已批准",
-      "status_rejected": "已拒絕",
-      "approved_by_manager": "主管已批准",
-      "rejected_by_manager": "主管已拒絕",
-      
-      "form_title": "休假申請表",
-      "form_leave_type": "休假類型",
-      "form_duration": "期間",
-      "form_start_date": "開始日期",
-      "form_end_date": "結束日期",
-      "form_reason": "原因（可選）",
-      "form_reason_placeholder": "簡要說明休假原因...",
-      "form_current_balance": "當前餘額：",
-      "form_submit": "提交申請",
-      "form_modify": "修改詳情",
-      "form_cancel": "取消",
-      
-      "full_day": "全天",
-      "half_day_morning": "半天（上午）",
-      "half_day_afternoon": "半天（下午）",
-      "multiple_days": "多天",
-      "one_day": "1天",
-      "half_day_am": "0.5天（上午）",
-      "half_day_pm": "0.5天（下午）",
-      "no_limit": "無限制",
-      
-      "error_processing": "抱歉，我現在無法處理您的請求。請重試。",
-      "balance_info": "以下是您當前的休假餘額：\n\n• 年假：15.5天\n• 病假：8.0天\n• 事假：3.0天\n\n您的餘額很充足！您想申請哪種類型的休假？",
-      "tomorrow_request": "我了解您明天需要請假。讓我協助您處理。我將準備休假申請表：",
-      "vacation_clarification": "我很樂意協助您申請度假！為了準備最佳申請，請告訴我：\n\n• 您需要請假的具體日期？\n• 總共多少天？\n• 這是年假嗎？\n• 有什麼特殊原因或場合嗎？",
-      "sick_request": "我了解您需要請病假。我將準備病假申請。注意，如果是今天的病假，通常不需要提前通知。",
-      "medical_reasons": "醫療原因",
-      "general_request": "我了解您想申請休假。我可以協助您！請您提供更多詳情：\n\n• 您需要的日期\n• 休假類型（年假、病假、事假、緊急假）\n• 期間（全天、半天、多天）\n• 原因（可選但有幫助）",
-      
-      "modify_prompt": "您想修改什麼？您可以告訴我變更內容，我將為您更新表格。",
-      "form_cancelled": "表格已取消。還有什麼我可以幫助您的？",
-      
-      "submitting": "提交中...",
-      "submitted": "已提交",
-      "submission_success": "成功！您的休假申請已提交並添加到您的申請中。\n\n申請編號：{id}\n狀態：等待主管批准\n預期回覆：24小時內\n\n您可以在側邊欄查看申請詳情。一旦主管審核申請，您將收到電子郵件通知。",
-      "submission_error": "抱歉，提交您的申請時出現錯誤。請重試，如果問題持續存在，請聯繫HR支持。",
-      
-      "approval_notification": "🎉 好消息！您的休假申請（編號：{id}）已被主管批准。\n\n您可以在側邊欄查看更新狀態。祝您假期愉快！",
-      
-      "speech_not_supported": "此瀏覽器不支持語音識別"
+      "modal_success_title": "請求已提交！",
+      "modal_success_desc": "您的請假申請已提交並等待核准。",
+      "modal_continue": "繼續"
     }
 }

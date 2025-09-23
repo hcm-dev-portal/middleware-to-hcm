@@ -33,12 +33,80 @@ def jsonable_value(v):
     return str(v)
 
 
-def safe_json_loads(s: str, default: Any = None) -> Any:
-    """Robust JSON parse that never throws (helps with noisy DB JSON)."""
-    try:
-        return json.loads(s)
-    except Exception:
-        return default
+
+
+def _safe_json_loads(val: Any) -> Any:
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return []
+    return val if isinstance(val, list) else []
+
+def _decode_json_field(val):
+    """
+    Accepts JSON string or list; always returns a list (or []).
+    """
+    return _safe_json_loads(val) or []
+
+def _collect_ids_from_rows(*rows_lists) -> tuple[list[str], list[str]]:
+    """
+    Collect BOTH person IDs and employee IDs from mixed rows.
+
+    Recognized keys:
+      - person ids: person_id, PERSONID, pid
+      - employee ids: employee_id, EMPLOYEEID, empno
+    """
+    pid_keys = {"person_id", "PERSONID", "pid"}
+    eid_keys = {"employee_id", "EMPLOYEEID", "empno"}
+
+    pids, eids = set(), set()
+    for rows in rows_lists:
+        for r in rows or []:
+            if not isinstance(r, dict):
+                continue
+            for k in pid_keys:
+                v = r.get(k)
+                if v:
+                    s = str(v).strip()
+                    if s:
+                        pids.add(s)
+                        break
+            for k in eid_keys:
+                v = r.get(k)
+                if v:
+                    s = str(v).strip()
+                    if s:
+                        eids.add(s)
+                        break
+    return list(pids), list(eids)
+
+def _apply_resolved(rows: list[dict], resolved: dict) -> list[dict]:
+    """
+    Attach 'display_name' to each row using whichever ID key is present.
+    Lookup priority: person_id -> PERSONID -> employee_id -> EMPLOYEEID -> empno
+    """
+    if not rows:
+        return []
+    out: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            out.append(r)
+            continue
+        d = dict(r)
+        lk = None
+        for key in ("person_id", "PERSONID", "employee_id", "EMPLOYEEID", "empno"):
+            if d.get(key):
+                lk = str(d[key]).strip()
+                if lk:
+                    break
+        name = None
+        if lk and lk in resolved:
+            name = resolved[lk].get("name")
+        d["display_name"] = name or d.get("TRUENAME") or d.get("ENGNAME") or lk
+        out.append(d)
+    return out
+
 
 
 # ---------------------------

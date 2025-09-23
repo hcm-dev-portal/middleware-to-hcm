@@ -1,594 +1,101 @@
 # backend/app/api/router.py
-import os
+from __future__ import annotations
+
+# =========================
+# Standard Library
+# =========================
 import json
+import logging
+import os
+import re
 import time
 import uuid
-import logging
-from typing import Dict, Any, Optional, List
-from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, PlainTextResponse
+# =========================
+# Third-Party
+# =========================
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+# =========================
+# Internal Services
+# =========================
 from app.services.data_processing.data_analyzer import DataAnalyzer
 from app.services.db_service import SQLServerDatabaseService
-
-# Import the language-native NLP service (v2)
 from app.services.nlp_service_2 import LanguageNativeNLPService
+from app.services.person_resolver import PersonResolver
+from app.services.helpers.data_utils import _apply_resolved, _collect_ids_from_rows
 
-# Report service
+# Reports service
 from app.reports.service import (
     ReportAnalysisRequest,
     ReportGenerationRequest,
     analyze_report,
+    download_report_response,
     generate_report,
-    download_report_response
+)
+
+# Leave service (new service-code-first + legacy helpers)
+from app.leave.service import (
+    HCMServiceCallRequest,
+    LeaveBalanceRequest,
+    LeaveBalanceResponse,
+    LeaveRequest,
+    LeaveResponse,
+    get_employee_leave_balance,
+    hcm_call,
+    submit_leave_request,
+    validate_leave_request,
 )
 
 logger = logging.getLogger(__name__)
 
-# Initialize once per process
+# Shared analyzer
 _type_analyzer = DataAnalyzer()
 
-# ------------------------------------------------------------------
-# Lifespan: initialize language-native NLP service only
-# ------------------------------------------------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    try:
-        db = SQLServerDatabaseService()
-        model_default = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
-        
-        # Initialize language-native NLP service
-        nlp_service = LanguageNativeNLPService(
-            db_service=db,
-            model_name=model_default,
-            temperature=0.0,
-        )
-        
-        app.state.nlp = nlp_service
-        app.state.db = db
-        
-        logger.info("App services initialized: db, language-native nlp (model=%s)", model_default)
-        
-    except Exception as e:
-        logger.exception("Service init failed: %s: %s", type(e).__name__, e)
-        raise
+# Routers
+router_main = APIRouter()
+router_leave = APIRouter(prefix="/api/leave", tags=["leave"])
 
-    try:
-        yield
-    finally:
-        logger.info("App services shutting down")
+# =========================
+# Models (local)
+# =========================
+class UserInfo(BaseModel):
+    id: str
+    account: str
+    user_name: str | None = None
+    email: str | None = None
+    mobile: str | None = None
+    is_active: bool | int | None = None
+    site_code: str | None = None
+    active_start_on: str | None = None
+    active_end_on: str | None = None
+    changed_on: str | None = None
 
-# FastAPI app + router
-app = FastAPI(lifespan=lifespan)
-router = APIRouter()
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
-def _frontend_paths():
+# =========================
+# Utilities
+# =========================
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-\.@]+$")
+
+
+def _sanitize_user_id(user_id: str) -> str:
+    if not _SAFE_ID_RE.match(user_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid user_id")
+    return user_id
+
+
+def _frontend_paths() -> tuple[Path, Path, Path, Path]:
     base_dir = Path(__file__).resolve().parents[2]
     project_root = base_dir.parent
     frontend_dir = project_root / "frontend"
     index_file = frontend_dir / "index.html"
     return base_dir, project_root, frontend_dir, index_file
 
-# ------------------------------------------------------------------
-# Static / SPA
-# ------------------------------------------------------------------
-@router.get("/", include_in_schema=False)
-async def serve_index():
-    base_dir, project_root, frontend_dir, index_file = _frontend_paths()
-    logger.info("Router=%s", Path(__file__).resolve())
-    logger.info("Frontend dir=%s index exists=%s", frontend_dir, index_file.exists())
-
-    if index_file.exists():
-        return FileResponse(str(index_file))
-    return RedirectResponse("/docs")
-
-@router.get("/dashboard", include_in_schema=False)
-async def serve_dashboard():
-    base_dir = Path(__file__).resolve().parents[2]
-    frontend_dir = base_dir / "frontend"
-    index_file = frontend_dir / "index.html"
-    if index_file.exists():
-        return FileResponse(str(index_file))
-    return RedirectResponse("/docs")
-
-@router.get("/api/ping", include_in_schema=False)
-async def ping():
-    return {"ok": True}
-
-@router.get("/leave_page.html", include_in_schema=False)
-async def serve_leave_page():
-    base_dir, project_root, frontend_dir, index_file = _frontend_paths()
-    leave_page_file = frontend_dir / "leave_page.html"
-    if leave_page_file.exists():
-        return FileResponse(str(leave_page_file))
-    return RedirectResponse("/docs")
-
-@router.get("/translations.js", include_in_schema=False)
-async def serve_translations():
-    base_dir, project_root, frontend_dir, index_file = _frontend_paths()
-    translations_file = frontend_dir / "translations.js"
-    if translations_file.exists():
-        return FileResponse(str(translations_file))
-    return PlainTextResponse("// translations.js not found", media_type="application/javascript")
-
-# ------------------------------------------------------------------
-# Reports API 
-# ------------------------------------------------------------------
-@router.post("/api/reports/analyze")
-async def reports_analyze(payload: ReportAnalysisRequest, request: Request):
-    return await analyze_report(payload, request)
-
-@router.post("/api/reports/generate")
-async def reports_generate(payload: ReportGenerationRequest, request: Request):
-    return await generate_report(payload, request)
-
-@router.get("/api/reports/download/{report_id}")
-async def reports_download(report_id: str, request: Request):
-    return download_report_response(report_id, request)
-
-@router.get("/generate_report.html", include_in_schema=False)
-async def serve_generate_report():
-    base_dir, project_root, frontend_dir, index_file = _frontend_paths()
-    generate_report_file = frontend_dir / "generate_report.html"
-    if generate_report_file.exists():
-        return FileResponse(str(generate_report_file))
-    return RedirectResponse("/docs")
-
-# ------------------------------------------------------------------
-# Leave API Routes
-# ------------------------------------------------------------------
-from app.leave.service import (
-    LeaveRequest,
-    LeaveBalanceRequest, 
-    LeaveResponse,
-    LeaveBalanceResponse,
-    submit_leave_request,
-    get_employee_leave_balance,
-    validate_leave_request
-)
-
-@router.post("/api/leave/submit", response_model=LeaveResponse)
-async def submit_leave(request: LeaveRequest):
-    """Submit a leave request to HCM system"""
-    try:
-        # Validate the request first
-        validation = await validate_leave_request(request)
-        if not validation["valid"]:
-            return LeaveResponse(
-                success=False,
-                message=f"Validation failed: {', '.join(validation['errors'])}"
-            )
-        
-        # Submit the leave request
-        result = await submit_leave_request(request)
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error submitting leave request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to submit leave request: {str(e)}")
-
-@router.post("/api/leave/balance", response_model=LeaveBalanceResponse)
-async def get_leave_balance(request: LeaveBalanceRequest):
-    """Get employee leave balance"""
-    try:
-        result = await get_employee_leave_balance(request)
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error getting leave balance: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get leave balance: {str(e)}")
-
-@router.post("/api/leave/validate")
-async def validate_leave(request: LeaveRequest):
-    """Validate a leave request without submitting"""
-    try:
-        validation = await validate_leave_request(request)
-        return {
-            "success": True,
-            "validation": validation
-        }
-        
-    except Exception as e:
-        logger.error(f"Error validating leave request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to validate leave request: {str(e)}")
-
-@router.get("/api/leave/types")
-async def get_leave_types():
-    """Get available leave types"""
-    return {
-        "success": True,
-        "leave_types": [
-            {"id": "annual", "name": "Annual Leave", "hcm_id": "19"},
-            {"id": "sick", "name": "Sick Leave", "hcm_id": "20"},
-            {"id": "personal", "name": "Personal Leave", "hcm_id": "21"},
-            {"id": "emergency", "name": "Emergency Leave", "hcm_id": "22"}
-        ]
-    }
-
-# ------------------------------------------------------------------
-# Leave Assistant API
-# ------------------------------------------------------------------
-@router.post("/api/leave/assistant/query")
-async def leave_assistant_query(request: dict):
-    """Process natural language leave requests through AI assistant"""
-    try:
-        query = request.get("query", "").strip()
-        user_id = request.get("user_id", "sa")  # Default user for testing
-        employee_id = request.get("employee_id", "A011")  # Default employee for testing
-        
-        if not query:
-            return {
-                "success": False,
-                "message": "Query cannot be empty"
-            }
-        
-        # Process the query and determine the response
-        response = await process_leave_assistant_query(query, user_id, employee_id)
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error processing assistant query: {str(e)}")
-        return {
-            "success": False,
-            "message": f"Error processing request: {str(e)}"
-        }
-
-async def process_leave_assistant_query(query: str, user_id: str, employee_id: str) -> dict:
-    """Process natural language queries for leave requests"""
-    
-    query_lower = query.lower()
-    
-    # Check balance requests
-    if any(word in query_lower for word in ["balance", "remaining", "left", "available"]):
-        try:
-            balance_request = LeaveBalanceRequest(user_id=user_id, employee_id=employee_id)
-            balance_response = await get_employee_leave_balance(balance_request)
-            
-            if balance_response.success:
-                balance_text = "\n".join([
-                    f"• {leave_type.title()} Leave: {days} days"
-                    for leave_type, days in balance_response.balances.items()
-                ])
-                
-                return {
-                    "success": True,
-                    "type": "info",
-                    "message": f"Here are your current leave balances:\n\n{balance_text}\n\nWhat type of leave would you like to request?",
-                    "data": balance_response.balances
-                }
-        except Exception as e:
-            logger.error(f"Error getting balance: {str(e)}")
-    
-    # Parse leave requests
-    leave_request_data = parse_leave_request_from_query(query, user_id, employee_id)
-    
-    if leave_request_data["needs_clarification"]:
-        return {
-            "success": True,
-            "type": "clarification",
-            "message": leave_request_data["clarification_message"],
-            "suggested_form": leave_request_data.get("form_data")
-        }
-    elif leave_request_data["can_create_form"]:
-        return {
-            "success": True,
-            "type": "form_ready",
-            "message": leave_request_data["message"],
-            "form_data": leave_request_data["form_data"]
-        }
-    else:
-        return {
-            "success": True,
-            "type": "general",
-            "message": "I can help you with your leave request. Could you provide more details about:\n\n• The dates you need off\n• Type of leave (annual, sick, personal, emergency)\n• Duration (full day, half day, multiple days)\n• Reason for leave (optional)"
-        }
-
-def parse_leave_request_from_query(query: str, user_id: str, employee_id: str) -> dict:
-    """Parse natural language query into leave request parameters"""
-    from datetime import datetime, timedelta
-    import re
-    
-    query_lower = query.lower()
-    result = {
-        "needs_clarification": False,
-        "can_create_form": False,
-        "clarification_message": "",
-        "message": "",
-        "form_data": None
-    }
-    
-    # Detect leave type
-    leave_type = "annual"  # default
-    if any(word in query_lower for word in ["sick", "illness", "medical", "doctor"]):
-        leave_type = "sick"
-    elif any(word in query_lower for word in ["personal", "family", "appointment"]):
-        leave_type = "personal"
-    elif any(word in query_lower for word in ["emergency", "urgent", "sudden"]):
-        leave_type = "emergency"
-    elif any(word in query_lower for word in ["vacation", "holiday", "annual", "pto"]):
-        leave_type = "annual"
-    
-    # Detect dates
-    start_date = None
-    end_date = None
-    duration_type = "full-day"
-    
-    # Tomorrow
-    if "tomorrow" in query_lower:
-        tomorrow = datetime.now() + timedelta(days=1)
-        start_date = tomorrow.strftime("%Y-%m-%d")
-        end_date = start_date
-        duration_type = "full-day"
-        
-        result.update({
-            "can_create_form": True,
-            "message": f"I understand you need tomorrow ({start_date}) off. Let me prepare a leave request form:",
-            "form_data": {
-                "user_id": user_id,
-                "employee_id": employee_id,
-                "leave_type": leave_type,
-                "start_date": start_date,
-                "end_date": end_date,
-                "duration_type": duration_type,
-                "reason": ""
-            }
-        })
-        return result
-    
-    # Today
-    if "today" in query_lower:
-        today = datetime.now()
-        start_date = today.strftime("%Y-%m-%d")
-        end_date = start_date
-        duration_type = "full-day"
-        
-        result.update({
-            "can_create_form": True,
-            "message": f"I understand you need today ({start_date}) off. Let me prepare a leave request form:",
-            "form_data": {
-                "user_id": user_id,
-                "employee_id": employee_id,
-                "leave_type": leave_type,
-                "start_date": start_date,
-                "end_date": end_date,
-                "duration_type": duration_type,
-                "reason": "Same-day leave request" if leave_type != "sick" else "Sick leave"
-            }
-        })
-        return result
-    
-    # Next week
-    if "next week" in query_lower:
-        result.update({
-            "needs_clarification": True,
-            "clarification_message": "I'd be happy to help you request time off next week! Could you please specify:\n\n• Which specific days (e.g., Monday-Wednesday)?\n• How many days total?\n• Is this for vacation/annual leave?\n• Any specific reason?"
-        })
-        return result
-    
-    # Half day
-    if any(phrase in query_lower for phrase in ["half day", "half-day", "morning", "afternoon"]):
-        if "morning" in query_lower or "am" in query_lower:
-            duration_type = "half-day-am"
-        elif "afternoon" in query_lower or "pm" in query_lower:
-            duration_type = "half-day-pm"
-        else:
-            duration_type = "half-day-am"  # default to morning
-    
-    # Multiple days pattern
-    days_match = re.search(r'(\d+)\s*days?', query_lower)
-    if days_match:
-        num_days = int(days_match.group(1))
-        if num_days > 1:
-            duration_type = "multiple-days"
-            result.update({
-                "needs_clarification": True,
-                "clarification_message": f"I understand you need {num_days} days off. To prepare your request, please let me know:\n\n• Starting date (YYYY-MM-DD)\n• Is this consecutive days?\n• Type of leave: {leave_type.title()} Leave\n• Any specific reason?"
-            })
-            return result
-    
-    # If we can't determine specific dates, ask for clarification
-    result.update({
-        "needs_clarification": True,
-        "clarification_message": f"I'd be happy to help you request {leave_type} leave! To prepare the best request, please provide:\n\n• Specific dates needed\n• Duration (full day, half day, multiple days)\n• Brief reason (optional)"
-    })
-    
-    return result
-
-# ------------------------------------------------------------------
-# Vector Admin
-# ------------------------------------------------------------------
-@router.post("/api/vector/reload")
-async def vector_reload(request: Request):
-    vb = getattr(request.app.state, "vector_bootstrap", None)
-    if vb is None:
-        raise HTTPException(status_code=500, detail="Vector bootstrapper missing")
-    try:
-        result = await vb.start()  # idempotent: if already started/finished, returns status
-        return {"success": True, "result": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vector reload failed: {e}")
-
-# ------------------------------------------------------------------
-# Health Check
-# ------------------------------------------------------------------
-@router.get("/api/health")
-async def health(
-    request: Request,
-    no_db: bool = Query(False),
-    no_vector: bool = Query(False),
-    warm: bool = Query(False),
-) -> Dict[str, Any]:
-    t0 = time.perf_counter()
-    out: Dict[str, Any] = {}
-
-    # Database check
-    if not no_db:
-        try:
-            t = time.perf_counter()
-            db = getattr(request.app.state, "db", None)
-            if not isinstance(db, SQLServerDatabaseService):
-                raise RuntimeError("DB service not initialized")
-            db_ok = bool(db.test_connection(login_timeout=2))
-            out["database_connection"] = db_ok
-            out["database_ms"] = int((time.perf_counter() - t) * 1000)
-            logger.info("health: db ok=%s dur=%dms", db_ok, out["database_ms"])
-        except BaseException as e:
-            out["database_connection"] = False
-            out["database_error"] = f"{type(e).__name__}: {e}"
-            logger.exception("health: db check raised %s", type(e).__name__)
-    else:
-        out["database_connection"] = None
-        out["database_skipped"] = True
-
-    # Vector bootstrap status
-    vb = getattr(request.app.state, "vector_bootstrap", None)
-    out["vector_bootstrap"] = vb.status if vb else {"available": False}
-
-    # Optional: trigger warmup from health if warm=1
-    if warm and vb:
-        try:
-            out["vector_bootstrap_after_warm"] = await vb.start()
-        except Exception as e:
-            out["vector_bootstrap_after_warm_error"] = f"{type(e).__name__}: {e}"
-
-    # Vector service status
-    if not no_vector:
-        try:
-            t = time.perf_counter()
-            nlp = getattr(request.app.state, "nlp", None)
-            
-            if nlp:
-                vector_status = nlp.vector_status()
-                out["vector_db"] = {
-                    "ready": vector_status.get("ready", False),
-                    "service_type": "language_native",
-                    **vector_status
-                }
-            else:
-                out["vector_db"] = {"ready": False, "error": "NLP service not available"}
-                
-            out["vector_ms"] = int((time.perf_counter() - t) * 1000)
-            vec_ready = bool(out["vector_db"].get("ready"))
-            logger.info("health: vector ok=%s dur=%dms", vec_ready, out["vector_ms"])
-        except BaseException as e:
-            out["vector_db"] = {"ready": False, "error": f"{type(e).__name__}: {e}"}
-            logger.exception("health: vector_status raised %s", type(e).__name__)
-    else:
-        out["vector_db"] = {"skipped": True}
-
-    # Ready flag
-    db_ok = out.get("database_connection") is True if "database_connection" in out else True
-    vec_ok = bool(out.get("vector_db", {}).get("ready", True))
-    out["ready_for_queries"] = db_ok and vec_ok
-    out["total_ms"] = int((time.perf_counter() - t0) * 1000)
-    out["services"] = {
-        "nlp_mode": "language_native",
-        "language_native_processing": True
-    }
-
-    return out
-
-# ------------------------------------------------------------------
-# Assistant Query (Simplified - Single Service)
-# ------------------------------------------------------------------
-@router.post("/api/assistant/query")
-async def assistant_query(payload: dict, request: Request):
-    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    q = (payload or {}).get("query") or ""
-    
-    t0 = time.perf_counter()
-    logger.info("rid=%s /assistant/query start len=%d", rid, len(q))
-
-    nlp = getattr(request.app.state, "nlp", None)
-    if nlp is None:
-        logger.error("rid=%s /assistant/query error: No NLP service available", rid)
-        return JSONResponse({"success": False, "error": "NLP service not available"}, status_code=200)
-
-    try:
-        data = await run_in_threadpool(nlp.process_complete_query, q, "dbo", rid)
-        
-        # Add service metadata to response
-        if isinstance(data, dict):
-            data["service_info"] = {
-                "service_type": "language_native",
-                "language_native_processing": True
-            }
-        
-        return JSONResponse({"success": True, **(data or {})})
-    except Exception as e:
-        logger.exception("rid=%s /assistant/query error: %s: %s", rid, type(e).__name__, e)
-        return JSONResponse({
-            "success": False, 
-            "error": str(e),
-            "service_info": {
-                "service_type": "language_native",
-                "error_in_service": "language_native"
-            }
-        }, status_code=200)
-    finally:
-        ms = int((time.perf_counter() - t0) * 1000)
-        logger.info("rid=%s /assistant/query done ms=%d", rid, ms)
-
-# ------------------------------------------------------------------
-# Debug Endpoints
-# ------------------------------------------------------------------
-@router.get("/debug/leave/health")
-def leave_health(request: Request):
-    """Health check for leave system."""
-    result = {}
-    
-    nlp = getattr(request.app.state, "nlp", None)
-    if nlp and getattr(nlp, "vector_search", None):
-        try:
-            result["nlp_service"] = nlp.vector_status()
-        except Exception as e:
-            result["nlp_service"] = {"ready": False, "error": str(e)}
-    else:
-        result["nlp_service"] = {"ready": False, "error": "Service not available"}
-    
-    # Try to get sanity check
-    sanity = {}
-    try:
-        if nlp:
-            backend = getattr(nlp.vector_search, "_db", None) or getattr(nlp.vector_search, "db", None)
-            if backend and hasattr(backend, "relationships_sanity_check"):
-                sanity = backend.relationships_sanity_check()
-    except Exception as e:
-        sanity = {"error": f"{type(e).__name__}: {e}"}
-    
-    result["sanity_check"] = sanity
-    result["service_type"] = "language_native"
-    
-    return result
-
-@router.get("/debug/leave/join-hints")
-def leave_join_hints(request: Request, tables: List[str] = Query(..., alias="tables")):
-    """Get join hints using NLP service."""
-    nlp = getattr(request.app.state, "nlp", None)
-    if not nlp or not getattr(nlp, "vector_search", None):
-        raise HTTPException(status_code=500, detail="NLP/Vector service not initialized")
-    try:
-        hints = nlp.vector_search.get_join_hints(tables)
-        return {
-            "tables": tables, 
-            "join_hints": hints,
-            "service_type": "language_native"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"join-hints failed: {e}")
-
-# ------------------------------------------------------------------
-# Dashboard Data Helper Functions
-# ------------------------------------------------------------------
-from app.services.person_resolver import PersonResolver
-import json
 
 def _decode_json_field(val):
     if not val:
@@ -599,6 +106,7 @@ def _decode_json_field(val):
         return json.loads(val)
     except Exception:
         return []
+
 
 def _collect_person_ids(*arrays):
     ids = set()
@@ -611,6 +119,7 @@ def _collect_person_ids(*arrays):
                 ids.add(str(pid).strip())
     return list(ids)
 
+
 def _patch_rows(rows, resolved_map):
     out = []
     for r in rows or []:
@@ -618,21 +127,16 @@ def _patch_rows(rows, resolved_map):
         info = resolved_map.get(pid, {})
         r["person_id"] = pid or None
         r["person_name"] = info.get("name") or pid or None
-        # Keep existing employee_id/email if already set; otherwise fill
         if not r.get("employee_id"):
             r["employee_id"] = info.get("employee_id")
         if not r.get("email"):
             r["email"] = info.get("email")
-        # New: cardnum
         r["cardnum"] = info.get("cardnum")
         out.append(r)
     return out
 
+
 def _apply_type_labels_to_metrics(payload: dict) -> dict:
-    """
-    Adds 'type_label' next to 'type_code' for arrays in metrics payload.
-    Silently no-ops if arrays/fields are missing.
-    """
     if not isinstance(payload, dict):
         return payload
 
@@ -651,17 +155,221 @@ def _apply_type_labels_to_metrics(payload: dict) -> dict:
                     item["type_label"] = _label(code)
     return payload
 
-# ------------------------------------------------------------------
-# Dashboard Data API
-# ------------------------------------------------------------------
-@router.get("/api/leave_data")
+
+# =========================
+# Users (tags: users)
+# =========================
+@router_main.get("/api/user/{user_id}", response_model=UserInfo, tags=["users"])
+async def get_user(user_id: str, request: Request):
+    """
+    Read-only user profile for display in UI.
+    Returns a safe subset of columns. No password/salt fields.
+    """
+    user_id = _sanitize_user_id(user_id)
+    db: SQLServerDatabaseService = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database service not initialized")
+
+    sql = """
+    SELECT TOP (1)
+        [id],
+        [account],
+        [user_name],
+        [email],
+        [mobile],
+        [is_active],
+        [site_code],
+        CONVERT(varchar(10), [active_start_on], 23) AS active_start_on,
+        CONVERT(varchar(10), [active_end_on], 23)   AS active_end_on,
+        CONVERT(varchar(19), [changed_on], 120)     AS changed_on
+    FROM [eHRAntung_DB].[gcore].[om_user]
+    WHERE [id] = ?
+    """
+
+    try:
+        rows, cols = db.run_select(sql, params=[user_id])
+    except TypeError:
+        sql_fmt = sql.replace("WHERE [id] = ?", f"WHERE [id] = '{user_id}'")
+        rows, cols = db.run_select(sql_fmt)
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    row = dict(zip(cols, rows[0]))
+    if "is_active" in row and isinstance(row["is_active"], (int, bool)):
+        row["is_active"] = int(row["is_active"])
+    return UserInfo(**row)
+
+
+@router_main.get("/api/user/me", response_model=UserInfo, tags=["users"])
+async def get_me(request: Request):
+    # In real auth, derive user_id from the session/JWT; for now use 'chiuzu'
+    return await get_user("chiuzu", request)
+
+
+# =========================
+# HCM Dynamic Service (tags: hcm)
+# =========================
+@router_main.post("/api/hcm/call", tags=["hcm"])
+async def api_hcm_call(
+    req: HCMServiceCallRequest,
+    request: Request,
+    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    """
+    Generic HCM caller used by the dynamic form.
+    Backend constructs fresh LogonInfo with a current ExpiredDate
+    and forwards 'data' as-is using 'service_code'.
+    """
+    try:
+        result = await hcm_call(req, idempotency_key=x_idempotency_key)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("HCM dynamic call failed")
+        raise HTTPException(status_code=500, detail=f"HCM call failed: {str(e)}")
+
+
+# =========================
+# Legacy Leave API (tags: leave)
+# =========================
+@router_leave.post("/submit", response_model=LeaveResponse)
+async def submit_leave(
+    request: LeaveRequest,
+    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    """
+    Legacy: Submit a leave request via mapped leave_type.
+    Prefer /api/hcm/call going forward.
+    """
+    try:
+        validation = await validate_leave_request(request)
+        if not validation["valid"]:
+            return LeaveResponse(
+                success=False,
+                message=f"Validation failed: {', '.join(validation['errors'])}",
+                data={"warnings": validation.get("warnings", [])},
+            )
+        result = await submit_leave_request(request, idempotency_key=x_idempotency_key)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error submitting leave request")
+        raise HTTPException(status_code=500, detail=f"Failed to submit leave request: {str(e)}")
+
+
+@router_leave.post("/balance", response_model=LeaveBalanceResponse)
+async def get_leave_balance(request: LeaveBalanceRequest):
+    """Legacy: Get employee leave balance."""
+    try:
+        return await get_employee_leave_balance(request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error getting leave balance")
+        raise HTTPException(status_code=500, detail=f"Failed to get leave balance: {str(e)}")
+
+
+@router_leave.post("/validate")
+async def validate_leave(request: LeaveRequest):
+    """Legacy: Validate a leave request without submitting."""
+    try:
+        validation = await validate_leave_request(request)
+        return {"success": True, "validation": validation}
+    except Exception as e:
+        logger.exception("Error validating leave request")
+        raise HTTPException(status_code=500, detail=f"Failed to validate leave request: {str(e)}")
+
+
+# =========================
+# Static / SPA (tags: static)
+# =========================
+@router_main.get("/", include_in_schema=False, tags=["static"])
+async def serve_index():
+    _, _, frontend_dir, index_file = _frontend_paths()
+    logger.info("Frontend dir=%s index exists=%s", frontend_dir, index_file.exists())
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return RedirectResponse("/docs")
+
+
+@router_main.get("/dashboard", include_in_schema=False, tags=["static"])
+async def serve_dashboard():
+    base_dir = Path(__file__).resolve().parents[2]
+    frontend_dir = base_dir / "frontend"
+    index_file = frontend_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return RedirectResponse("/docs")
+
+
+@router_main.get("/api/ping", include_in_schema=False, tags=["static"])
+async def ping():
+    return {"ok": True}
+
+
+@router_main.get("/leave_page.html", include_in_schema=False, tags=["static"])
+async def serve_leave_page():
+    _, _, frontend_dir, _ = _frontend_paths()
+    leave_page_file = frontend_dir / "leave_page.html"
+    if leave_page_file.exists():
+        return FileResponse(str(leave_page_file))
+    return RedirectResponse("/docs")
+
+
+@router_main.get("/translations.js", include_in_schema=False, tags=["static"])
+async def serve_translations():
+    _, _, frontend_dir, _ = _frontend_paths()
+    translations_file = frontend_dir / "translations.js"
+    if translations_file.exists():
+        return FileResponse(str(translations_file))
+    return PlainTextResponse("// translations.js not found", media_type="application/javascript")
+
+
+@router_main.get("/generate_report.html", include_in_schema=False, tags=["static"])
+async def serve_generate_report():
+    _, _, frontend_dir, _ = _frontend_paths()
+    generate_report_file = frontend_dir / "generate_report.html"
+    if generate_report_file.exists():
+        return FileResponse(str(generate_report_file))
+    return RedirectResponse("/docs")
+
+
+# =========================
+# Reports API (tags: reports)
+# =========================
+@router_main.post("/api/reports/analyze", tags=["reports"])
+async def api_reports_analyze(req: ReportAnalysisRequest):
+    return await analyze_report(req)
+
+
+@router_main.post("/api/reports/generate", tags=["reports"])
+async def api_reports_generate(req: ReportGenerationRequest):
+    return await generate_report(req)
+
+
+@router_main.get("/api/reports/download/{report_id}", tags=["reports"])
+async def api_reports_download(report_id: str):
+    return await download_report_response(report_id)
+
+
+# =========================
+# Leave Dashboard Data (tags: leave-dashboard)
+# =========================
+@router_main.get("/api/leave_data", tags=["leave-dashboard"])
 async def leave_data(
     request: Request,
     kind: str = "metrics",
     as_of: Optional[str] = None,
     days: int = 7,
 ) -> Dict[str, Any]:
-    from datetime import datetime, date, timedelta
+    from datetime import date, datetime, timedelta
+    import json
+    import logging
+
+    logger = logging.getLogger(__name__)
 
     # Validate/normalize as_of
     if as_of:
@@ -676,7 +384,7 @@ async def leave_data(
     if db is None:
         raise HTTPException(status_code=500, detail="Database service not initialized")
 
-    # Look up data window (min/max WORKDATE) from live data
+    # Look up data window
     min_date_str = None
     max_date_str = None
     try:
@@ -693,7 +401,6 @@ async def leave_data(
     except Exception as e:
         logger.warning("Failed to fetch data window: %s", e)
 
-    # If no data window, return empty (but successful) payload
     if not min_date_str or not max_date_str:
         return {
             "success": True,
@@ -710,7 +417,7 @@ async def leave_data(
         as_of_dt = max_dt
     as_of_str = as_of_dt.strftime("%Y-%m-%d")
 
-    # For trend: compute start=end-(days-1), clamp to min/max
+    # For trend: compute start and effective days
     effective_start_str = None
     effective_days = days
     if kind.lower() == "trend":
@@ -729,7 +436,7 @@ async def leave_data(
         as_of_str = as_of_dt.strftime("%Y-%m-%d")
         effective_start_str = start_dt.strftime("%Y-%m-%d")
 
-    # Build SQL using helpers
+    # Query SQL
     try:
         from app.home_page_metrics.leave_metrics import _sql_leave_metrics, _sql_leave_trend
 
@@ -755,48 +462,54 @@ async def leave_data(
 
         row = dict(zip(columns, rows[0]))
 
+        # ---------- metrics branch ----------
         if kind.lower() == "metrics" and "metrics" in row and isinstance(row["metrics"], str):
             payload = json.loads(row["metrics"])
 
-            # Enrich with PersonResolver
+            # Enrich with PersonResolver (supports PERSONID and EMPLOYEEID)
+            from app.services.person_resolver import PersonResolver
+
             resolver = PersonResolver(db_service=db)
-            # decode arrays the SQL produced (strings) into lists
             details = _decode_json_field(payload.get("on_leave_details"))
             upcoming = _decode_json_field(payload.get("upcoming_leave"))
 
-            # collect unique PERSONIDs and resolve in batch
-            pid_list = _collect_person_ids(details, upcoming)
-            resolved = resolver.resolve_many(pid_list)  # {pid: {...}}
+            pid_list, eid_list = _collect_ids_from_rows(details, upcoming)
+            resolved = resolver.resolve_many(pid_list, employee_ids=eid_list)
 
-            # write back person_name/cardnum/etc
-            payload["on_leave_details"] = _patch_rows(details, resolved)
-            payload["upcoming_leave"]   = _patch_rows(upcoming, resolved)
+            payload["on_leave_details"] = _apply_resolved(details, resolved)
+            payload["upcoming_leave"] = _apply_resolved(upcoming, resolved)
 
-            # add type labels last (now that arrays are dicts with type_code)
-            payload = _apply_type_labels_to_metrics(payload)
+            # (optional) If you have type label normalization, keep it:
+            try:
+                from app.home_page_metrics.leave_metrics import _apply_type_labels_to_metrics
+                payload = _apply_type_labels_to_metrics(payload)
+            except Exception:
+                pass
+
             return {"metrics": payload, **extra_ctx}
 
+        # ---------- trend branch ----------
         if kind.lower() == "trend" and "trend" in row and isinstance(row["trend"], str):
             trend_list = json.loads(row["trend"])
 
-            # Enrich with PersonResolver
+            from app.services.person_resolver import PersonResolver
             resolver = PersonResolver(db_service=db)
 
-            # Gather all person_ids across all days
             all_people_arrays = []
             for day in trend_list:
                 ppl = _decode_json_field(day.get("people_on_leave"))
                 all_people_arrays.append(ppl)
-            pid_list = _collect_person_ids(*all_people_arrays)
-            resolved = resolver.resolve_many(pid_list)
 
-            # Patch each day's people_on_leave
+            pid_list, eid_list = _collect_ids_from_rows(*all_people_arrays)
+            resolved = resolver.resolve_many(pid_list, employee_ids=eid_list)
+
             for day in trend_list:
                 ppl = _decode_json_field(day.get("people_on_leave"))
-                day["people_on_leave"] = _patch_rows(ppl, resolved)
+                day["people_on_leave"] = _apply_resolved(ppl, resolved)
 
             return {"trend": trend_list, **extra_ctx}
 
+        # Fallback – return raw row (already includes extra_ctx)
         return {**row, **extra_ctx}
 
     except HTTPException:
@@ -805,5 +518,171 @@ async def leave_data(
         logger.error("/api/leave_data failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"leave_data query failed: {str(e)}")
 
-# Attach router to app
-app.include_router(router)
+
+
+# =========================
+# Assistant / Vector Admin / Health (tags: assistant, vector, health)
+# =========================
+@router_main.post("/api/assistant/query", tags=["assistant"])
+async def assistant_query(payload: dict, request: Request):
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    q = (payload or {}).get("query") or ""
+
+    t0 = time.perf_counter()
+    logger.info("rid=%s /assistant/query start len=%d", rid, len(q))
+
+    nlp: LanguageNativeNLPService = getattr(request.app.state, "nlp", None)
+    if nlp is None:
+        logger.error("rid=%s /assistant/query error: No NLP service available", rid)
+        return JSONResponse({"success": False, "error": "NLP service not available"}, status_code=200)
+
+    try:
+        data = await run_in_threadpool(nlp.process_complete_query, q, "dbo", rid)
+        if isinstance(data, dict):
+            data["service_info"] = {"service_type": "language_native", "language_native_processing": True}
+        return JSONResponse({"success": True, **(data or {})})
+    except Exception as e:
+        logger.exception("rid=%s /assistant/query error: %s: %s", rid, type(e).__name__, e)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(e),
+                "service_info": {"service_type": "language_native", "error_in_service": "language_native"},
+            },
+            status_code=200,
+        )
+    finally:
+        ms = int((time.perf_counter() - t0) * 1000)
+        logger.info("rid=%s /assistant/query done ms=%d", rid, ms)
+
+
+@router_main.post("/api/vector/reload", tags=["vector"])
+async def vector_reload(request: Request):
+    vb = getattr(request.app.state, "vector_bootstrap", None)
+    if vb is None:
+        raise HTTPException(status_code=500, detail="Vector bootstrapper missing")
+    try:
+        result = await vb.start()  # idempotent
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vector reload failed: {e}")
+
+
+@router_main.get("/api/health", tags=["health"])
+async def health(
+    request: Request,
+    no_db: bool = Query(False),
+    no_vector: bool = Query(False),
+    warm: bool = Query(False),
+) -> Dict[str, Any]:
+    t0 = time.perf_counter()
+    out: Dict[str, Any] = {}
+
+    # DB check
+    if not no_db:
+        try:
+            t = time.perf_counter()
+            db = getattr(request.app.state, "db", None)
+            if not isinstance(db, SQLServerDatabaseService):
+                raise RuntimeError("DB service not initialized")
+            db_ok = bool(db.test_connection(login_timeout=2))
+            out["database_connection"] = db_ok
+            out["database_ms"] = int((time.perf_counter() - t) * 1000)
+            logger.info("health: db ok=%s dur=%dms", db_ok, out["database_ms"])
+        except BaseException as e:
+            out["database_connection"] = False
+            out["database_error"] = f"{type(e).__name__}: {e}"
+            logger.exception("health: db check raised %s", type(e).__name__)
+    else:
+        out["database_connection"] = None
+        out["database_skipped"] = True
+
+    # Vector bootstrap status
+    vb = getattr(request.app.state, "vector_bootstrap", None)
+    out["vector_bootstrap"] = vb.status if vb else {"available": False}
+
+    if warm and vb:
+        try:
+            out["vector_bootstrap_after_warm"] = await vb.start()
+        except Exception as e:
+            out["vector_bootstrap_after_warm_error"] = f"{type(e).__name__}: {e}"
+
+    # Vector service status
+    if not no_vector:
+        try:
+            t = time.perf_counter()
+            nlp: LanguageNativeNLPService = getattr(request.app.state, "nlp", None)
+            if nlp:
+                vector_status = nlp.vector_status()
+                out["vector_db"] = {"ready": vector_status.get("ready", False), "service_type": "language_native", **vector_status}
+            else:
+                out["vector_db"] = {"ready": False, "error": "NLP service not available"}
+
+            out["vector_ms"] = int((time.perf_counter() - t) * 1000)
+            vec_ready = bool(out["vector_db"].get("ready"))
+            logger.info("health: vector ok=%s dur=%dms", vec_ready, out["vector_ms"])
+        except BaseException as e:
+            out["vector_db"] = {"ready": False, "error": f"{type(e).__name__}: {e}"}
+            logger.exception("health: vector_status raised %s", type(e).__name__)
+    else:
+        out["vector_db"] = {"skipped": True}
+
+    db_ok = out.get("database_connection") is True if "database_connection" in out else True
+    vec_ok = bool(out.get("vector_db", {}).get("ready", True))
+    out["ready_for_queries"] = db_ok and vec_ok
+    out["total_ms"] = int((time.perf_counter() - t0) * 1000)
+    out["services"] = {"nlp_mode": "language_native", "language_native_processing": True}
+
+    return out
+
+
+# =========================
+# Debug (tags: debug)
+# =========================
+@router_main.get("/debug/leave/health", tags=["debug"])
+def leave_health(request: Request):
+    """Health check for leave system."""
+    result = {}
+
+    nlp: LanguageNativeNLPService = getattr(request.app.state, "nlp", None)
+    if nlp and getattr(nlp, "vector_search", None):
+        try:
+            result["nlp_service"] = nlp.vector_status()
+        except Exception as e:
+            result["nlp_service"] = {"ready": False, "error": str(e)}
+    else:
+        result["nlp_service"] = {"ready": False, "error": "Service not available"}
+
+    sanity = {}
+    try:
+        if nlp:
+            backend = getattr(nlp.vector_search, "_db", None) or getattr(nlp.vector_search, "db", None)
+            if backend and hasattr(backend, "relationships_sanity_check"):
+                sanity = backend.relationships_sanity_check()
+    except Exception as e:
+        sanity = {"error": f"{type(e).__name__}: {e}"}
+
+    result["sanity_check"] = sanity
+    result["service_type"] = "language_native"
+    return result
+
+
+@router_main.get("/debug/leave/join-hints", tags=["debug"])
+def leave_join_hints(request: Request, tables: List[str] = Query(..., alias="tables")):
+    """Get join hints using NLP service."""
+    nlp: LanguageNativeNLPService = getattr(request.app.state, "nlp", None)
+    if not nlp or not getattr(nlp, "vector_search", None):
+        raise HTTPException(status_code=500, detail="NLP/Vector service not initialized")
+    try:
+        hints = nlp.vector_search.get_join_hints(tables)
+        return {"tables": tables, "join_hints": hints, "service_type": "language_native"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"join-hints failed: {e}")
+
+
+# =========================
+# Export combined router
+# =========================
+router = APIRouter()
+router.include_router(router_main)
+router.include_router(router_leave)

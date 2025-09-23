@@ -1,126 +1,21 @@
-async callLeaveAPI(message) {
-    const payload = {
-      query: message,
-      user_id: this.getCurrentUserId(),
-      employee_id: this.getCurrentEmployeeId(),
-      language: i18n?.getCurrentLanguage() || 'en-US'
-    };
-
-    try {
-      const response = await fetch(`${this.API_BASE}/api/leave/assistant/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.message || 'API request failed');
-      }
-
-      return data;
-      
-    } catch (error) {
-      logger.error('API call failed:', error);
-      // Fallback to mock responses for demo
-      return await this.getMockResponse(message);
-    }
-  }
-
-  async getMockResponse(message) {
-    // Fallback mock responses when API is unavailable
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    const messageLower = message.toLowerCase();
-    
-    if (messageLower.includes('balance')) {
-      const balanceMsg = this.t('leave.balance_info', 
-        "Here are your current leave balances:\n\n• Annual Leave: 15.5 days\n• Sick Leave: 8.0 days\n• Personal Leave: 3.0 days\n\nYou're in good shape! Is there a specific type of leave you'd like to request?"
-      );
-      return {
-        success: true,
-        type: 'info',
-        message: balanceMsg,
-        action: null
-      };
-    } else if (messageLower.includes('tomorrow') || messageLower.includes('day off')) {
-      const tomorrowMsg = this.t('leave.tomorrow_request', 
-        "I understand you need tomorrow off. Let me help you with that. I'll prepare a leave request form:"
-      );
-      return {
-        success: true,
-        type: 'form_ready',
-        message: tomorrowMsg,
-        form_data: {
-          user_id: this.getCurrentUserId(),
-          employee_id: this.getCurrentEmployeeId(),
-          leave_type: 'annual',
-          start_date: this.getTomorrowDate(),
-          end_date: this.getTomorrowDate(),
-          duration_type: 'full-day',
-          reason: ''
-        }
-      };
-    } else if (messageLower.includes('vacation') || messageLower.includes('week')) {
-      const vacationMsg = this.t('leave.vacation_clarification', 
-        "I'd be happy to help you request vacation time! To prepare the best request, could you please tell me:\n\n• Which specific dates do you need off?\n• How many days total?\n• Is this for annual leave?\n• Any special reason or occasion?"
-      );
-      return {
-        success: true,
-        type: 'clarification',
-        message: vacationMsg,
-        action: 'ask_details'
-      };
-    } else if (messageLower.includes('sick')) {
-      const sickMsg = this.t('leave.sick_request', 
-        "I understand you need sick leave. I'll prepare a sick leave request. Note that sick leave typically doesn't require advance notice if it's for today."
-      );
-      return {
-        success: true,
-        type: 'form_ready',
-        message: sickMsg,
-        form_data: {
-          user_id: this.getCurrentUserId(),
-          employee_id: this.getCurrentEmployeeId(),
-          leave_type: 'sick',
-          start_date: this.getTodayDate(),
-          end_date: this.getTodayDate(),
-          duration_type: 'full-day',
-          reason: this.t('leave.medical_reasons', 'Medical reasons')
-        }
-      };
-    } else {
-      const generalMsg = this.t('leave.general_request', 
-        "I understand you'd like to request leave. I can help you with that! Could you provide more details about:\n\n• The dates you need\n• Type of leave (annual, sick, personal, emergency)\n• Duration (full day, half day, multiple days)\n• Reason (optional but helpful)"
-      );
-      return {
-        success: true,
-        type: 'general',
-        message: generalMsg,
-        action: <!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title data-i18n="leave.page_title">Request Leave - HCM AI Assistant</title>
+  <title data-i18n="hcm.page_title">HCM Service Request - AI Assistant</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <!-- Your i18n runtime -->
   <script src="./translations.js"></script>
 
   <style>
     body { font-family: 'Inter', sans-serif; }
-    .leave-card { transition: all 0.3s ease; }
-    .leave-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+    .hcm-card { transition: all 0.3s ease; }
+    .hcm-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
     .pulse-dot { display: inline-block; width: 8px; height: 8px; background: #10b981; border-radius: 50%; animation: pulse 2s infinite; }
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
     .typing-indicator { animation: typing 1.5s infinite; }
@@ -136,6 +31,8 @@ async callLeaveAPI(message) {
     .empty-state { opacity: 0.6; transition: opacity 0.3s ease; }
     .status-badge { animation: statusPulse 2s infinite; }
     @keyframes statusPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    .json-badge { font-variant-numeric: tabular-nums; }
+    .sticky-chat-header { position: sticky; top: 0; z-index: 10; }
   </style>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-green-50 min-h-screen">
@@ -145,22 +42,21 @@ async callLeaveAPI(message) {
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex justify-between items-center h-16">
         <div class="flex items-center space-x-4">
-          <button id="back-to-dashboard" class="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors" onclick="window.location.href='/'">
+          <button id="back-to-dashboard" class="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="m12 19-7-7 7-7"/>
               <path d="M19 12H5"/>
             </svg>
           </button>
-
           <div>
-            <h1 class="text-2xl font-bold text-gray-900" data-i18n="leave.main_title">Request Leave</h1>
-            <p class="text-sm text-gray-600" data-i18n="leave.main_subtitle">Submit your leave request with AI assistance</p>
+            <h1 class="text-2xl font-bold text-gray-900" data-i18n="hcm.main_title">HCM Service Request</h1>
+            <p class="text-sm text-gray-600" data-i18n="hcm.main_subtitle">Submit HCM requests with AI assistance</p>
           </div>
         </div>
         <div class="flex items-center space-x-4">
           <div class="flex items-center space-x-2 text-sm text-gray-500">
             <span class="pulse-dot"></span>
-            <span id="system-status" data-i18n="leave.ai_ready">AI Assistant Ready</span>
+            <span id="system-status" data-i18n="hcm.ai_ready">HCM Assistant Ready</span>
           </div>
           <select id="language-selector" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <option value="en-US">English (US)</option>
@@ -176,68 +72,59 @@ async callLeaveAPI(message) {
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
       
-      <!-- Left Panel - Dynamic Leave Information -->
+      <!-- Left Panel - Employee Info & Results -->
       <div class="space-y-6">
         <!-- Employee Info Card -->
-        <div class="bg-white rounded-xl shadow-sm p-6 leave-card">
+        <div class="bg-white rounded-xl shadow-sm p-6 hcm-card">
           <div class="flex items-center space-x-4 mb-4">
-            <img src="https://placehold.co/80x80/E2E8F0/4A5568?text=JD" alt="Employee" class="w-16 h-16 rounded-full border-2 border-blue-200">
+            <img src="https://placehold.co/80x80/E2E8F0/4A5568?text=U" alt="User" class="w-16 h-16 rounded-full border-2 border-blue-200">
             <div>
-              <h3 class="text-lg font-semibold text-gray-900">John Doe</h3>
-              <p class="text-sm text-gray-600"><span data-i18n="leave.employee_id">Employee ID:</span> A012345</p>
-              <p class="text-sm text-gray-600"><span data-i18n="leave.department">Department:</span> Engineering</p>
-              <p class="text-sm text-blue-600"><span data-i18n="leave.manager">Manager:</span> Sarah Johnson</p>
+              <h3 id="ui-user-name" class="text-lg font-semibold text-gray-900">Employee Profile</h3>
+              <p class="text-sm text-gray-600">
+                <span data-i18n="hcm.employee_id">Employee ID:</span>
+                <span id="ui-employee-id" class="ml-1">11005007</span>
+              </p>
+              <p class="text-sm text-gray-600">
+                <span data-i18n="hcm.login_name">Login:</span>
+                <span id="ui-login-name" class="ml-1">chiuzu</span>
+              </p>
+              <p class="text-sm text-blue-600">
+                <span data-i18n="hcm.status">Status:</span>
+                <span class="ml-1">Active</span>
+              </p>
             </div>
           </div>
           <div class="border-t pt-4">
-            <h4 class="text-sm font-medium text-gray-700 mb-3" data-i18n="leave.balance_title">Leave Balances</h4>
-            <div class="space-y-3">
-              <div class="flex justify-between items-center p-2 bg-green-50 rounded-lg">
-                <div class="flex items-center space-x-2">
-                  <div class="w-3 h-3 bg-green-500 rounded-full"></div>
-                  <span class="text-sm text-gray-700" data-i18n="leave.annual_leave">Annual Leave</span>
-                </div>
-                <span class="font-medium text-green-700" id="annual-balance">15.5 <span data-i18n="leave.days">days</span></span>
-              </div>
-              <div class="flex justify-between items-center p-2 bg-blue-50 rounded-lg">
-                <div class="flex items-center space-x-2">
-                  <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
-                  <span class="text-sm text-gray-700" data-i18n="leave.sick_leave">Sick Leave</span>
-                </div>
-                <span class="font-medium text-blue-700" id="sick-balance">8.0 <span data-i18n="leave.days">days</span></span>
-              </div>
-              <div class="flex justify-between items-center p-2 bg-purple-50 rounded-lg">
-                <div class="flex items-center space-x-2">
-                  <div class="w-3 h-3 bg-purple-500 rounded-full"></div>
-                  <span class="text-sm text-gray-700" data-i18n="leave.personal_leave">Personal Leave</span>
-                </div>
-                <span class="font-medium text-purple-700" id="personal-balance">3.0 <span data-i18n="leave.days">days</span></span>
-              </div>
+            <h4 class="text-sm font-medium text-gray-700 mb-3" data-i18n="hcm.services_title">Available Services</h4>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div class="px-2 py-1 bg-blue-50 rounded text-blue-700">applyformleave</div>
+              <div class="px-2 py-1 bg-green-50 rounded text-green-700">createformleave</div>
+              <div class="px-2 py-1 bg-purple-50 rounded text-purple-700">createleave</div>
+              <div class="px-2 py-1 bg-amber-50 rounded text-amber-700">checkovertime</div>
             </div>
           </div>
         </div>
 
-        <!-- Dynamic Leave Status Container -->
-        <div id="leave-status-container" class="space-y-4">
-          <!-- Empty State -->
+        <!-- Results Container -->
+        <div id="results-container" class="space-y-4">
           <div id="empty-state" class="bg-white rounded-xl shadow-sm p-8 text-center empty-state">
             <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-gray-400">
-                <path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
               </svg>
             </div>
-            <h3 class="text-lg font-medium text-gray-900 mb-2" data-i18n="leave.no_requests_title">No Active Requests</h3>
-            <p class="text-sm text-gray-500 mb-4" data-i18n="leave.no_requests_desc">Your leave requests and approvals will appear here</p>
-            <p class="text-xs text-gray-400" data-i18n="leave.no_requests_hint">Start a conversation with the AI assistant to request leave</p>
+            <h3 class="text-lg font-medium text-gray-900 mb-2" data-i18n="hcm.no_requests_title">No Requests Submitted</h3>
+            <p class="text-sm text-gray-500 mb-4" data-i18n="hcm.no_requests_desc">Your HCM service requests will appear here</p>
+            <p class="text-xs text-gray-400" data-i18n="hcm.no_requests_hint">Chat with the AI assistant to submit requests</p>
           </div>
         </div>
       </div>
 
       <!-- Center Panel - AI Assistant Chat -->
       <div class="lg:col-span-2">
-        <div class="bg-white rounded-xl shadow-sm h-[700px] flex flex-col">
+        <div class="bg-white rounded-xl shadow-sm h-[80vh] flex flex-col">
           <!-- Chat Header -->
-          <div class="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-green-50 rounded-t-xl">
+          <div class="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-green-50 rounded-t-xl sticky-chat-header">
             <div class="flex items-center justify-between">
               <div class="flex items-center space-x-3">
                 <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-green-500 rounded-full flex items-center justify-center">
@@ -246,36 +133,36 @@ async callLeaveAPI(message) {
                   </svg>
                 </div>
                 <div>
-                  <h3 class="text-lg font-semibold text-gray-900" data-i18n="leave.assistant_title">Leave Assistant</h3>
-                  <p class="text-sm text-gray-600" data-i18n="leave.assistant_desc">I'll help you submit your leave request step by step</p>
+                  <h3 class="text-lg font-semibold text-gray-900" data-i18n="hcm.assistant_title">HCM Assistant</h3>
+                  <p class="text-sm text-gray-600" data-i18n="hcm.assistant_desc">I'll help you submit HCM service requests step by step</p>
                 </div>
               </div>
               <div class="flex items-center space-x-2">
                 <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span class="text-xs text-gray-500" data-i18n="leave.status_online">Online</span>
+                <span class="text-xs text-gray-500" data-i18n="hcm.status_online">Online</span>
               </div>
             </div>
           </div>
 
           <!-- Chat Messages -->
-          <div id="leave-chat-messages" class="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
-            <!-- Welcome Message -->
+          <div id="hcm-chat-messages" class="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+            <!-- Welcome -->
             <div class="flex items-start space-x-3 chat-message">
               <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-green-500 rounded-full flex items-center justify-center flex-shrink-0">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
                   <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
                 </svg>
               </div>
-              <div class="bg-gradient-to-r from-blue-50 to-green-50 border border-blue-200 rounded-xl p-4 max-w-lg">
-                <p class="text-sm text-gray-800 mb-2" data-i18n="leave.welcome_msg">Hi John! I'm here to help you submit your leave request. Here's what I can do:</p>
+              <div class="bg-gradient-to-r from-blue-50 to-green-50 border border-blue-200 rounded-xl p-4 max-w-3xl">
+                <p class="text-sm text-gray-800 mb-2" data-i18n="hcm.welcome_msg">Hi! I'm your HCM Assistant. I can help you submit service requests to the HCM system. Here's what I can do:</p>
                 <ul class="text-sm text-gray-700 space-y-1 ml-4">
-                  <li data-i18n="leave.feature_1">• Process natural language requests like "I need tomorrow off"</li>
-                  <li data-i18n="leave.feature_2">• Help you choose the right leave type based on your situation</li>
-                  <li data-i18n="leave.feature_3">• Check your balances and suggest alternatives</li>
-                  <li data-i18n="leave.feature_4">• Guide you through company policies and requirements</li>
-                  <li data-i18n="leave.feature_5">• Submit requests directly to the HR system</li>
+                  <li data-i18n="hcm.feature_1">• Process requests like "I need applyformleave service"</li>
+                  <li data-i18n="hcm.feature_2">• Generate dynamic forms based on HCM service requirements</li>
+                  <li data-i18n="hcm.feature_3">• Handle complex nested data structures automatically</li>
+                  <li data-i18n="hcm.feature_4">• Ensure ExpiredDate is always fresh and valid</li>
+                  <li data-i18n="hcm.feature_5">• Submit requests directly to the HCM system</li>
                 </ul>
-                <p class="mt-3 text-sm text-gray-700 font-medium" data-i18n="leave.what_help">What would you like to do today?</p>
+                <p class="mt-3 text-sm text-gray-700 font-medium" data-i18n="hcm.what_help">Which HCM service would you like to use today?</p>
               </div>
             </div>
           </div>
@@ -283,22 +170,22 @@ async callLeaveAPI(message) {
           <!-- Chat Input -->
           <div class="p-6 border-t border-gray-200 bg-gray-50 rounded-b-xl">
             <div class="flex items-end space-x-3 mb-3">
-              <button id="leave-mic-btn" class="p-3 rounded-lg border border-gray-300 text-gray-600 hover:bg-white hover:border-blue-300 transition-colors" data-i18n="leave.mic_button" data-i18n-type="title" title="Voice input">
+              <button id="hcm-mic-btn" class="p-3 rounded-lg border border-gray-300 text-gray-600 hover:bg-white hover:border-blue-300 transition-colors" data-i18n="hcm.mic_button" data-i18n-type="title" title="Voice input">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
                 </svg>
               </button>
               <div class="flex-1">
                 <textarea 
-                  id="leave-chat-input" 
+                  id="hcm-chat-input" 
                   rows="2" 
                   class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-white"
-                  data-i18n="leave.input_placeholder"
+                  data-i18n="hcm.input_placeholder"
                   data-i18n-type="placeholder"
-                  placeholder="Type your leave request here... (e.g., 'I need 3 days off next week for vacation')"
+                  placeholder="Ask me about HCM services... (e.g., 'I need to use applyformleave', 'Help me with createleave')"
                 ></textarea>
               </div>
-              <button id="leave-send-btn" class="p-3 rounded-lg bg-gradient-to-r from-blue-600 to-green-600 text-white hover:from-blue-700 hover:to-green-700 transition-all duration-200 transform hover:scale-105" data-i18n="leave.send_button" data-i18n-type="title" title="Send message">
+              <button id="hcm-send-btn" class="p-3 rounded-lg bg-gradient-to-r from-blue-600 to-green-600 text-white hover:from-blue-700 hover:to-green-700 transition-all duration-200 transform hover:scale-105" data-i18n="hcm.send_button" data-i18n-type="title" title="Send message">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="m22 2-7 20-4-9-9-4Z"/>
                   <path d="M22 2 11 13"/>
@@ -308,17 +195,17 @@ async callLeaveAPI(message) {
             
             <!-- Quick Suggestions -->
             <div class="flex flex-wrap gap-2">
-              <button class="leave-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-blue-50 hover:border-blue-300 transition-colors" data-i18n="leave.suggestion_1">
-                "I need tomorrow off"
+              <button class="hcm-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-blue-50 hover:border-blue-300 transition-colors" data-i18n="hcm.suggestion_1">
+                "I need applyformleave"
               </button>
-              <button class="leave-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-green-50 hover:border-green-300 transition-colors" data-i18n="leave.suggestion_2">
-                "Vacation next week"
+              <button class="hcm-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-green-50 hover:border-green-300 transition-colors" data-i18n="hcm.suggestion_2">
+                "Help with createleave"
               </button>
-              <button class="leave-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-purple-50 hover:border-purple-300 transition-colors" data-i18n="leave.suggestion_3">
-                "Check my balance"
+              <button class="hcm-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-purple-50 hover:border-purple-300 transition-colors" data-i18n="hcm.suggestion_3">
+                "Show me createformleave"
               </button>
-              <button class="leave-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-red-50 hover:border-red-300 transition-colors" data-i18n="leave.suggestion_4">
-                "Sick leave today"
+              <button class="hcm-suggestion px-3 py-1.5 text-sm bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-amber-50 hover:border-amber-300 transition-colors" data-i18n="hcm.suggestion_4">
+                "I need checkovertime"
               </button>
             </div>
           </div>
@@ -327,524 +214,738 @@ async callLeaveAPI(message) {
     </div>
   </div>
 
-  <!-- Success Modal -->
+  <!-- Success / Error Modal -->
   <div id="success-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6">
       <div class="text-center">
         <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
           <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
           </svg>
         </div>
-        <h3 class="text-lg font-semibold text-gray-900 mb-2" data-i18n="leave.modal_success_title">Request Submitted!</h3>
-        <p class="text-gray-600 mb-4" data-i18n="leave.modal_success_desc">Your leave request has been submitted and is pending approval.</p>
-        <button id="close-success-modal" class="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors" data-i18n="leave.modal_continue">
+        <h3 id="success-title" class="text-lg font-semibold text-gray-900 mb-2" data-i18n="hcm.modal_success_title">Request Submitted!</h3>
+        <p id="success-desc" class="text-gray-600 mb-4" data-i18n="hcm.modal_success_desc">Your HCM request has been processed successfully.</p>
+        <button id="close-success-modal" class="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors" data-i18n="hcm.modal_continue">
           Continue
         </button>
       </div>
     </div>
   </div>
 
-<script>
-// ==========================================
-// LEAVE PAGE FUNCTIONALITY WITH I18N
-// ==========================================
-
-// Global translation manager
+  <script>
 let i18n = null;
 
-class LeaveAssistant {
+class HCMAssistant {
   constructor() {
-    this.currentState = 'INIT';
-    this.leaveRequest = {};
-    this.conversationHistory = [];
-    this.API_BASE = 'http://localhost:8000';
-    this.activeRequests = new Map(); // Store active requests
+    this.API_BASE = window.__API_BASE || window.location.origin;
+    this.selectedService = null;
+    this.currentFormData = {};
+    this.lastRequestPayload = null; // for easy retry
+    
+    this.hcmConfig = {
+      accessToken: "1DA1FAD6-6183-4174-8321-E8B853EA8D2D",
+      businessUnit: "0",
+      region: "zh-CN",
+      defaultLogin: "sa"
+    };
+
+    this.serviceTemplates = {
+      applyformleave: {
+        name: "Apply Form Leave",
+        description: "Submit leave request with form approval",
+        data: {
+          formno: "10003",
+          reason: "Leave approved and signed off by manager",
+          detail: [
+            {
+              employeeid: "A011",
+              leavetypeid: "19",
+              begindate: "2025-09-26",
+              begintime: "09:00",
+              enddate: "2025-09-26",
+              endtime: "14:00"
+            }
+          ]
+        }
+      },
+      createformleave: {
+        name: "Create Form Leave",
+        description: "Create leave form without applying",
+        data: {
+          formno: "10003",
+          detail: [
+            {
+              employeeid: "A011",
+              leavetypeid: "19",
+              begindate: "2025-09-26",
+              begintime: "09:00",
+              enddate: "2025-09-26",
+              endtime: "18:00"
+            }
+          ]
+        }
+      },
+      createleave: {
+        name: "Create Leave",
+        description: "Direct leave creation",
+        data: {
+          employeeid: "A011",
+          leavetypeid: "19",
+          begindate: "2025-09-26",
+          begintime: "09:00",
+          enddate: "2025-09-26",
+          endtime: "18:00",
+          reason: "Personal leave request"
+        }
+      },
+      checkovertime: {
+        name: "Check Overtime",
+        description: "Verify overtime eligibility and hours",
+        data: {
+          employeeid: "A011",
+          checkdate: "2025-09-26",
+          hours: "2.0"
+        }
+      }
+    };
   }
 
-  // Translation helper
   t(key, fallback = '') {
     return i18n ? i18n.t(key, fallback) : fallback;
   }
 
-  // Method to add leave request to sidebar
-  addLeaveRequestToSidebar(requestData) {
-    const container = document.getElementById('leave-status-container');
-    const emptyState = document.getElementById('empty-state');
-    
-    // Hide empty state
-    if (emptyState) {
-      emptyState.style.display = 'none';
-    }
-
-    // Create request card
-    const requestCard = document.createElement('div');
-    requestCard.className = 'bg-white rounded-xl shadow-sm p-6 leave-card sidebar-item';
-    requestCard.id = `request-${requestData.id}`;
-    
-    requestCard.innerHTML = `
-      <div class="flex items-start justify-between mb-4">
-        <div class="flex items-center space-x-3">
-          <div class="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-yellow-600">
-              <path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-            </svg>
-          </div>
-          <div>
-            <h4 class="text-lg font-semibold text-gray-900">${this.t('leave.request_title', 'Leave Request')}</h4>
-            <p class="text-sm text-gray-600">${this.t('leave.id_label', 'ID')}: ${requestData.id}</p>
-          </div>
-        </div>
-        <span class="status-badge px-3 py-1 text-xs bg-yellow-100 text-yellow-700 rounded-full font-medium">
-          ${this.t(`leave.status_${requestData.status.toLowerCase()}`, requestData.status)}
-        </span>
-      </div>
-      
-      <div class="space-y-3">
-        <div class="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <span class="text-gray-500">${this.t('leave.type_label', 'Type')}:</span>
-            <span class="font-medium text-gray-900 ml-1">${requestData.leaveType}</span>
-          </div>
-          <div>
-            <span class="text-gray-500">${this.t('leave.duration_label', 'Duration')}:</span>
-            <span class="font-medium text-gray-900 ml-1">${requestData.duration}</span>
-          </div>
-        </div>
-        
-        <div class="text-sm">
-          <span class="text-gray-500">${this.t('leave.dates_label', 'Dates')}:</span>
-          <span class="font-medium text-gray-900 ml-1">
-            ${requestData.startDate}${requestData.startDate !== requestData.endDate ? ' - ' + requestData.endDate : ''}
-          </span>
-        </div>
-        
-        ${requestData.reason ? `
-        <div class="text-sm">
-          <span class="text-gray-500">${this.t('leave.reason_label', 'Reason')}:</span>
-          <span class="font-medium text-gray-900 ml-1">${requestData.reason}</span>
-        </div>
-        ` : ''}
-        
-        <div class="pt-3 border-t border-gray-200">
-          <div class="flex items-center justify-between text-xs text-gray-500">
-            <span>${this.t('leave.submitted_label', 'Submitted')}: ${new Date(requestData.submittedAt).toLocaleString()}</span>
-            <span class="flex items-center space-x-1">
-              <div class="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></div>
-              <span>${this.t('leave.awaiting_approval', 'Awaiting approval')}</span>
-            </span>
-          </div>
-        </div>
-      </div>
-    `;
-    
-    container.appendChild(requestCard);
-    
-    // Store the request
-    this.activeRequests.set(requestData.id, requestData);
-    
-    // Simulate approval after 10 seconds (for demo)
-    setTimeout(() => {
-      this.updateRequestStatus(requestData.id, 'Approved');
-    }, 10000);
+  // Generate fresh ExpiredDate
+  generateExpiredDate() {
+    const now = new Date();
+    const expiredDate = new Date(now.getTime() + 10 * 60 * 1000);
+    return expiredDate.toISOString().slice(0, 19).replace('T', ' ');
   }
 
-  // Method to update request status
-  updateRequestStatus(requestId, newStatus) {
-    const requestCard = document.getElementById(`request-${requestId}`);
-    if (!requestCard) return;
-    
-    const statusBadge = requestCard.querySelector('.status-badge');
-    const statusIndicator = requestCard.querySelector('.w-2.h-2');
-    const statusText = statusIndicator?.nextElementSibling;
-    
-    if (newStatus === 'Approved') {
-      statusBadge.className = 'status-badge px-3 py-1 text-xs bg-green-100 text-green-700 rounded-full font-medium';
-      statusBadge.textContent = this.t('leave.status_approved', 'Approved');
-      
-      if (statusIndicator) {
-        statusIndicator.className = 'w-2 h-2 bg-green-500 rounded-full';
-      }
-      if (statusText) {
-        statusText.textContent = this.t('leave.approved_by_manager', 'Approved by manager');
-      }
-      
-      // Update the request data
-      const requestData = this.activeRequests.get(requestId);
-      if (requestData) {
-        requestData.status = 'Approved';
-        requestData.approvedAt = new Date().toISOString();
-        this.activeRequests.set(requestId, requestData);
-      }
-      
-      // Add approval notification to chat
-      const approvalMsg = this.t('leave.approval_notification', 
-        `🎉 Great news! Your leave request (ID: ${requestId}) has been approved by your manager.\n\n` +
-        `You can see the updated status in the sidebar. Have a great time off!`
-      ).replace('{id}', requestId);
-      
-      this.addAssistantMessage(approvalMsg);
-      
-      // Update balances (mock)
-      this.updateLeaveBalance(requestData.leaveType.toLowerCase(), requestData.duration);
-      
-    } else if (newStatus === 'Rejected') {
-      statusBadge.className = 'status-badge px-3 py-1 text-xs bg-red-100 text-red-700 rounded-full font-medium';
-      statusBadge.textContent = this.t('leave.status_rejected', 'Rejected');
-      
-      if (statusIndicator) {
-        statusIndicator.className = 'w-2 h-2 bg-red-500 rounded-full';
-      }
-      if (statusText) {
-        statusText.textContent = this.t('leave.rejected_by_manager', 'Rejected by manager');
-      }
-    }
-  }
-
-  // Update leave balance display
-  updateLeaveBalance(leaveType, duration) {
-    const balanceElements = {
-      'annual leave': document.getElementById('annual-balance'),
-      'sick leave': document.getElementById('sick-balance'),
-      'personal leave': document.getElementById('personal-balance')
-    };
-    
-    const element = balanceElements[leaveType];
-    if (!element) return;
-    
-    // Mock deduction (assume 1 day for demo)
-    const currentBalance = parseFloat(element.textContent);
-    const newBalance = Math.max(0, currentBalance - 1);
-    const daysText = this.t('leave.days', 'days');
-    element.innerHTML = `${newBalance} <span data-i18n="leave.days">${daysText}</span>`;
-    
-    // Add visual feedback
-    element.parentElement.classList.add('bg-yellow-50');
-    setTimeout(() => {
-      element.parentElement.classList.remove('bg-yellow-50');
-    }, 2000);
-  }
-
+  // Chat message handling
   async sendMessage(message) {
     this.addUserMessage(message);
     this.showTypingIndicator();
-    
     try {
-      const response = await this.callLeaveAPI(message);
+      const response = await this.processMessage(message);
       this.hideTypingIndicator();
       this.handleAssistantResponse(response);
-    } catch (error) {
+    } catch (e) {
       this.hideTypingIndicator();
-      this.addAssistantMessage(this.t('leave.error_processing', "I'm sorry, I'm having trouble processing your request right now. Please try again."));
+      this.addAssistantMessage(this.t('hcm.error_processing', "I'm having trouble processing your request. Please try again."));
     }
   }
 
-  async callLeaveAPI(message) {
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    const messageLower = message.toLowerCase();
-    
-    if (messageLower.includes('balance')) {
-      const balanceMsg = this.t('leave.balance_info', 
-        "Here are your current leave balances:\n\n• Annual Leave: 15.5 days\n• Sick Leave: 8.0 days\n• Personal Leave: 3.0 days\n\nYou're in good shape! Is there a specific type of leave you'd like to request?"
-      );
+  async processMessage(message) {
+    await new Promise(r => setTimeout(r, 500));
+    const lowerMsg = (message || '').toLowerCase();
+
+    const serviceRegex = /(applyformleave|createformleave|createleave|checkovertime)/i;
+    const match = lowerMsg.match(serviceRegex);
+    if (match) {
+      const serviceCode = match[1].toLowerCase();
+      const template = this.serviceTemplates[serviceCode];
+      if (template) {
+        return {
+          type: 'service_form',
+          serviceCode,
+          template,
+          message: this.t('hcm.prepare_form', `Perfect! I'll prepare a ${template.name} form for you. Please review and modify the fields as needed:`)
+        };
+      }
+    }
+
+    if (lowerMsg.includes('help') || lowerMsg.includes('what') || lowerMsg.includes('services')) {
+      const serviceList = Object.keys(this.serviceTemplates).map(code =>
+        `• **${code}**: ${this.serviceTemplates[code].description}`
+      ).join('\n');
       return {
-        type: 'info',
-        message: balanceMsg,
-        action: null
-      };
-    } else if (messageLower.includes('tomorrow') || messageLower.includes('day off')) {
-      const tomorrowMsg = this.t('leave.tomorrow_request', 
-        "I understand you need tomorrow off. Let me help you with that. I'll prepare a leave request form:"
-      );
-      return {
-        type: 'form_draft',
-        message: tomorrowMsg,
-        action: 'show_form',
-        form_data: {
-          leave_type: 'annual',
-          start_date: this.getTomorrowDate(),
-          end_date: this.getTomorrowDate(),
-          duration: '1 day',
-          reason: ''
-        }
-      };
-    } else if (messageLower.includes('vacation') || messageLower.includes('week')) {
-      const vacationMsg = this.t('leave.vacation_clarification', 
-        "I'd be happy to help you request vacation time! To prepare the best request, could you please tell me:\n\n• Which specific dates do you need off?\n• How many days total?\n• Is this for annual leave?\n• Any special reason or occasion?"
-      );
-      return {
-        type: 'clarification',
-        message: vacationMsg,
-        action: 'ask_details'
-      };
-    } else if (messageLower.includes('sick')) {
-      const sickMsg = this.t('leave.sick_request', 
-        "I understand you need sick leave. I'll prepare a sick leave request. Note that sick leave typically doesn't require advance notice if it's for today."
-      );
-      return {
-        type: 'form_draft',
-        message: sickMsg,
-        action: 'show_form',
-        form_data: {
-          leave_type: 'sick',
-          start_date: this.getTodayDate(),
-          end_date: this.getTodayDate(),
-          duration: '1 day',
-          reason: this.t('leave.medical_reasons', 'Medical reasons')
-        }
-      };
-    } else {
-      const generalMsg = this.t('leave.general_request', 
-        "I understand you'd like to request leave. I can help you with that! Could you provide more details about:\n\n• The dates you need\n• Type of leave (annual, sick, personal, emergency)\n• Duration (full day, half day, multiple days)\n• Reason (optional but helpful)"
-      );
-      return {
-        type: 'acknowledgment',
-        message: generalMsg,
-        action: 'ask_details'
+        type: 'help',
+        message: this.t(
+          'hcm.available_services',
+          `Here are the available HCM services I can help you with:\n\n${serviceList}\n\nJust tell me which service you'd like to use, for example: "I need applyformleave"`
+        )
       };
     }
-  }
 
-  getCurrentUserId() {
-    // In a real application, get this from authentication context
-    return 'sa'; // Default for testing
-  }
-
-  getCurrentEmployeeId() {
-    // In a real application, get this from user profile/authentication
-    return 'A011'; // Default for testing
+    return {
+      type: 'clarification',
+      message: this.t('hcm.clarification',
+        `I can help you with HCM service requests. I support these services:\n\n• applyformleave\n• createformleave\n• createleave\n• checkovertime\n\nWhich service would you like to use?`)
+    };
   }
 
   handleAssistantResponse(response) {
     switch (response.type) {
-      case 'info':
-        this.addAssistantMessage(response.message);
-        break;
-      case 'form_ready':
-        this.addAssistantMessage(response.message, true, response.form_data);
+      case 'service_form':
+        this.addAssistantMessage(response.message, true, response.serviceCode, response.template);
         this.setupFormHandlers();
-        break;
-      case 'clarification':
-        this.addAssistantMessage(response.message);
-        break;
-      case 'general':
-        this.addAssistantMessage(response.message);
         break;
       default:
         this.addAssistantMessage(response.message);
     }
   }
 
-  async submitLeaveRequest(formElement) {
-    const formData = this.extractFormData(formElement);
-    
-    const submitBtn = formElement.querySelector('.submit-leave-btn');
+  // Assistant bubble + optional form
+  addAssistantMessage(message, showForm = false, serviceCode = null, template = null) {
+    const chatContainer = document.getElementById('hcm-chat-messages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'flex items-start space-x-3 chat-message';
+
+    let formHtml = '';
+    if (showForm && serviceCode && template) {
+      this.selectedService = serviceCode;
+      this.currentFormData = JSON.parse(JSON.stringify(template.data));
+      formHtml = this.generateServiceForm(serviceCode, template);
+    }
+
+    messageDiv.innerHTML = `
+      <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-green-500 rounded-full flex items-center justify-center flex-shrink-0">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+          <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
+        </svg>
+      </div>
+      <div class="bg-gradient-to-r from-blue-50 to-green-50 border border-blue-200 rounded-xl p-4 max-w-3xl">
+        <p class="text-sm text-gray-800 whitespace-pre-line">${this.escapeHtml(message)}</p>
+        ${formHtml}
+      </div>
+    `;
+    chatContainer.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  }
+
+  // Dynamic service form
+  generateServiceForm(serviceCode, template) {
+    const formId = 'hcm-form-' + Date.now();
+    return `
+      <div class="mt-4 p-4 bg-white border-2 border-blue-200 rounded-lg shadow-sm hcm-form-container" id="${formId}">
+        <div class="flex items-center justify-between mb-4">
+          <h4 class="text-sm font-semibold text-gray-900 flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-2 text-blue-600">
+              <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            ${template.name} <span class="ml-2 text-xs text-gray-500">(${serviceCode})</span>
+          </h4>
+          <span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">${serviceCode}</span>
+        </div>
+
+        <div class="space-y-4">
+          ${this.renderFormFields(template.data, serviceCode)}
+
+          <!-- JSON Preview -->
+          <details class="mt-4">
+            <summary class="text-sm text-gray-600 cursor-pointer hover:text-gray-800 flex items-center">
+              <span>Preview JSON Payload</span>
+              <span class="ml-2 px-2 py-0.5 bg-slate-100 border rounded text-[10px] text-slate-700 json-badge">ExpiredDate auto-refresh</span>
+            </summary>
+            <div class="mt-2 p-3 bg-gray-50 rounded border text-xs font-mono overflow-auto max-h-48" id="json-preview-${formId}">
+              <div class="flex items-center justify-end mb-2 gap-2">
+                <button class="copy-json px-2 py-1 text-[11px] border rounded hover:bg-white">Copy</button>
+                <button class="download-json px-2 py-1 text-[11px] border rounded hover:bg-white">Download</button>
+              </div>
+              <pre class="select-all"></pre>
+            </div>
+          </details>
+
+          <div class="flex flex-wrap gap-2 pt-2">
+            <button class="submit-hcm-btn px-4 py-2 bg-gradient-to-r from-blue-600 to-green-600 text-white text-sm rounded-lg hover:from-blue-700 hover:to-green-700 transition-all duration-200 transform hover:scale-105 flex items-center space-x-2" data-service="${serviceCode}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="m22 2-7 20-4-9-9-4Z"/>
+              </svg>
+              <span>Submit to HCM</span>
+            </button>
+            <button class="preview-btn px-4 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition-colors">
+              Update Preview
+            </button>
+            <button class="retry-btn hidden px-4 py-2 bg-amber-100 text-amber-800 text-sm rounded-lg hover:bg-amber-200 transition-colors" title="Retry with fresh ExpiredDate">
+              Retry
+            </button>
+            <button class="cancel-btn px-4 py-2 bg-red-100 text-red-700 text-sm rounded-lg hover:bg-red-200 transition-colors">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  renderFormFields(obj, serviceCode, prefix = '') {
+    let html = '';
+    Object.keys(obj).forEach(key => {
+      const value = obj[key];
+      const fieldName = prefix ? `${prefix}.${key}` : key;
+
+      if (Array.isArray(value)) {
+        html += `<div class="border border-gray-200 rounded-lg p-3">
+          <label class="block text-xs font-medium text-gray-700 mb-2">${key} (Array)</label>`;
+        value.forEach((item, index) => {
+          if (typeof item === 'object' && item !== null) {
+            html += `<div class="ml-2 mb-3 p-3 bg-gray-50 rounded border-l-2 border-blue-300">
+              <div class="text-xs font-medium text-blue-600 mb-2">${key}[${index}]</div>
+              ${this.renderFormFields(item, serviceCode, `${fieldName}.${index}`)}
+            </div>`;
+          }
+        });
+        html += `</div>`;
+      } else if (typeof value === 'object' && value !== null) {
+        html += `<div class="border border-gray-200 rounded-lg p-3">
+          <label class="block text-xs font-medium text-gray-700 mb-2">${key}</label>
+          ${this.renderFormFields(value, serviceCode, fieldName)}
+        </div>`;
+      } else {
+        const isDate = key.toLowerCase().includes('date');
+        const isTime = key.toLowerCase().includes('time');
+        const isText = key === 'reason' || key.toLowerCase().includes('desc');
+
+        html += `<div class="form-field">
+          <label class="block text-xs font-medium text-gray-700 mb-1" for="${fieldName}">${key}</label>`;
+
+        if (isDate) {
+          html += `<input type="date" value="${value || this.getTodayDate()}" class="field-input w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500" data-field="${fieldName}">`;
+        } else if (isTime) {
+          html += `<input type="time" value="${value || '09:00'}" class="field-input w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500" data-field="${fieldName}">`;
+        } else if (isText) {
+          html += `<textarea rows="2" class="field-input w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500" data-field="${fieldName}" placeholder="Enter ${key}...">${value || ''}</textarea>`;
+        } else {
+          html += `<input type="text" value="${value || ''}" class="field-input w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500" data-field="${fieldName}" placeholder="Enter ${key}...">`;
+        }
+
+        html += `</div>`;
+      }
+    });
+    return html;
+  }
+
+  setupFormHandlers() {
+    setTimeout(() => {
+      const chatContainer = document.getElementById('hcm-chat-messages');
+
+      chatContainer.querySelectorAll('.submit-hcm-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          const serviceCode = btn.dataset.service;
+          const formContainer = btn.closest('.hcm-form-container');
+          await this.submitHCMRequest(serviceCode, formContainer);
+        });
+      });
+
+      chatContainer.querySelectorAll('.preview-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const formContainer = btn.closest('.hcm-form-container');
+          this.updateJSONPreview(formContainer);
+        });
+      });
+
+      chatContainer.querySelectorAll('.retry-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          const formContainer = btn.closest('.hcm-form-container');
+          const serviceCode = formContainer.querySelector('.submit-hcm-btn')?.dataset?.service;
+          if (!serviceCode) return;
+          // Rebuild payload with fresh ExpiredDate and retry
+          this.updateJSONPreview(formContainer);
+          await this.submitHCMRequest(serviceCode, formContainer, { isRetry:true });
+        });
+      });
+
+      chatContainer.querySelectorAll('.cancel-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          btn.closest('.hcm-form-container').style.display = 'none';
+          this.addAssistantMessage(this.t('hcm.form_cancelled', "Form cancelled. What else can I help you with?"));
+        });
+      });
+
+      chatContainer.querySelectorAll('.field-input').forEach(input => {
+        input.addEventListener('input', (e) => {
+          const fieldPath = e.target.dataset.field;
+          const value = e.target.value;
+          this.updateFormData(fieldPath, value);
+          const formContainer = input.closest('.hcm-form-container');
+          this.updateJSONPreview(formContainer);
+        });
+      });
+
+      // Copy/Download controls
+      chatContainer.querySelectorAll('.copy-json').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const pre = btn.closest('#' + btn.closest('[id]').id).querySelector('pre');
+          navigator.clipboard.writeText(pre.textContent || '');
+          btn.textContent = 'Copied!';
+          setTimeout(()=>btn.textContent='Copy', 1200);
+        });
+      });
+
+      chatContainer.querySelectorAll('.download-json').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const wrap = btn.closest('[id^="json-preview-"]');
+          const pre = wrap.querySelector('pre');
+          const blob = new Blob([pre.textContent || '{}'], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'hcm-payload.json';
+          document.body.appendChild(a);
+          a.click();
+          URL.revokeObjectURL(url);
+          a.remove();
+        });
+      });
+
+      // First preview render
+      chatContainer.querySelectorAll('.hcm-form-container').forEach(form => this.updateJSONPreview(form));
+    }, 80);
+  }
+
+  updateFormData(fieldPath, value) {
+    const paths = fieldPath.split('.');
+    let current = this.currentFormData;
+    for (let i = 0; i < paths.length - 1; i++) {
+      const path = paths[i];
+      if (!isNaN(path)) current = current[parseInt(path)];
+      else {
+        if (!current[path]) current[path] = {};
+        current = current[path];
+      }
+    }
+    const finalPath = paths[paths.length - 1];
+    if (!isNaN(finalPath)) current[parseInt(finalPath)] = value;
+    else current[finalPath] = value;
+  }
+
+  updateJSONPreview(formContainer) {
+    const pre = formContainer.querySelector('pre');
+    if (!pre) return;
+
+    const inputs = formContainer.querySelectorAll('.field-input');
+    inputs.forEach(input => {
+      const fieldPath = input.dataset.field;
+      const value = input.value;
+      this.updateFormData(fieldPath, value);
+    });
+
+    const loginName = document.getElementById('ui-login-name')?.textContent || this.hcmConfig.defaultLogin;
+    const payload = {
+      AccessToken: this.hcmConfig.accessToken,
+      LogonInfo: this.buildLogonInfo(this.selectedService, loginName),
+      Data: this.currentFormData
+    };
+    this.lastRequestPayload = payload; // keep latest payload for retry
+    pre.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  buildLogonInfo(serviceCode, loginName) {
+    const expiredDate = this.generateExpiredDate();
+    return [
+      `LoginName=${loginName}`,
+      `BusinessUnit=${this.hcmConfig.businessUnit}`,
+      `LogonRegion=${this.hcmConfig.region}`,
+      `ExpiredDate=${expiredDate}`,
+      `ServiceCode=${serviceCode}`
+    ].join('&');
+  }
+
+  async submitHCMRequest(serviceCode, formContainer, opts = {}) {
+    const submitBtn = formContainer.querySelector('.submit-hcm-btn');
+    const retryBtn = formContainer.querySelector('.retry-btn');
     const originalHTML = submitBtn.innerHTML;
-    
-    // Show loading state
-    const submittingText = this.t('leave.submitting', 'Submitting...');
+
+    // Keep data in sync
+    const inputs = formContainer.querySelectorAll('.field-input');
+    inputs.forEach(input => {
+      const fieldPath = input.dataset.field;
+      const value = input.value;
+      this.updateFormData(fieldPath, value);
+    });
+
     submitBtn.innerHTML = `
       <svg class="animate-spin w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
       </svg>
-      <span>${submittingText}</span>
+      <span>${opts.isRetry ? 'Retrying...' : 'Submitting...'}</span>
     `;
     submitBtn.disabled = true;
 
     try {
-      // Prepare request for backend API
-      const leaveRequest = {
-        user_id: this.getCurrentUserId(),
-        employee_id: this.getCurrentEmployeeId(),
-        leave_type: formData.leaveType,
-        start_date: formData.startDate,
-        end_date: formData.endDate,
-        start_time: this.getTimeFromDuration(formData.duration, 'start'),
-        end_time: this.getTimeFromDuration(formData.duration, 'end'),
-        duration_type: formData.duration,
-        reason: formData.reason || this.getDefaultReason(formData.leaveType)
+      const loginName = document.getElementById('ui-login-name')?.textContent || this.hcmConfig.defaultLogin;
+      const requestPayload = {
+        service_code: serviceCode,
+        user_id: loginName,
+        data: this.currentFormData
       };
 
-      // Call the actual backend API
-      const response = await fetch(`${this.API_BASE}/api/leave/submit`, {
+      const response = await fetch(`${this.API_BASE}/api/hcm/call`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(leaveRequest)
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': this.generateIdempotencyKey()
+        },
+        body: JSON.stringify(requestPayload)
       });
 
       const result = await response.json();
 
       if (result.success) {
-        // Use the actual response data
-        const requestData = {
-          id: result.request_id || 'LR-' + new Date().getFullYear() + '-' + Math.random().toString(36).substr(2, 6).toUpperCase(),
-          leaveType: this.formatLeaveType(formData.leaveType),
-          duration: this.formatDuration(formData.duration),
-          startDate: formData.startDate,
-          endDate: formData.endDate,
-          reason: formData.reason,
-          status: 'Pending',
-          submittedAt: new Date().toISOString(),
-          formNumber: result.form_number
-        };
-        
-        this.addLeaveRequestToSidebar(requestData);
-        
-        const successMessage = this.t('leave.submission_success', 
-          `Success! Your leave request has been submitted to the HCM system.\n\n` +
-          `Request ID: ${requestData.id}\n` +
-          `Form Number: ${result.form_number || 'N/A'}\n` +
-          `Status: Pending Manager Approval\n` +
-          `Expected Response: Within 24 hours\n\n` +
-          `You can see the request details in the sidebar. You'll receive an email notification once your manager reviews the request.`
-        ).replace('{id}', requestData.id);
-        
-        this.addAssistantMessage(successMessage);
-        
-        // Show success modal
-        document.getElementById('success-modal').classList.remove('hidden');
-        
+        this.handleSuccess(result, serviceCode);
+        this.addResultCard(result, 'success', serviceCode);
+        // Lock the form
+        formContainer.style.opacity = '0.7';
+        formContainer.style.pointerEvents = 'none';
       } else {
-        throw new Error(result.message || 'Submission failed');
+        this.handleError(result, serviceCode, formContainer);
+        this.addResultCard(result, 'error', serviceCode);
+        // Enable retry button
+        if (retryBtn) retryBtn.classList.remove('hidden');
       }
-      
-      // Hide the form with animation
-      formElement.style.opacity = '0.7';
-      formElement.style.pointerEvents = 'none';
-      
-      const submittedText = this.t('leave.submitted', 'Submitted');
-      submitBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-          <polyline points="22,4 12,14.01 9,11.01"/>
-        </svg>
-        <span>${submittedText}</span>
-      `;
-      
     } catch (error) {
-      console.error('Submission error:', error);
-      
-      // Try fallback mock submission for demo purposes
-      try {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        const requestId = 'LR-DEMO-' + new Date().getFullYear() + '-' + Math.random().toString(36).substr(2, 6).toUpperCase();
-        
-        const requestData = {
-          id: requestId,
-          leaveType: this.formatLeaveType(formData.leaveType),
-          duration: this.formatDuration(formData.duration),
-          startDate: formData.startDate,
-          endDate: formData.endDate,
-          reason: formData.reason,
-          status: 'Pending',
-          submittedAt: new Date().toISOString()
-        };
-        
-        this.addLeaveRequestToSidebar(requestData);
-        
-        const demoMessage = this.t('leave.demo_submission', 
-          `Demo Mode: Your leave request has been created locally.\n\n` +
-          `Request ID: ${requestId}\n` +
-          `Note: This is a demonstration. In production, this would be submitted to your HCM system.\n\n` +
-          `The request appears in the sidebar for demo purposes.`
-        );
-        
-        this.addAssistantMessage(demoMessage);
-        document.getElementById('success-modal').classList.remove('hidden');
-        
-        formElement.style.opacity = '0.7';
-        formElement.style.pointerEvents = 'none';
-        
-        const submittedText = this.t('leave.submitted', 'Submitted');
-        submitBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-            <polyline points="22,4 12,14.01 9,11.01"/>
-          </svg>
-          <span>${submittedText}</span>
-        `;
-        
-      } catch (fallbackError) {
-        this.addAssistantMessage(this.t('leave.submission_error', "I'm sorry, there was an error submitting your request. Please try again or contact HR support if the problem persists."));
-        submitBtn.innerHTML = originalHTML;
-        submitBtn.disabled = false;
-      }
+      console.error('Request failed:', error);
+      this.addAssistantMessage(this.t('hcm.network_error', `Network error: ${error.message}. Please try again.`));
+      if (retryBtn) retryBtn.classList.remove('hidden');
+    } finally {
+      submitBtn.innerHTML = originalHTML;
+      submitBtn.disabled = false;
     }
   }
 
-  getTimeFromDuration(duration, position) {
-    const timeMappings = {
-      'full-day': { start: '09:00', end: '18:00' },
-      'half-day-am': { start: '09:00', end: '12:00' },
-      'half-day-pm': { start: '13:00', end: '18:00' },
-      'multiple-days': { start: '09:00', end: '18:00' }
-    };
-    
-    return timeMappings[duration]?.[position] || '09:00';
+  handleSuccess(result, serviceCode) {
+    const message = result.message || this.t('hcm.success_default', 'HCM request submitted successfully!');
+    this.addAssistantMessage(`✅ **Success!**\n\n${message}\n\nService: ${serviceCode}\nStatus: Completed\n\nYour request has been processed by the HCM system. Check the sidebar for details.`);
+    this.showModal('success', 'Request Successful!', message);
   }
 
-  getDefaultReason(leaveType) {
-    const reasons = {
-      'annual': this.t('leave.annual_leave_reason', 'Annual leave request'),
-      'sick': this.t('leave.medical_reasons', 'Medical reasons'),
-      'personal': this.t('leave.personal_reason', 'Personal matters'),
-      'emergency': this.t('leave.emergency_reason', 'Emergency leave')
-    };
-    
-    return reasons[leaveType] || this.t('leave.general_reason', 'Leave request via AI assistant');
-  }
+  // Rich error panel with explanation blocks + raw response
+  handleError(result, serviceCode, formContainer) {
+    const msg = result.message || this.t('hcm.error_default', 'Request failed');
+    const explanation = result.data?.explanation || null;
+    const code = (result.code || explanation?.code || 'UNKNOWN');
 
-  async loadLeaveBalance() {
-    try {
-      const balanceRequest = {
-        user_id: this.getCurrentUserId(),
-        employee_id: this.getCurrentEmployeeId()
-      };
+    // Build panel
+    let html = `
+      <div class="mt-3 p-4 bg-red-50 border border-red-200 rounded-lg">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700">${this.escapeHtml(code)}</span>
+            <span class="text-sm font-semibold text-red-800">Request Failed</span>
+          </div>
+          <span class="text-xs text-red-600">${new Date().toLocaleString()}</span>
+        </div>
+        <p class="mt-2 text-sm text-red-800">${this.escapeHtml(msg)}</p>
+    `;
 
-      const response = await fetch(`${this.API_BASE}/api/leave/balance`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(balanceRequest)
+    if (explanation) {
+      const why = explanation.why || '';
+      const causes = Array.isArray(explanation.probable_causes) ? explanation.probable_causes : [];
+      const checks = Array.isArray(explanation.checks) ? explanation.checks : [];
+      const nextSteps = Array.isArray(explanation.next_steps) ? explanation.next_steps : [];
+      const autoActions = Array.isArray(explanation.auto_actions) ? explanation.auto_actions : [];
+
+      if (why) {
+        html += `<div class="mt-3">
+          <h5 class="text-sm font-semibold text-gray-900">Why</h5>
+          <p class="text-sm text-gray-700">${this.escapeHtml(why)}</p>
+        </div>`;
+      }
+
+      if (causes.length) {
+        html += `<div class="mt-3">
+          <h5 class="text-sm font-semibold text-gray-900">Possible Causes</h5>
+          <ul class="list-disc ml-5 text-sm text-gray-700">${causes.map(c=>`<li>${this.escapeHtml(c)}</li>`).join('')}</ul>
+        </div>`;
+      }
+
+      if (checks.length) {
+        html += `<div class="mt-3">
+          <h5 class="text-sm font-semibold text-gray-900">Checks</h5>
+          <ul class="list-disc ml-5 text-sm text-gray-700">${checks.map(c=>`<li>${this.escapeHtml(c)}</li>`).join('')}</ul>
+        </div>`;
+      }
+
+      if (nextSteps.length) {
+        html += `<div class="mt-3">
+          <h5 class="text-sm font-semibold text-gray-900">Next Steps</h5>
+          <ul class="list-disc ml-5 text-sm text-gray-700">${nextSteps.map(s=>`<li>${this.escapeHtml(s)}</li>`).join('')}</ul>
+        </div>`;
+      }
+
+      if (autoActions.length) {
+        html += `<div class="mt-3">
+          <h5 class="text-sm font-semibold text-gray-900">Quick Actions</h5>
+          <div class="flex flex-wrap gap-2 mt-1">
+            ${autoActions.map(a=>`<button class="auto-action px-3 py-1.5 text-xs rounded border hover:bg-white" data-action="${this.escapeHtml(a.id)}">${this.escapeHtml(a.label || a.id)}</button>`).join('')}
+          </div>
+        </div>`;
+      }
+    }
+
+    html += `
+        <details class="mt-3">
+          <summary class="text-xs text-gray-600 cursor-pointer">Raw Response</summary>
+          <pre class="mt-2 p-3 bg-gray-900 text-gray-100 text-[11px] rounded-lg overflow-x-auto">${this.escapeHtml(JSON.stringify(result, null, 2))}</pre>
+        </details>
+      </div>
+    `;
+
+    // Show alongside assistant message
+    this.addAssistantMessage(`❌ **Request Failed**\n\nService: ${serviceCode}`, false);
+    const chatContainer = document.getElementById('hcm-chat-messages');
+    const lastBubble = chatContainer.lastElementChild?.querySelector('.bg-gradient-to-r');
+    if (lastBubble) {
+      const wrap = document.createElement('div');
+      wrap.innerHTML = html;
+      lastBubble.appendChild(wrap.firstElementChild);
+    }
+
+    // Modal
+    this.showModal('error', 'Request Failed', msg);
+
+    // Hook auto-actions + enable visible Retry
+    if (formContainer) {
+      const retryBtn = formContainer.querySelector('.retry-btn');
+      if (retryBtn) retryBtn.classList.remove('hidden');
+    }
+
+    // Attach auto-action handlers (lightweight demo actions)
+    setTimeout(() => {
+      document.querySelectorAll('.auto-action').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const action = btn.dataset.action;
+          if (action === 'retry_after_token_refresh' || action === 'retry_with_validation') {
+            const formContainer = btn.closest('.chat-message')?.querySelector('.hcm-form-container') || document.querySelector('.hcm-form-container');
+            const serviceCode = formContainer?.querySelector('.submit-hcm-btn')?.dataset?.service;
+            if (formContainer && serviceCode) {
+              this.updateJSONPreview(formContainer); // refresh ExpiredDate
+              await this.submitHCMRequest(serviceCode, formContainer, { isRetry: true });
+            }
+          } else if (action === 'open_balance_panel') {
+            this.addAssistantMessage('Opening balance panel… (demo)');
+          } else if (action === 'generate_unique_ref') {
+            // Append a unique reference to the current form data (demo)
+            this.currentFormData.ref = 'REF-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+            const formContainer = document.querySelector('.hcm-form-container');
+            if (formContainer) this.updateJSONPreview(formContainer);
+            this.addAssistantMessage('Added a unique reference. Try submitting again.');
+          } else if (action === 'check_employee_setup') {
+            this.addAssistantMessage('Please verify employee setup in HCM (demo action).');
+          }
+        });
       });
-
-      const result = await response.json();
-
-      if (result.success) {
-        this.updateBalanceDisplay(result.balances);
-      }
-    } catch (error) {
-      console.error('Error loading leave balance:', error);
-      // Continue with mock data if API fails
-    }
+    }, 50);
   }
 
-  updateBalanceDisplay(balances) {
-    const daysText = this.t('leave.days', 'days');
-    
-    if (balances.annual !== undefined) {
-      document.getElementById('annual-balance').innerHTML = `${balances.annual} <span data-i18n="leave.days">${daysText}</span>`;
-    }
-    if (balances.sick !== undefined) {
-      document.getElementById('sick-balance').innerHTML = `${balances.sick} <span data-i18n="leave.days">${daysText}</span>`;
-    }
-    if (balances.personal !== undefined) {
-      document.getElementById('personal-balance').innerHTML = `${balances.personal} <span data-i18n="leave.days">${daysText}</span>`;
-    }
+  addResultCard(result, type, serviceCode) {
+    const container = document.getElementById('results-container');
+    const emptyState = document.getElementById('empty-state');
+    if (emptyState) emptyState.style.display = 'none';
+
+    const card = document.createElement('div');
+    card.className = 'bg-white rounded-xl shadow-sm p-6 hcm-card sidebar-item';
+
+    const isSuccess = type === 'success';
+    const iconColor = isSuccess ? 'text-emerald-600' : 'text-red-600';
+    const bgColor = isSuccess ? 'bg-emerald-100' : 'bg-red-100';
+    const statusColor = isSuccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700';
+    const statusText = isSuccess ? 'Success' : 'Failed';
+
+    card.innerHTML = `
+      <div class="flex items-start justify-between mb-4">
+        <div class="flex items-center space-x-3">
+          <div class="w-10 h-10 ${bgColor} rounded-full flex items-center justify-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="${iconColor}" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              ${isSuccess 
+                ? '<polyline points="20 6 9 17 4 12"></polyline>'
+                : '<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>'}
+            </svg>
+          </div>
+          <div>
+            <h4 class="text-lg font-semibold text-gray-900">${serviceCode}</h4>
+            <p class="text-sm text-gray-600">${new Date().toLocaleString()}</p>
+          </div>
+        </div>
+        <span class="status-badge px-3 py-1 text-xs ${statusColor} rounded-full font-medium">
+          ${statusText}
+        </span>
+      </div>
+
+      <div class="space-y-3">
+        <div class="text-sm">
+          <span class="text-gray-500">Message:</span>
+          <span class="font-medium text-gray-900 ml-1">${this.escapeHtml(result.message || 'No message')}</span>
+        </div>
+
+        ${isSuccess && result.hcm ? `
+        <div class="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+          ${this.renderHCMResponse(result.hcm)}
+        </div>` : ''}
+
+        ${!isSuccess && result.data?.explanation ? `
+        <div class="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+          <div class="text-sm text-red-800"><strong>Why:</strong> ${this.escapeHtml(result.data.explanation.why || 'Unknown')}</div>
+        </div>` : ''}
+
+        <details class="mt-3 group">
+          <summary class="cursor-pointer text-sm text-gray-500 hover:text-gray-700">Raw Response</summary>
+          <pre class="mt-2 p-3 bg-gray-900 text-gray-100 text-xs rounded-lg overflow-x-auto">${this.escapeHtml(JSON.stringify(result, null, 2))}</pre>
+        </details>
+      </div>
+    `;
+    container.appendChild(card);
   }
 
+  renderHCMResponse(hcmData) {
+    if (!hcmData || typeof hcmData !== 'object') {
+      return '<p class="text-sm text-gray-600">No HCM data available</p>';
+    }
+    let html = '<div class="space-y-2">';
+    Object.keys(hcmData).forEach(key => {
+      const value = hcmData[key];
+      html += `
+        <div class="flex justify-between text-sm">
+          <span class="text-gray-500 capitalize">${key}:</span>
+          <span class="font-medium text-gray-900 ml-2">${this.escapeHtml(String(value))}</span>
+        </div>`;
+    });
+    html += '</div>';
+    return html;
+  }
+
+  showModal(type, title, message) {
+    const modal = document.getElementById('success-modal');
+    const titleEl = document.getElementById('success-title');
+    const descEl = document.getElementById('success-desc');
+
+    const icon = modal.querySelector('.w-16.h-16');
+    const iconSvg = modal.querySelector('svg');
+    const button = modal.querySelector('button');
+
+    if (type === 'error') {
+      icon.className = 'w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4';
+      iconSvg.className = 'w-8 h-8 text-red-600';
+      iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>';
+      button.className = 'bg-red-600 text-white px-6 py-2 rounded-lg hover:bg-red-700 transition-colors';
+    } else {
+      icon.className = 'w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4';
+      iconSvg.className = 'w-8 h-8 text-green-600';
+      iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>';
+      button.className = 'bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors';
+    }
+
+    titleEl.textContent = title;
+    descEl.textContent = message;
+    modal.classList.remove('hidden');
+  }
+
+  // Chat UI
   addUserMessage(message) {
-    const chatContainer = document.getElementById('leave-chat-messages');
+    const chatContainer = document.getElementById('hcm-chat-messages');
     const messageDiv = document.createElement('div');
     messageDiv.className = 'flex items-start space-x-3 justify-end chat-message';
     messageDiv.innerHTML = `
       <div class="bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl p-4 max-w-lg shadow-md">
-        <p class="text-sm">${this.escapeHtml(message)}</p>
+        <p class="text-sm whitespace-pre-line">${this.escapeHtml(message)}</p>
       </div>
       <div class="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center flex-shrink-0">
-        <span class="text-gray-600 text-xs font-bold">${this.t('leave.you_label', 'You')}</span>
+        <span class="text-gray-600 text-xs font-bold">You</span>
       </div>
     `;
     chatContainer.appendChild(messageDiv);
@@ -852,7 +953,7 @@ class LeaveAssistant {
   }
 
   showTypingIndicator() {
-    const chatContainer = document.getElementById('leave-chat-messages');
+    const chatContainer = document.getElementById('hcm-chat-messages');
     const typingDiv = document.createElement('div');
     typingDiv.id = 'typing-indicator';
     typingDiv.className = 'flex items-start space-x-3 chat-message';
@@ -869,7 +970,7 @@ class LeaveAssistant {
             <span class="inline-block w-2 h-2 bg-blue-400 rounded-full animate-pulse" style="animation-delay: 0.2s"></span>
             <span class="inline-block w-2 h-2 bg-blue-400 rounded-full animate-pulse" style="animation-delay: 0.4s"></span>
           </div>
-          <span class="text-sm text-gray-600">${this.t('leave.thinking', 'Assistant is thinking...')}</span>
+          <span class="text-sm text-gray-600">Assistant is thinking...</span>
         </div>
       </div>
     `;
@@ -878,487 +979,113 @@ class LeaveAssistant {
   }
 
   hideTypingIndicator() {
-    const typingDiv = document.getElementById('typing-indicator');
-    if (typingDiv) {
-      typingDiv.remove();
-    }
+    const typingIndicator = document.getElementById('typing-indicator');
+    if (typingIndicator) typingIndicator.remove();
   }
 
-  addAssistantMessage(message, showForm = false, formData = null) {
-    const chatContainer = document.getElementById('leave-chat-messages');
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'flex items-start space-x-3 chat-message';
-    
-    let formHtml = '';
-    if (showForm && formData) {
-      formHtml = this.generateLeaveForm(formData);
-    }
-    
-    messageDiv.innerHTML = `
-      <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-green-500 rounded-full flex items-center justify-center flex-shrink-0">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
-          <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
-        </svg>
-      </div>
-      <div class="bg-gradient-to-r from-blue-50 to-green-50 border border-blue-200 rounded-xl p-4 max-w-lg">
-        <p class="text-sm text-gray-800 whitespace-pre-line">${this.escapeHtml(message)}</p>
-        ${formHtml}
-      </div>
-    `;
-    chatContainer.appendChild(messageDiv);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
-  }
-
-  generateLeaveForm(formData) {
-    const formId = 'leave-form-' + Date.now();
-    
-    // Translate form labels and options
-    const formTitle = this.t('leave.form_title', 'Leave Request Form');
-    const leaveTypeLabel = this.t('leave.form_leave_type', 'Leave Type');
-    const durationLabel = this.t('leave.form_duration', 'Duration');
-    const startDateLabel = this.t('leave.form_start_date', 'Start Date');
-    const endDateLabel = this.t('leave.form_end_date', 'End Date');
-    const reasonLabel = this.t('leave.form_reason', 'Reason (Optional)');
-    const reasonPlaceholder = this.t('leave.form_reason_placeholder', 'Brief reason for leave...');
-    const currentBalanceLabel = this.t('leave.form_current_balance', 'Current Balance:');
-    const submitText = this.t('leave.form_submit', 'Submit Request');
-    const modifyText = this.t('leave.form_modify', 'Modify Details');
-    const cancelText = this.t('leave.form_cancel', 'Cancel');
-    
-    // Leave type options
-    const annualLeaveText = this.t('leave.annual_leave', 'Annual Leave');
-    const sickLeaveText = this.t('leave.sick_leave', 'Sick Leave');
-    const personalLeaveText = this.t('leave.personal_leave', 'Personal Leave');
-    const emergencyLeaveText = this.t('leave.emergency_leave', 'Emergency Leave');
-    
-    // Duration options
-    const fullDayText = this.t('leave.full_day', 'Full Day');
-    const halfDayMorningText = this.t('leave.half_day_morning', 'Half Day (Morning)');
-    const halfDayAfternoonText = this.t('leave.half_day_afternoon', 'Half Day (Afternoon)');
-    const multipleDaysText = this.t('leave.multiple_days', 'Multiple Days');
-    
-    return `
-      <div class="mt-4 p-4 bg-white border-2 border-blue-200 rounded-lg shadow-sm" id="${formId}">
-        <h4 class="text-sm font-semibold text-gray-900 mb-3 flex items-center">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-2 text-blue-600">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14,2 14,8 20,8"/>
-          </svg>
-          ${formTitle}
-        </h4>
-        <div class="space-y-3">
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs font-medium text-gray-700 mb-1">${leaveTypeLabel}</label>
-              <select class="leave-type w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500">
-                <option value="annual" ${formData.leave_type === 'annual' ? 'selected' : ''}>${annualLeaveText}</option>
-                <option value="sick" ${formData.leave_type === 'sick' ? 'selected' : ''}>${sickLeaveText}</option>
-                <option value="personal" ${formData.leave_type === 'personal' ? 'selected' : ''}>${personalLeaveText}</option>
-                <option value="emergency" ${formData.leave_type === 'emergency' ? 'selected' : ''}>${emergencyLeaveText}</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-xs font-medium text-gray-700 mb-1">${durationLabel}</label>
-              <select class="duration w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500">
-                <option value="full-day" ${formData.duration === '1 day' ? 'selected' : ''}>${fullDayText}</option>
-                <option value="half-day-am">${halfDayMorningText}</option>
-                <option value="half-day-pm">${halfDayAfternoonText}</option>
-                <option value="multiple-days">${multipleDaysText}</option>
-              </select>
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs font-medium text-gray-700 mb-1">${startDateLabel}</label>
-              <input type="date" value="${formData.start_date}" class="start-date w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500">
-            </div>
-            <div>
-              <label class="block text-xs font-medium text-gray-700 mb-1">${endDateLabel}</label>
-              <input type="date" value="${formData.end_date}" class="end-date w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500">
-            </div>
-          </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-700 mb-1">${reasonLabel}</label>
-            <textarea rows="2" class="reason w-full p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500" placeholder="${reasonPlaceholder}">${formData.reason || ''}</textarea>
-          </div>
-          
-          <!-- Balance Check -->
-          <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
-            <div class="flex items-center justify-between text-sm">
-              <span class="text-blue-800 font-medium">${currentBalanceLabel}</span>
-              <span class="text-blue-600" id="balance-display">15.5 ${this.t('leave.days', 'days')} (${annualLeaveText})</span>
-            </div>
-          </div>
-          
-          <div class="flex space-x-2 pt-2">
-            <button class="submit-leave-btn px-4 py-2 bg-gradient-to-r from-blue-600 to-green-600 text-white text-sm rounded-lg hover:from-blue-700 hover:to-green-700 transition-all duration-200 transform hover:scale-105 flex items-center space-x-2">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                <polyline points="22,4 12,14.01 9,11.01"/>
-              </svg>
-              <span>${submitText}</span>
-            </button>
-            <button class="modify-btn px-4 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition-colors">
-              ${modifyText}
-            </button>
-            <button class="cancel-btn px-4 py-2 bg-red-100 text-red-700 text-sm rounded-lg hover:bg-red-200 transition-colors">
-              ${cancelText}
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  handleAssistantResponse(response) {
-    switch (response.type) {
-      case 'info':
-        this.addAssistantMessage(response.message);
-        break;
-      case 'form_draft':
-        this.addAssistantMessage(response.message, true, response.form_data);
-        this.setupFormHandlers();
-        break;
-      case 'clarification':
-        this.addAssistantMessage(response.message);
-        break;
-      default:
-        this.addAssistantMessage(response.message);
-    }
-  }
-
-  setupFormHandlers() {
-    setTimeout(() => {
-      const submitBtns = document.querySelectorAll('.submit-leave-btn');
-      const modifyBtns = document.querySelectorAll('.modify-btn');
-      const cancelBtns = document.querySelectorAll('.cancel-btn');
-      
-      submitBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          this.submitLeaveRequest(btn.closest('.bg-white'));
-        });
-      });
-
-      modifyBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          this.addAssistantMessage(this.t('leave.modify_prompt', "What would you like to modify? You can tell me the changes and I'll update the form for you."));
-        });
-      });
-
-      cancelBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          btn.closest('.bg-white').style.display = 'none';
-          this.addAssistantMessage(this.t('leave.form_cancelled', "Form cancelled. What else can I help you with?"));
-        });
-      });
-
-      // Update balance display when leave type changes
-      const leaveTypeSelects = document.querySelectorAll('.leave-type');
-      leaveTypeSelects.forEach(select => {
-        select.addEventListener('change', (e) => {
-          const balanceDisplay = e.target.closest('.bg-white').querySelector('#balance-display');
-          const daysText = this.t('leave.days', 'days');
-          const balances = {
-            'annual': `15.5 ${daysText} (${this.t('leave.annual_leave', 'Annual')})`,
-            'sick': `8.0 ${daysText} (${this.t('leave.sick_leave', 'Sick')})`,
-            'personal': `3.0 ${daysText} (${this.t('leave.personal_leave', 'Personal')})`,
-            'emergency': `${this.t('leave.no_limit', 'No limit')} (${this.t('leave.emergency_leave', 'Emergency')})`
-          };
-          balanceDisplay.textContent = balances[e.target.value];
-        });
-      });
-    }, 100);
-  }
-
-  async submitLeaveRequest(formElement) {
-    const formData = this.extractFormData(formElement);
-    
-    const submitBtn = formElement.querySelector('.submit-leave-btn');
-    const originalHTML = submitBtn.innerHTML;
-    
-    // Show loading state
-    const submittingText = this.t('leave.submitting', 'Submitting...');
-    submitBtn.innerHTML = `
-      <svg class="animate-spin w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-      </svg>
-      <span>${submittingText}</span>
-    `;
-    submitBtn.disabled = true;
-
-    try {
-      // Mock API call
-      await new Promise(resolve => setTimeout(resolve, 2500));
-      
-      const requestId = 'LR-' + new Date().getFullYear() + '-' + Math.random().toString(36).substr(2, 6).toUpperCase();
-      
-      // Add request to sidebar
-      const requestData = {
-        id: requestId,
-        leaveType: this.formatLeaveType(formData.leaveType),
-        duration: this.formatDuration(formData.duration),
-        startDate: formData.startDate,
-        endDate: formData.endDate,
-        reason: formData.reason,
-        status: 'Pending',
-        submittedAt: new Date().toISOString()
-      };
-      
-      this.addLeaveRequestToSidebar(requestData);
-      
-      const successMessage = this.t('leave.submission_success', 
-        `Success! Your leave request has been submitted and added to your requests.\n\n` +
-        `Request ID: ${requestId}\n` +
-        `Status: Pending Manager Approval\n` +
-        `Expected Response: Within 24 hours\n\n` +
-        `You can see the request details in the sidebar. You'll receive an email notification once your manager reviews the request.`
-      ).replace('{id}', requestId);
-      
-      this.addAssistantMessage(successMessage);
-      
-      // Hide the form with animation
-      formElement.style.opacity = '0.7';
-      formElement.style.pointerEvents = 'none';
-      
-      const submittedText = this.t('leave.submitted', 'Submitted');
-      submitBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-          <polyline points="22,4 12,14.01 9,11.01"/>
-        </svg>
-        <span>${submittedText}</span>
-      `;
-      
-      // Show success modal
-      document.getElementById('success-modal').classList.remove('hidden');
-      
-    } catch (error) {
-      this.addAssistantMessage(this.t('leave.submission_error', "I'm sorry, there was an error submitting your request. Please try again or contact HR support if the problem persists."));
-      submitBtn.innerHTML = originalHTML;
-      submitBtn.disabled = false;
-    }
-  }
-
-  formatLeaveType(type) {
-    const types = {
-      'annual': this.t('leave.annual_leave', 'Annual Leave'),
-      'sick': this.t('leave.sick_leave', 'Sick Leave'),
-      'personal': this.t('leave.personal_leave', 'Personal Leave'),
-      'emergency': this.t('leave.emergency_leave', 'Emergency Leave')
-    };
-    return types[type] || type;
-  }
-
-  formatDuration(duration) {
-    const durations = {
-      'full-day': this.t('leave.one_day', '1 day'),
-      'half-day-am': this.t('leave.half_day_am', '0.5 day (AM)'),
-      'half-day-pm': this.t('leave.half_day_pm', '0.5 day (PM)'),
-      'multiple-days': this.t('leave.multiple_days', 'Multiple days')
-    };
-    return durations[duration] || duration;
-  }
-
-  extractFormData(formElement) {
-    return {
-      leaveType: formElement.querySelector('.leave-type').value,
-      duration: formElement.querySelector('.duration').value,
-      startDate: formElement.querySelector('.start-date').value,
-      endDate: formElement.querySelector('.end-date').value,
-      reason: formElement.querySelector('.reason').value
-    };
-  }
-
-  getTomorrowDate() {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split('T')[0];
+  generateIdempotencyKey() {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substr(2, 9);
+    return `${this.selectedService}-${timestamp}-${random}`;
   }
 
   getTodayDate() {
-    const today = new Date();
-    return today.toISOString().split('T')[0];
+    return new Date().toISOString().split('T')[0];
   }
 
   escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = text || '';
     return div.innerHTML;
   }
 }
 
-// Initialize everything when DOM loads
+// Init
 document.addEventListener('DOMContentLoaded', async () => {
-  // Initialize translation manager
   if (window.TranslationManager) {
     i18n = new window.TranslationManager();
     await i18n.init('en-US');
-    
-    // Set up language selector
-    const langSelector = document.getElementById('language-selector');
-    if (langSelector) {
-      langSelector.value = i18n.getCurrentLanguage();
-      langSelector.addEventListener('change', (e) => {
-        i18n.switchLanguage(e.target.value);
-        applyTranslations();
-      });
-    }
-    
-    // Apply initial translations
-    applyTranslations();
-  }
-  
-  const leaveAssistant = new LeaveAssistant();
-
-  // Translation helper functions
-  function applyTranslations() {
-    if (!i18n) return;
-    
-    // Apply static translations
-    i18n.scanAndRegisterElements();
-    i18n.applyTranslations();
-    
-    // Update dynamic content
-    updateDynamicTranslations();
   }
 
-  function updateDynamicTranslations() {
-    if (!i18n) return;
-    
-    // Update system status
-    const systemStatus = document.getElementById('system-status');
-    if (systemStatus && systemStatus.textContent.includes('Ready')) {
-      systemStatus.textContent = i18n.t('leave.ai_ready', 'AI Assistant Ready');
-    }
-    
-    // Update balance displays to include translated "days"
-    const balanceElements = ['annual-balance', 'sick-balance', 'personal-balance'];
-    const daysText = i18n.t('leave.days', 'days');
-    
-    balanceElements.forEach(id => {
-      const element = document.getElementById(id);
-      if (element) {
-        const currentValue = element.textContent.split(' ')[0];
-        element.innerHTML = `${currentValue} <span data-i18n="leave.days">${daysText}</span>`;
-      }
-    });
-  }
+  const hcmAssistant = new HCMAssistant();
 
-  // Get DOM elements
+  const chatInput = document.getElementById('hcm-chat-input');
+  const sendBtn = document.getElementById('hcm-send-btn');
+  const micBtn = document.getElementById('hcm-mic-btn');
+  const suggestions = document.querySelectorAll('.hcm-suggestion');
   const backBtn = document.getElementById('back-to-dashboard');
-  const leaveInput = document.getElementById('leave-chat-input');
-  const sendBtn = document.getElementById('leave-send-btn');
-  const micBtn = document.getElementById('leave-mic-btn');
-  const suggestions = document.querySelectorAll('.leave-suggestion');
   const successModal = document.getElementById('success-modal');
   const closeSuccessModal = document.getElementById('close-success-modal');
 
-  // Navigation
-  backBtn?.addEventListener('click', () => {
-    window.location.href = '/';
-  });
-
-  // Send message function
   function sendMessage() {
-    const message = leaveInput.value.trim();
+    const message = chatInput.value.trim();
     if (message) {
-      leaveAssistant.sendMessage(message);
-      leaveInput.value = '';
-      leaveInput.style.height = 'auto';
+      hcmAssistant.sendMessage(message);
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
     }
   }
 
-  // Chat functionality
   sendBtn?.addEventListener('click', sendMessage);
-  
-  leaveInput?.addEventListener('keydown', (e) => {
+  chatInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   });
-
-  // Auto-resize textarea
-  leaveInput?.addEventListener('input', function() {
+  chatInput?.addEventListener('input', function() {
     this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    this.style.height = Math.min(this.scrollHeight, 160) + 'px';
   });
 
-  // Quick suggestions
   suggestions.forEach(btn => {
     btn.addEventListener('click', () => {
       const suggestion = btn.textContent.replace(/"/g, '');
-      leaveInput.value = suggestion;
+      chatInput.value = suggestion;
       sendMessage();
     });
   });
 
-  // Voice recording
   micBtn?.addEventListener('click', () => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
-      
       recognition.continuous = false;
       recognition.interimResults = false;
       recognition.lang = i18n?.getCurrentLanguage().startsWith('zh') ? 'zh-TW' : 'en-US';
-      
+
       recognition.onstart = () => {
         micBtn.classList.add('bg-red-100', 'text-red-600');
-        micBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="12" cy="12" r="10"/>
-          </svg>
-        `;
+        micBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>';
       };
-      
       recognition.onresult = (event) => {
         const transcript = event.results[0][0].transcript;
-        leaveInput.value = transcript;
+        chatInput.value = transcript;
         sendMessage();
       };
-      
       recognition.onend = () => {
         micBtn.classList.remove('bg-red-100', 'text-red-600');
         micBtn.innerHTML = `
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
-          </svg>
-        `;
+          </svg>`;
       };
-      
       recognition.start();
     } else {
-      const notSupportedMsg = i18n.t('leave.speech_not_supported', 'Speech recognition not supported in this browser');
-      alert(notSupportedMsg);
+      alert('Speech recognition not supported in this browser');
     }
   });
 
-  // Success modal
-  closeSuccessModal?.addEventListener('click', () => {
-    successModal.classList.add('hidden');
-  });
+  backBtn?.addEventListener('click', () => window.location.href = '/');
+  closeSuccessModal?.addEventListener('click', () => successModal.classList.add('hidden'));
+  successModal?.addEventListener('click', (e) => { if (e.target === successModal) successModal.classList.add('hidden'); });
 
-  // Close modal when clicking outside
-  successModal?.addEventListener('click', (e) => {
-    if (e.target === successModal) {
-      successModal.classList.add('hidden');
-    }
-  });
-
-  // Initialize with a delay to show loading state
-  setTimeout(() => {
-    const systemStatus = document.getElementById('system-status');
-    if (systemStatus && i18n) {
-      systemStatus.textContent = i18n.t('leave.ai_ready', 'AI Assistant Ready');
-    }
-  }, 1000);
+  const langSelector = document.getElementById('language-selector');
+  if (langSelector && i18n) {
+    langSelector.value = i18n.getCurrentLanguage();
+    langSelector.addEventListener('change', (e) => i18n.switchLanguage(e.target.value));
+  }
 });
-</script>
-
+  </script>
 </body>
 </html>
