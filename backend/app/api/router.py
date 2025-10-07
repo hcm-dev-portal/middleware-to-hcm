@@ -29,6 +29,9 @@ from app.services.db_service import SQLServerDatabaseService
 from app.services.nlp_service_2 import LanguageNativeNLPService
 from app.services.person_resolver import PersonResolver
 from app.services.helpers.data_utils import _apply_resolved, _collect_ids_from_rows
+from app.services.factory import create_enhanced_nlp_service
+
+
 
 # Reports service
 from app.reports.service import (
@@ -520,42 +523,207 @@ async def leave_data(
 
 
 
+# # =========================
+# # Assistant - OLD / Vector Admin / Health (tags: assistant, vector, health) 
+# # =========================
+# @router_main.post("/api/assistant/query", tags=["assistant"])
+# async def assistant_query(payload: dict, request: Request):
+#     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+#     q = (payload or {}).get("query") or ""
+
+#     t0 = time.perf_counter()
+#     logger.info("rid=%s /assistant/query start len=%d", rid, len(q))
+
+#     nlp: LanguageNativeNLPService = getattr(request.app.state, "nlp", None)
+#     if nlp is None:
+#         logger.error("rid=%s /assistant/query error: No NLP service available", rid)
+#         return JSONResponse({"success": False, "error": "NLP service not available"}, status_code=200)
+
+#     try:
+#         data = await run_in_threadpool(nlp.process_complete_query, q, "dbo", rid)
+#         if isinstance(data, dict):
+#             data["service_info"] = {"service_type": "language_native", "language_native_processing": True}
+#         return JSONResponse({"success": True, **(data or {})})
+#     except Exception as e:
+#         logger.exception("rid=%s /assistant/query error: %s: %s", rid, type(e).__name__, e)
+#         return JSONResponse(
+#             {
+#                 "success": False,
+#                 "error": str(e),
+#                 "service_info": {"service_type": "language_native", "error_in_service": "language_native"},
+#             },
+#             status_code=200,
+#         )
+#     finally:
+#         ms = int((time.perf_counter() - t0) * 1000)
+#         logger.info("rid=%s /assistant/query done ms=%d", rid, ms)
+
+
+
 # =========================
-# Assistant / Vector Admin / Health (tags: assistant, vector, health)
+# Assistant - New
 # =========================
+
+
+
+router_main = APIRouter()
+
+def get_enhanced_nlp_service(request: Request):
+    """
+    Get the enhanced NLP service with visualization capabilities.
+    Lazily creates and caches it on app.state.nlp_enhanced if needed.
+    """
+    if hasattr(request.app.state, "nlp_enhanced"):
+        return request.app.state.nlp_enhanced
+
+    db_service = getattr(request.app.state, "db_service", None)
+    if db_service is not None:
+        service = create_enhanced_nlp_service(db_service)
+        request.app.state.nlp_enhanced = service
+        return service
+
+    return None
+
+
+def _ok(payload: Dict[str, Any], status: int = 200) -> JSONResponse:
+    payload.setdefault("success", True)
+    return JSONResponse(payload, status_code=status)
+
+
+def _err(rid: str, msg: str, status: int = 500, extra: Optional[Dict[str, Any]] = None) -> JSONResponse:
+    body: Dict[str, Any] = {"success": False, "error": msg, "rid": rid}
+    if extra:
+        body.update(extra)
+    return JSONResponse(body, status_code=status)
+
+
 @router_main.post("/api/assistant/query", tags=["assistant"])
 async def assistant_query(payload: dict, request: Request):
+    """
+    Standard query endpoint – visualization disabled.
+    Expects: { query: str, schema?: str, lang?: "en"|"zh-tw" }
+    """
     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    q = (payload or {}).get("query") or ""
+    q = (payload or {}).get("query", "").strip()
+    schema = (payload or {}).get("schema", "dbo")
+    lang = (payload or {}).get("lang")  # optional override
+
+    if not q:
+        return _err(rid, "Query is required", status=400)
 
     t0 = time.perf_counter()
-    logger.info("rid=%s /assistant/query start len=%d", rid, len(q))
-
-    nlp: LanguageNativeNLPService = getattr(request.app.state, "nlp", None)
+    request.app.state.last_request_id = rid
+    nlp: LanguageNativeNLPService = get_enhanced_nlp_service(request)
     if nlp is None:
-        logger.error("rid=%s /assistant/query error: No NLP service available", rid)
-        return JSONResponse({"success": False, "error": "NLP service not available"}, status_code=200)
+        return _err(rid, "NLP service not available", status=503)
 
     try:
-        data = await run_in_threadpool(nlp.process_complete_query, q, "dbo", rid)
-        if isinstance(data, dict):
-            data["service_info"] = {"service_type": "language_native", "language_native_processing": True}
-        return JSONResponse({"success": True, **(data or {})})
-    except Exception as e:
-        logger.exception("rid=%s /assistant/query error: %s: %s", rid, type(e).__name__, e)
-        return JSONResponse(
-            {
-                "success": False,
-                "error": str(e),
-                "service_info": {"service_type": "language_native", "error_in_service": "language_native"},
-            },
-            status_code=200,
+        result = await run_in_threadpool(
+            nlp.process_complete_query,
+            q,          # user_input
+            schema,     # schema_name
+            rid,        # rid
+            False,      # include_visualization (OFF)
+            None,       # force_chart_type
+            lang,       # lang override
         )
+        if not isinstance(result, dict):
+            result = {}
+        result.setdefault("success", True)
+        result.setdefault("rid", rid)
+        # ensure visualization is absent here
+        result["visualization"] = None
+        return _ok(result)
+    except Exception as e:
+        return _err(rid, str(e), status=500)
     finally:
         ms = int((time.perf_counter() - t0) * 1000)
-        logger.info("rid=%s /assistant/query done ms=%d", rid, ms)
+        request.app.state.last_request_ms = ms
 
 
+@router_main.post("/api/assistant/query_with_viz", tags=["assistant"])
+async def assistant_query_with_viz(payload: dict, request: Request):
+    """
+    Enhanced query endpoint with visualization generation.
+    Expects: { query, schema?, include_visualization?: bool=true, chart_type?: string, lang?: "en"|"zh-tw" }
+    """
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    q = (payload or {}).get("query", "").strip()
+    schema = (payload or {}).get("schema", "dbo")
+    include_viz = bool((payload or {}).get("include_visualization", True))
+    force_chart_type = (payload or {}).get("chart_type") or None  # e.g., "bar_chart"
+    lang = (payload or {}).get("lang")
+
+    if not q:
+        return _err(rid, "Query is required", status=400)
+
+    t0 = time.perf_counter()
+    request.app.state.last_request_id = rid
+    nlp: LanguageNativeNLPService = get_enhanced_nlp_service(request)
+    if nlp is None:
+        return _err(rid, "NLP service not available", status=503)
+
+    result: Dict[str, Any] = {}
+    try:
+        result = await run_in_threadpool(
+            nlp.process_complete_query,
+            q, schema, rid,
+            include_viz,       # include_visualization (ON when button is pressed)
+            force_chart_type,  # force_chart_type
+            lang               # lang override
+        )
+
+        if not isinstance(result, dict):
+            result = {}
+        result.setdefault("success", True)
+        result.setdefault("rid", rid)
+
+        # Normalize viz meta for the UI
+        viz = result.get("visualization") or {}
+        viz_enabled = bool(viz.get("enabled"))
+        result["visualization_generated"] = viz_enabled
+        if viz_enabled:
+            result["visualization_url"] = viz.get("url") or viz.get("image_url")
+            result["visualization_type"] = viz.get("type")
+            result["visualization_title"] = viz.get("title")
+            result["visualization_insights"] = viz.get("insights") or []
+            result["visualization_reason"] = viz.get("reasoning") or ""
+        else:
+            result["visualization_reason"] = viz.get("reason", "Not generated")
+
+        return _ok(result)
+    except Exception as e:
+        return _err(rid, str(e), status=500, extra={"visualization_generated": False})
+    finally:
+        ms = int((time.perf_counter() - t0) * 1000)
+        request.app.state.last_request_ms = ms
+
+
+@router_main.get("/api/assistant/visualization_status", tags=["assistant"])
+async def get_visualization_status(request: Request):
+    """
+    Lightweight capability probe for the client (to decide whether to show the button).
+    """
+    nlp = get_enhanced_nlp_service(request)
+    if nlp and getattr(nlp, "viz", None):
+        return _ok({
+            "available": True,
+            "auto_visualization": getattr(nlp, "enable_auto_visualization", False),
+            "supported_languages": ["en", "zh-tw"],
+            "chart_types": [
+                "line_chart", "bar_chart", "pie_chart",
+                "scatter_plot", "histogram", "heatmap", "box_plot", "table", "area_chart",
+            ],
+        })
+    return _ok({"available": False, "reason": "Visualization extension not initialized"})
+
+
+
+
+
+# =========================
+# Vector Admin / Health (tags: assistant, vector, health)
+# =========================
 @router_main.post("/api/vector/reload", tags=["vector"])
 async def vector_reload(request: Request):
     vb = getattr(request.app.state, "vector_bootstrap", None)
@@ -678,6 +846,8 @@ def leave_join_hints(request: Request, tables: List[str] = Query(..., alias="tab
         return {"tables": tables, "join_hints": hints, "service_type": "language_native"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"join-hints failed: {e}")
+
+
 
 
 # =========================
