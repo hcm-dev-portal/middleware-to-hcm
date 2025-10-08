@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import json
 import logging
 from typing import Dict, List, Optional, Any, Iterable, Tuple
@@ -9,10 +10,6 @@ from typing import Dict, List, Optional, Any, Iterable, Tuple
 from app.services.db_service import SQLServerDatabaseService, DatabaseQueryError
 
 logger = logging.getLogger(__name__)
-
-# ------------------------------ #
-# Small helpers                   #
-# ------------------------------ #
 
 def _coalesce_str(*vals) -> Optional[str]:
     for v in vals:
@@ -22,7 +19,6 @@ def _coalesce_str(*vals) -> Optional[str]:
         if s:
             return s
     return None
-
 
 def _format_name(row: Dict[str, Optional[str]]) -> str:
     """
@@ -48,21 +44,10 @@ def _format_name(row: Dict[str, Optional[str]]) -> str:
         row.get("PERSONID"),
     ) or (row.get("PERSONID") or "")
 
-
-# ------------------------------ #
-# Resolver (PSNACCOUNT + ORG)     #
-# ------------------------------ #
-
 class PersonResolver:
     """
     Resolve PERSONID **or** EMPLOYEEID to display info using dbo.PSNACCOUNT
-    and department/branch info using dbo.ORGStdStruct.
-
-    Resolution order:
-      1) in-memory cache (keyed by PERSONID)
-      2) local JSON index (optional) — may include department fields
-      3) DB batch lookup from dbo.PSNACCOUNT (by PERSONID and/or EMPLOYEEID)
-         -> Collect BRANCHID -> batch-lookup dbo.ORGStdStruct for names/codes
+    and department/branch info using ORG table (override via ORG_TABLE env).
 
     Returned dict per input key:
       {
@@ -92,15 +77,18 @@ class PersonResolver:
         self._local_index: Dict[str, Dict[str, Optional[str]]] = {}
 
         self._table_exists_cache: Dict[str, bool] = {}
+
+        # Fully-qualified override for org table (e.g., [eHRAntung_DB].[dbo].[ORGStdStruct])
+        self._org_table = os.getenv("ORG_TABLE", "dbo.ORGStdStruct")
+
+        # Table presence detection
         self._have_psnaccount = self._table_exists("dbo", "PSNACCOUNT")
-        self._have_org = self._table_exists("dbo", "ORGStdStruct")
+        self._have_org = self._fq_table_exists(self._org_table)
+
         if not self._have_psnaccount:
             logger.warning("dbo.PSNACCOUNT not found. PersonResolver will serve only from cache/local index.")
         if not self._have_org:
-            logger.warning("dbo.ORGStdStruct not found. Department fields will be None unless present in local index.")
-
-        # allow overriding fully-qualified org table if needed (e.g., eHRAntung_DB.dbo.ORGStdStruct)
-        self._org_table = os.getenv("ORG_TABLE", "dbo.ORGStdStruct")
+            logger.warning("%s not found. Department fields will be None unless present in local index.", self._org_table)
 
         self._org_cache: Dict[str, Dict[str, Optional[str]]] = {}  # keyed by UNITID (NVARCHAR)
         self._load_local_index()
@@ -108,7 +96,6 @@ class PersonResolver:
     # ---------- public ----------
 
     def resolve(self, person_id: str) -> Dict[str, Optional[str]]:
-        """Resolve a single PERSONID. (Kept for compatibility.)"""
         pid = (person_id or "").strip()
         empty = {
             "person_id": person_id, "name": None, "employee_id": None, "email": None, "cardnum": None,
@@ -136,18 +123,11 @@ class PersonResolver:
         *,
         employee_ids: List[str] | None = None
     ) -> Dict[str, Dict[str, Optional[str]]]:
-        """
-        Batch resolve by PERSONID and (optionally) EMPLOYEEID.
-
-        Returns a dict mapping **the same keys you passed in** (PID or EID)
-        to a normalized info payload (including department fields when available).
-        """
         clean_pid = [str(p).strip() for p in (person_ids or []) if p and str(p).strip()]
         clean_eid = [str(e).strip() for e in (employee_ids or []) if e and str(e).strip()]
 
         out: Dict[str, Dict[str, Optional[str]]] = {}
 
-        # 1) cache + local index hits for PERSONID keys
         remaining_pid: List[str] = []
         for pid in clean_pid:
             if pid in self.cache:
@@ -159,7 +139,6 @@ class PersonResolver:
             else:
                 remaining_pid.append(pid)
 
-        # 2) local index hits for EMPLOYEEID keys (cache is PID-based, so we only alias)
         remaining_eid: List[str] = []
         for eid in clean_eid:
             if eid in self._local_index:
@@ -169,7 +148,6 @@ class PersonResolver:
             else:
                 remaining_eid.append(eid)
 
-        # If no DB, fill misses with bare fallbacks
         if not self._have_psnaccount:
             for pid in remaining_pid:
                 out[pid] = self._bare(pid)
@@ -177,21 +155,18 @@ class PersonResolver:
                 out[eid] = self._bare(None, eid)
             return out
 
-        # 3) DB fetch (by PERSONID)
         fetched_by_pid: Dict[str, Dict[str, Optional[str]]] = {}
         if remaining_pid:
             for row in self._fetch_from_psnaccount_by_key("PERSONID", remaining_pid):
                 pid = row.get("PERSONID")
                 fetched_by_pid[pid] = self._row_to_person_info(row)
 
-        # 4) DB fetch (by EMPLOYEEID)
         fetched_by_eid: Dict[str, Dict[str, Optional[str]]] = {}
         if remaining_eid:
             for row in self._fetch_from_psnaccount_by_key("EMPLOYEEID", remaining_eid):
                 eid = row.get("EMPLOYEEID")
                 fetched_by_eid[eid] = self._row_to_person_info(row)
 
-        # 5) Gather all branch_ids to resolve departments in one shot
         branch_ids: List[str] = []
         for info in list(fetched_by_pid.values()) + list(fetched_by_eid.values()):
             bid = info.get("department_id")
@@ -199,7 +174,6 @@ class PersonResolver:
                 branch_ids.append(bid)
         self._populate_org_cache(branch_ids)
 
-        # 6) consolidate + cache; keep caller’s key
         for pid in remaining_pid:
             info = fetched_by_pid.get(pid)
             if info:
@@ -257,7 +231,6 @@ class PersonResolver:
         if not pid:
             return
         if len(self.cache) >= self.cache_cap:
-            # simple trim: drop ~20% oldest by insertion order
             for k in list(self.cache.keys())[: max(1, self.cache_cap // 5)]:
                 self.cache.pop(k, None)
         self.cache[pid] = info
@@ -269,7 +242,6 @@ class PersonResolver:
         *,
         prefer_eid: Optional[str] = None,
     ) -> Dict[str, Optional[str]]:
-        """Normalize a record loaded from the local JSON index."""
         info = {
             "person_id": (pid or li.get("person_id") or None),
             "name": li.get("name"),
@@ -283,17 +255,6 @@ class PersonResolver:
         return info
 
     def _load_local_index(self):
-        """
-        Optional JSON structure (keys may be PERSONID or EMPLOYEEID):
-          {
-            "P000123": {
-              "person_id": "P000123", "name": "王小明", "employee_id": "E123",
-              "email": "...", "cardnum": "...",
-              "department_id": "2001", "department_name": "HR", "department_code": "HR01"
-            },
-            "E123": { ...same shape... }
-          }
-        """
         try:
             idx_path = os.path.join(self.storage_dir, "people_index.json")
             if os.path.exists(idx_path):
@@ -341,8 +302,54 @@ class PersonResolver:
         self._table_exists_cache[key] = exists
         return exists
 
+    def _fq_table_exists(self, fq: str) -> bool:
+        """
+        Check existence for:
+          - 'dbo.ORGStdStruct'
+          - '[eHRAntung_DB].[dbo].[ORGStdStruct]'
+        """
+        def _strip(x: str) -> str:
+            x = x.strip().strip("[]").strip('"')
+            return x
+
+        parts = [p for p in re.split(r"\.(?![^\[]*\])", fq) if p]
+        parts = [_strip(p) for p in parts]
+
+        if len(parts) == 1:
+            schema, table = "dbo", parts[0]
+            dbname = None
+        elif len(parts) == 2:
+            schema, table = parts
+            dbname = None
+        else:
+            dbname, schema, table = parts[-3], parts[-2], parts[-1]
+
+        key = f"{dbname or '(current)'}.{schema}.{table}".lower()
+        if key in self._table_exists_cache:
+            return self._table_exists_cache[key]
+
+        try:
+            if dbname:
+                sql = f"""
+                    SELECT 1
+                    FROM [{dbname}].INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                """
+            else:
+                sql = """
+                    SELECT 1
+                    FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                """
+            rows, _ = self.db.run_select(sql, params=(schema, table), max_rows=1)
+            exists = bool(rows)
+        except Exception:
+            exists = False
+
+        self._table_exists_cache[key] = exists
+        return exists
+
     def _fetch_from_psnaccount_by_key(self, key_col: str, key_vals: List[str]) -> List[Dict[str, Optional[str]]]:
-        """Generic batch fetch by PERSONID or EMPLOYEEID. Includes BRANCHID for department resolution."""
         if not key_vals:
             return []
         cols = [
@@ -355,7 +362,7 @@ class PersonResolver:
             "MIDDLENAME",
             "LASTNAME",
             "ENGNAME",
-            "BRANCHID",  # <-- critical for department join
+            "BRANCHID",
         ]
         out: List[Dict[str, Optional[str]]] = []
         for i in range(0, len(key_vals), self._BATCH_SIZE):
@@ -373,7 +380,6 @@ class PersonResolver:
         return out
 
     def _row_to_person_info(self, row: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
-        """Map a PSNACCOUNT row into our normalized payload (department_id from BRANCHID)."""
         pid = row.get("PERSONID")
         eid = row.get("EMPLOYEEID")
         bid = (row.get("BRANCHID") or None)
@@ -389,11 +395,9 @@ class PersonResolver:
         }
         return info
 
-    # ---------- ORG lookups & attach ----------
-
     def _populate_org_cache(self, unit_ids: Iterable[str]) -> None:
-        """Fetch missing UNITIDs from ORGStdStruct in batches and populate _org_cache."""
-        if not self._have_org:
+        # Be defensive: re-check existence using fully-qualified name
+        if not self._fq_table_exists(self._org_table):
             return
         missing = []
         for raw in unit_ids:
@@ -410,7 +414,6 @@ class PersonResolver:
         for i in range(0, len(missing), self._BATCH_SIZE):
             chunk = missing[i : i + self._BATCH_SIZE]
             placeholders = ",".join(["?"] * len(chunk))
-            # Support fully-qualified override via ORG_TABLE env var
             sql = f"""
                 SELECT 
                   CAST(UNITID AS NVARCHAR(100)) AS unit_id,
@@ -430,18 +433,16 @@ class PersonResolver:
                             "department_code": rec.get("branch_code"),
                         }
             except DatabaseQueryError as e:
-                logger.warning("ORGStdStruct lookup failed: %s", e)
+                logger.warning("ORG lookup failed: %s", e)
             except Exception as e:
-                logger.error("ORGStdStruct unexpected error: %s", e)
+                logger.error("ORG unexpected error: %s", e)
 
     def _attach_org(self, info: Dict[str, Optional[str]]) -> None:
-        """Attach org details to an info dict if department_id exists."""
         dep_id = info.get("department_id")
         if not dep_id:
             return
         rec = self._org_cache.get(str(dep_id).strip())
         if not rec:
             return
-        # Only fill if missing (respect any prefilled values)
         info.setdefault("department_name", rec.get("department_name"))
         info.setdefault("department_code", rec.get("department_code"))

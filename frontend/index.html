@@ -112,6 +112,65 @@
           </div>
         </header>
 
+        <!-- Database/Health status & Alerts host -->
+        <div id="db-status" class="mt-6 mb-4"></div>
+
+        <!-- Key Metrics Summary -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
+          <!-- On Leave Today -->
+          <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
+            <div class="flex justify-between items-start">
+              <div>
+                <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.leave_today.title">Employees On Leave</h3>
+                <p class="text-4xl font-bold text-gray-900 mt-2">
+                  <span id="leave-today-count">--</span>
+                </p>
+                <p class="text-xs text-gray-500 mt-2" data-i18n="cards.leave_today.subtitle">Active today</p>
+              </div>
+              <div class="p-3 bg-amber-100 rounded-lg" title="Calendar">
+                <svg class="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pending Approvals -->
+          <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
+            <div class="flex justify-between items-start">
+              <div>
+                <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.pending_approvals.title">Pending Approvals</h3>
+                <p class="text-4xl font-bold text-gray-900 mt-2">
+                  <span id="pending-leave-count">--</span>
+                </p>
+                <p class="text-xs text-gray-500 mt-2" data-i18n="cards.pending_approvals.subtitle">Awaiting review</p>
+              </div>
+              <div class="p-3 bg-blue-100 rounded-lg">
+                <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Low Balance -->
+          <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
+            <div class="flex justify-between items-start">
+              <div>
+                <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.low_balance.title">Low Balance Alerts</h3>
+                <p class="text-4xl font-bold text-gray-900 mt-2">
+                  <span id="low-balance-count">--</span>
+                </p>
+                <p class="text-xs text-orange-600 mt-2" id="low-balance-details" data-i18n="cards.low_balance.subtitle">&lt; 5 days remaining</p>
+              </div>
+              <div class="p-3 bg-orange-100 rounded-lg">
+                <svg class="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- Main Content: Leave List + Trend Chart -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
