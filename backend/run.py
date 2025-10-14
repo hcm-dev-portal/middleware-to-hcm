@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 
+from app.api.speech_routes import speech_router
 from app.api.router import router as api_router
 
 # ✅ Use the enhanced, Unicode-ready DB service
@@ -171,6 +172,7 @@ def create_app() -> FastAPI:
 
     # API routes
     app.include_router(api_router)
+    app.include_router(speech_router)
 
     return app
 

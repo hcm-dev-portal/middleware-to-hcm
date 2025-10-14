@@ -3,17 +3,16 @@ from __future__ import annotations
 from decimal import Decimal
 from datetime import date, datetime, time, timedelta
 import uuid as _uuid
-from typing import Any, List, Tuple, Optional, Dict
+from typing import Any, List, Tuple, Optional, Dict, Iterable, Set
 import re
 import os
 import json
 
-
-# ---------------------------
+# ===========================
 # JSON / primitive utilities
-# ---------------------------
+# ===========================
 
-def jsonable_value(v):
+def jsonable_value(v: Any):
     """Convert various Python types to JSON-serializable values."""
     if v is None or isinstance(v, (str, int, float, bool)):
         return v
@@ -30,12 +29,12 @@ def jsonable_value(v):
         return v.decode("utf-8", errors="replace")
     if isinstance(v, _uuid.UUID):
         return str(v)
+    # Fallback: string
     return str(v)
 
 
-
-
 def _safe_json_loads(val: Any) -> Any:
+    """Parse JSON string → python value; tolerate bad inputs by returning []."""
     if isinstance(val, str):
         try:
             return json.loads(val)
@@ -43,13 +42,16 @@ def _safe_json_loads(val: Any) -> Any:
             return []
     return val if isinstance(val, list) else []
 
-def _decode_json_field(val):
+
+def _decode_json_field(val: Any):
     """
     Accepts JSON string or list; always returns a list (or []).
+    Safe for SQL `FOR JSON PATH` payloads.
     """
     return _safe_json_loads(val) or []
 
-def _collect_ids_from_rows(*rows_lists) -> tuple[list[str], list[str]]:
+
+def _collect_ids_from_rows(*rows_lists: Iterable[Optional[Dict[str, Any]]]) -> tuple[list[str], list[str]]:
     """
     Collect BOTH person IDs and employee IDs from mixed rows.
 
@@ -60,7 +62,8 @@ def _collect_ids_from_rows(*rows_lists) -> tuple[list[str], list[str]]:
     pid_keys = {"person_id", "PERSONID", "pid"}
     eid_keys = {"employee_id", "EMPLOYEEID", "empno"}
 
-    pids, eids = set(), set()
+    pids: Set[str] = set()
+    eids: Set[str] = set()
     for rows in rows_lists:
         for r in rows or []:
             if not isinstance(r, dict):
@@ -80,6 +83,7 @@ def _collect_ids_from_rows(*rows_lists) -> tuple[list[str], list[str]]:
                         eids.add(s)
                         break
     return list(pids), list(eids)
+
 
 def _apply_resolved(rows: list[dict], resolved: dict) -> list[dict]:
     """
@@ -108,10 +112,9 @@ def _apply_resolved(rows: list[dict], resolved: dict) -> list[dict]:
     return out
 
 
-
-# ---------------------------
+# ==============
 # SQL helpers
-# ---------------------------
+# ==============
 
 def normalize_sql_columns(sql: str) -> str:
     """
@@ -148,16 +151,17 @@ def get_today_sql_date() -> str:
     return "CAST(GETDATE() AS date)"
 
 
-# ---------------------------
+# ===============================
 # Units & date parsing (EN + zh)
-# ---------------------------
+# ===============================
 
 _ZH_DIGIT = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "两": 2, "三": 3, "四": 4,
     "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
 }
-# Support up to 99 (covers “近30天”、“過去14天”、“下兩週”等常見範圍)
+
 def _parse_zh_int(token: str) -> Optional[int]:
+    """Parse small Chinese numerals up to 99 (handles '十', '二十', '二十三', and Arabic digits)."""
     token = token.strip()
     if not token:
         return None
@@ -169,7 +173,6 @@ def _parse_zh_int(token: str) -> Optional[int]:
         except Exception:
             return None
     # Pure Chinese numerals up to 99
-    # e.g., 十(10), 二十(20), 二十三(23), 十五(15), 二(2)
     if token == "十":
         return 10
     if "十" in token:
@@ -197,7 +200,7 @@ def parse_days_from_text(
 
     Examples:
       EN: "last 7 days", "next 2 weeks", "past 1 month"
-      ZH: "近7天", "過去14天", "未來2週", "最近三十天", "下兩週", "近一個月"
+      ZH: "近7天", "過去14天", "未來2週", "最近三十天", "下兩週", "近一個月/近一个月"
 
     Returns a bounded day count.
     """
@@ -217,11 +220,11 @@ def parse_days_from_text(
         return max(min_days, min(max_days, days))
 
     # --- Chinese path (tw/cn) ---
-    # Patterns like: 過去|过去|最近|近|未來|未来  + N(天/日/週/周/月)
-    m2 = re.search(r"(過去|过去|最近|近|未來|未来|下)\s*([一二兩两三四五六七八九十\d]+)\s*(天|日|週|周|月)", text)
+    # Patterns like: 過去|过去|最近|近|未來|未来|下  + N(天/日/週/周/月) ; allow optional 個/个 before 月
+    m2 = re.search(r"(過去|过去|最近|近|未來|未来|下)\s*([一二兩两三四五六七八九十\d]+)\s*(個|个)?\s*(天|日|週|周|月)", text)
     if m2:
         n_raw = m2.group(2)
-        unit_zh = m2.group(3)
+        unit_zh = m2.group(4)
         n = _parse_zh_int(n_raw)
         if n is None:
             n = default_days
@@ -233,11 +236,11 @@ def parse_days_from_text(
             days = n * 30
         return max(min_days, min(max_days, days))
 
-    # Fallback: look for standalone numeric with a zh unit
-    m3 = re.search(r"([一二兩两三四五六七八九十\d]+)\s*(天|日|週|周|月)", text)
+    # Fallback: look for standalone numeric with a zh unit (allow 個/个 before 月)
+    m3 = re.search(r"([一二兩两三四五六七八九十\d]+)\s*(個|个)?\s*(天|日|週|周|月)", text)
     if m3:
         n = _parse_zh_int(m3.group(1)) or default_days
-        unit_zh = m3.group(2)
+        unit_zh = m3.group(3)
         if unit_zh in ("天", "日"):
             days = n
         elif unit_zh in ("週", "周"):
@@ -268,9 +271,9 @@ def minutes_to_hours_heuristic(vals: List[float]) -> Tuple[float, bool]:
     return (total / 60.0 if is_minutes else total), is_minutes
 
 
-# ---------------------------
+# ==========================
 # Column/preview helpers
-# ---------------------------
+# ==========================
 
 def find_column_index(columns: List[str], *candidates: str) -> Optional[int]:
     """Case-insensitive column finder."""
@@ -334,26 +337,14 @@ def format_sample_data(
     return "\n".join(lines)
 
 
+# ==========================
+# Dashboard enricher data
+# ==========================
 
-
-# Dashboard enricher data 
-
-import json
-from typing import Dict, Any, List, Set
 from app.services.person_resolver import PersonResolver
 
-def _decode_json_field(val):
-    if not val:
-        return []
-    if isinstance(val, list):
-        return val
-    # val is a JSON string emitted by FOR JSON PATH
-    try:
-        return json.loads(val)
-    except Exception:
-        return []
-
 def _collect_person_ids(*arrays: List[Dict[str, Any]]) -> List[str]:
+    """Collect unique PERSONID values from already-decoded arrays."""
     ids: Set[str] = set()
     for arr in arrays:
         for r in arr or []:
@@ -362,25 +353,36 @@ def _collect_person_ids(*arrays: List[Dict[str, Any]]) -> List[str]:
                 ids.add(str(pid).strip())
     return list(ids)
 
-def _patch_rows(rows, resolved_map):
-    out = []
+
+def _patch_rows(rows: List[Dict[str, Any]], resolved_map: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fill person_name/employee_id/email/cardnum from resolver map; keep existing when present."""
+    out: List[Dict[str, Any]] = []
     for r in rows or []:
-        pid = str(r.get("person_id") or r.get("PERSONID") or "").strip()
-        info = resolved_map.get(pid, {})
-        # write through canonical keys
-        r["person_id"] = pid or None
-        r["person_name"] = info.get("name") or pid or None
-        # keep existing employee_id/email if already set; otherwise fill
-        if not r.get("employee_id"):
-            r["employee_id"] = info.get("employee_id")
-        if not r.get("email"):
-            r["email"] = info.get("email")
-        # new: cardnum
-        r["cardnum"] = info.get("cardnum")
-        out.append(r)
+        d = dict(r)
+        pid = str(d.get("person_id") or d.get("PERSONID") or "").strip()
+        info = resolved_map.get(pid, {}) if pid else {}
+        # canonical keys
+        d["person_id"] = pid or None
+        d["person_name"] = info.get("name") or d.get("TRUENAME") or d.get("ENGNAME") or pid or None
+        if not d.get("employee_id"):
+            d["employee_id"] = info.get("employee_id")
+        if not d.get("email"):
+            d["email"] = info.get("email")
+        d["cardnum"] = info.get("cardnum")
+        out.append(d)
     return out
 
+
 def enrich_leave_metrics_payload(metrics: Dict[str, Any], resolver: PersonResolver) -> Dict[str, Any]:
+    """
+    Expect metrics like:
+      {
+        "on_leave_details": "[...FOR JSON PATH array...]",
+        "upcoming_leave":   "[...FOR JSON PATH array...]",
+        ...
+      }
+    Will decode arrays, resolve people, and patch person fields.
+    """
     # Decode JSON arrays produced by SQL
     details = _decode_json_field(metrics.get("on_leave_details"))
     upcoming = _decode_json_field(metrics.get("upcoming_leave"))
@@ -395,11 +397,19 @@ def enrich_leave_metrics_payload(metrics: Dict[str, Any], resolver: PersonResolv
 
     return metrics
 
+
 def enrich_leave_trend_payload(trend_root: Dict[str, Any], resolver: PersonResolver) -> Dict[str, Any]:
-    # trend_root: {"success":1, "trend":"[...json...]"} or already parsed
+    """
+    Expect shape:
+      {
+        "success": 1,
+        "trend": "[{'date':'2025-01-01','people_on_leave':'[...]'}, ...]"  # or already parsed
+      }
+    Will resolve and expand names inside each day's 'people_on_leave'.
+    """
     trend_list = _decode_json_field(trend_root.get("trend"))
     # Collect all person_ids across all days
-    perday_arrays = [ _decode_json_field(day.get("people_on_leave")) for day in trend_list ]
+    perday_arrays = [_decode_json_field(day.get("people_on_leave")) for day in trend_list]
     all_ids = _collect_person_ids(*perday_arrays)
     resolved = resolver.resolve_many(all_ids)
 
