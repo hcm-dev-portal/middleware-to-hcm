@@ -1,305 +1,181 @@
 # ================================================================================
 # backend/app/services/nlp_service_2.py
+"""
+Pure orchestrator for NLP-to-SQL pipeline with comprehensive structured logging.
+Delegates all business logic to specialized services.
+"""
 from __future__ import annotations
 
+import os
 import re
+import json
 import time
 import logging
+import pathlib
 import pandas as pd
-from typing import Dict, Any, Optional, List, Tuple, Literal
+from typing import Dict, Any, Optional, List, Tuple, Literal, Sequence, Iterable
+from datetime import datetime
 
 from app.services.db_service import SQLServerDatabaseService
 
-# Specialized services
-from .aws.translation_service import AWSTranslationService
+# Core services
 from app.services.llm.openai_service import UnifiedBilingualOpenAIService
-
-from app.services.db_service import (
-    DatabaseQueryError,
-    DatabaseConnectionError,
-    DatabaseTimeoutError,
-    PermissionDeniedError,
-    DeadlockError,
-)
-
-from .data_processing.data_analyzer import DataAnalyzer
-from .data_processing.date_processor import DateProcessor
-from .data_processing.sql_templates import SQLTemplateService
-from .data_processing.sql_executor import SQLExecutor
-from .data_processing.person_enrichment import PersonEnrichmentService
-from .retrieval.vector_search_service import VectorSearchService
-from .helpers.data_utils import jsonable_value, normalize_sql_columns, format_sample_data
-
 from app.services.memory.simple_query_memory import SimpleQueryMemoryService
 
-# Visualization services
+# Data processing
+from .data_processing.data_analyzer import DataAnalyzer
+from .data_processing.person_enrichment import PersonEnrichmentService
+
+# Vector and retrieval (now owns all date/SQL/vector logic)
+from .retrieval.vector_search_service import VectorSearchService
+from .retrieval.vector_search_service import validate_generated_sql  # keep as-is
+
+# Visualization
 from .chart.chart_agent import ChartVisualizationAgent, ChartVisualizationAgentConfig
 from .chart.visualization_service import VisualizationService
 
+# Helpers
+from .helpers.data_utils import jsonable_value, normalize_sql_columns, format_sample_data, normalize_column_labels
+
+
+
 logger = logging.getLogger(__name__)
+trace_logger = logging.getLogger("app.trace")  # JSON line logger
 
 
-def _ms(t0: float) -> int:
-    return int((time.perf_counter() - t0) * 1000)
+# ---------------------- Structured Trace Helpers ----------------------
+
+APP_LOG_DIR = pathlib.Path(os.getenv("APP_LOG_DIR", "logs"))
+ORCH_SQL_DIR = pathlib.Path(os.getenv("ORCH_SQL_DIR", str(APP_LOG_DIR / "sql_history")))
+ORCH_SQL_SAVE = os.getenv("ORCH_SQL_SAVE", "1") != "0"
+ORCH_SQL_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def detect_language_simple(text: str) -> Literal["zh-tw", "en"]:
+def _now_ms() -> int:
+    return int(time.perf_counter() * 1000)
+
+
+def _ms_since(t0_ms: int) -> int:
+    return max(0, _now_ms() - t0_ms)
+
+
+def _preview_text(s: Optional[str], limit: int = 240) -> str:
+    if not s:
+        return ""
+    s = str(s).replace("\n", " ").replace("\r", " ")
+    return (s[:limit] + "…") if len(s) > limit else s
+
+
+def trace(rid: Optional[str], stage: str, **fields: Dict[str, Any]) -> None:
+    """Emit a single JSON log line for reliable tracing."""
+    try:
+        payload = {"rid": rid or "default", "stage": stage, "ts": time.time()}
+        payload.update(fields or {})
+        trace_logger.info(json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        # never crash the pipeline due to logging
+        logger.debug("trace logging failed", exc_info=True)
+
+
+def persist_sql(rid: Optional[str], sql: str, *, stage: str = "SQL_FINAL") -> Optional[str]:
+    """Optionally persist the final SQL for re-run / DBA analysis."""
+    if not ORCH_SQL_SAVE or not sql:
+        return None
+    try:
+        fname = f"{(rid or 'default')}.sql"
+        sql_path = ORCH_SQL_DIR / fname
+        text = f"/* RID:{rid or 'default'} STAGE:{stage} */\nSET NOCOUNT ON;\n{sql.strip()}\n"
+        sql_path.write_text(text, encoding="utf-8")
+        trace(rid, stage, saved=str(sql_path))
+        return str(sql_path)
+    except Exception:
+        logger.debug("persist_sql failed", exc_info=True)
+        return None
+
+
+# ---------------------- DataFrame Safety Utilities ----------------------
+
+def _build_safe_dataframe(columns: Sequence[Any], rows: Iterable[Any]) -> pd.DataFrame:
     """
-    Simple zh/en detector: if >30% alnum chars are CJK, assume zh.
+    Create a DataFrame even if row lengths != len(columns).
+    - Truncates extra fields
+    - Pads missing fields with None
+    - Handles dict rows by selecting only provided columns
+    - Drops fully empty columns
     """
-    if not text or not text.strip():
-        return "en"
-    chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
-    total_chars = len([c for c in text if c.isalnum()])
-    if total_chars == 0:
-        return "en"
-    return "zh-tw" if (chinese_chars / total_chars) > 0.3 else "en"
+    cols = [str(c) for c in (columns or [])]
+    fixed_rows: List[Any] = []
 
-
-class LanguageAwareDateProcessor:
-    """
-    Wraps DateProcessor to accept zh tokens by mapping to EN then using base rewriter.
-    Also provides SQL date anchoring for generated SQL.
-    """
-    def __init__(self):
-        self.base_processor = DateProcessor()
-        self.zh_patterns = {
-            r"今天": "today",
-            r"昨日|昨天": "yesterday",
-            r"明天|隔天": "tomorrow",
-            r"這個月|本月|这个月": "this month",
-            r"上個月|上月|上个月": "last month",
-            r"下個月|下月|下个月": "next month",
-            r"這週|本週|本周|这周": "this week",
-            r"上週|上周": "last week",
-            r"下週|下周": "next week",
-            r"本季|這季": "this quarter",
-            r"上季": "last quarter",
-            r"今年": "this year",
-            r"去年": "last year",
-            r"明年": "next year",
-        }
-
-    def set_data_anchor(self, anchor_date: str):
-        self.base_processor.set_data_anchor(anchor_date)
-
-    def get_data_anchor(self) -> Optional[str]:
-        return self.base_processor.get_data_anchor()
-
-    def rewrite_relative_dates(self, text: str, lang: Literal["zh-tw", "en"]) -> str:
-        if lang == "zh-tw":
-            result = text
-            for zh_pat, en_tok in self.zh_patterns.items():
-                result = re.sub(zh_pat, en_tok, result)
-            return self.base_processor.rewrite_relative_dates(result)
-        return self.base_processor.rewrite_relative_dates(text)
-
-    def rewrite_sql_dates(self, sql: str) -> str:
-        """
-        Anchor SQL temporal functions (GETDATE/CURRENT_TIMESTAMP) to current or data anchor.
-        """
-        return self.base_processor.rewrite_sql_dates(sql)
-
-
-class LanguageAwareMemoryService:
-    """
-    Wraps SimpleQueryMemoryService to store/look up by original query,
-    with optional English alias for zh queries.
-    """
-    def __init__(self, base_memory: SimpleQueryMemoryService):
-        self.base_memory = base_memory
-
-    def check_memory_for_query(
-        self,
-        original_query: str,
-        english_query: str,
-        relevant_tables: List[str],
-        lang: Literal["zh-tw", "en"],
-        session_id: str = "default",
-    ) -> Tuple[Optional[str], float]:
-        cached_sql, conf = self.base_memory.check_memory_for_query(
-            original_query, relevant_tables, session_id=session_id
-        )
-        if not cached_sql and lang == "zh-tw" and english_query and english_query != original_query:
-            cached_sql, conf = self.base_memory.check_memory_for_query(
-                english_query, relevant_tables, session_id=session_id
-            )
-        return cached_sql, conf
-
-    def learn_from_query(
-        self,
-        original_query: str,
-        english_query: str,
-        relevant_tables: List[str],
-        generated_sql: str,
-        success: bool,
-        execution_time: float,
-        lang: Literal["zh-tw", "en"],
-        session_id: str = "default",
-    ):
-        self.base_memory.learn_from_query(
-            query=original_query,
-            relevant_tables=relevant_tables,
-            generated_sql=generated_sql,
-            success=success,
-            execution_time=execution_time,
-            session_id=session_id,
-        )
-        if lang == "zh-tw" and english_query and english_query != original_query:
-            self.base_memory.learn_from_query(
-                query=english_query,
-                relevant_tables=relevant_tables,
-                generated_sql=generated_sql,
-                success=success,
-                execution_time=execution_time,
-                session_id=session_id,
-            )
-
-    def record_success(
-        self,
-        session_id: str,
-        original_query: str,
-        english_query: str,
-        generated_sql: str,
-        columns: List[str],
-        rows: List[Tuple],
-        relevant_tables: List[str],
-        schema_ctx: str,
-        lang: Literal["zh-tw", "en"],
-    ):
-        self.base_memory.record_success(
-            session_id=session_id,
-            query=original_query,
-            generated_sql=generated_sql,
-            columns=columns,
-            rows=rows,
-            relevant_tables=relevant_tables,
-            schema_ctx=schema_ctx,
-        )
-
-    def get_last_focus_value(self, session_id: str, column_patterns: List[str]) -> Optional[str]:
-        return self.base_memory.get_last_focus_value(session_id, column_patterns)
-
-    def get_memory_stats(self) -> Dict[str, Any]:
-        return self.base_memory.get_memory_stats()
-
-
-class LanguageAwareContextRewriter:
-    """
-    Rewrites vague follow-ups (zh/en) using session memory context.
-    Falls back to LLM for pronoun resolution when needed.
-    """
-    def __init__(self, memory_service: LanguageAwareMemoryService, llm_service: UnifiedBilingualOpenAIService):
-        self.memory_service = memory_service
-        self.llm_service = llm_service
-
-    def rewrite_followup_with_context(self, query: str, lang: Literal["zh-tw", "en"], session_id: str) -> str:
-        result = query
-        dept = self.memory_service.get_last_focus_value(session_id, ["Department", "DEPARTMENT", "DeptName", "部門"])
-        if dept:
-            if lang == "zh-tw":
-                result = re.sub(r"(這個|那個|該)\s*部門", dept, result)
-                result = re.sub(r"(這個|那個|該)\s*單位", dept, result)
-            else:
-                result = re.sub(r"\b(this|that|the)\s+department\b", dept, result, flags=re.I)
-                result = re.sub(r"\b(this|that|the)\s+unit\b", dept, result, flags=re.I)
-
-        if self._needs_llm_rewrite(result, lang):
-            return self._llm_rewrite_with_context(result, lang, session_id)
-        return result
-
-    def _needs_llm_rewrite(self, query: str, lang: Literal["zh-tw", "en"]) -> bool:
-        if lang == "zh-tw":
-            vague = ["這個", "那個", "它", "他們", "該", "前面", "剛才"]
+    for r in rows or []:
+        if isinstance(r, dict):
+            fixed_rows.append({c: r.get(c) for c in cols})
         else:
-            vague = ["this", "that", "it", "they", "these", "those", "previous"]
-        return any(v in query.lower() for v in vague)
-
-    def _llm_rewrite_with_context(self, query: str, lang: Literal["zh-tw", "en"], session_id: str) -> str:
-        try:
-            snap = self.memory_service.base_memory.session_cache.get(session_id)
-            context_info = ""
-            if snap and getattr(snap, "successful_results", None):
-                last = snap.successful_results[-1]
-                cols = last.get("columns", [])
-                preview = last.get("preview", "")
-                context_info = f"Columns: {', '.join(cols[:5])}\nSample: {str(preview)[:200]}"
-
-            if lang == "zh-tw":
-                sys = "你是資料分析助理。請將含糊的查詢改寫為具體明確的問題，只回傳改寫後的問題。"
-                usr = f"問題：{query}\n\n上下文：{context_info}\n\n改寫後的問題："
+            rr = list(r)
+            if len(rr) >= len(cols):
+                fixed_rows.append(rr[:len(cols)])
             else:
-                sys = "Rewrite the vague analytics question into a fully specified English question. Return only the rewritten question."
-                usr = f"Question: {query}\n\nContext: {context_info}\n\nRewritten:"
+                fixed_rows.append(rr + [None] * (len(cols) - len(rr)))
 
-            rewritten = self.llm_service._simple_completion(sys, usr)  # type: ignore
-            return rewritten.strip() if rewritten else query
-        except Exception as e:
-            logger.warning("LLM context rewrite failed: %s", e)
-            return query
+    df = pd.DataFrame(fixed_rows, columns=cols)
+    if not df.empty:
+        df = df.loc[:, ~(df.isna().all())]
+    return df
 
 
-# ---------- Chart helpers ----------
-_ZH_CHART_KEYWORDS = ["圖", "圖表", "視覺化", "繪圖", "趨勢圖", "長條圖", "柱狀圖", "折線圖", "圓餅圖", "直方圖", "散點圖", "箱型圖", "箱形圖", "熱圖", "熱力圖", "面積圖"]
-_EN_CHART_KEYWORDS = ["chart", "plot", "graph", "visualize", "visualisation", "visualization", "trend", "line chart", "bar chart", "pie", "histogram", "scatter", "box", "heatmap", "area"]
-
-_ZH_FORCED_TYPE = {
-    "長條圖": "bar_chart", "柱狀圖": "bar_chart", "折線圖": "line_chart", "圓餅圖": "pie_chart",
-    "直方圖": "histogram", "散點圖": "scatter_plot", "箱型圖": "box_plot", "箱形圖": "box_plot",
-    "熱圖": "heatmap", "熱力圖": "heatmap", "面積圖": "area_chart", "趨勢圖": "line_chart",
-}
-_EN_FORCED_TYPE = {
-    "bar chart": "bar_chart", "line chart": "line_chart", "pie": "pie_chart", "pie chart": "pie_chart",
-    "histogram": "histogram", "scatter": "scatter_plot", "scatter plot": "scatter_plot", "box": "box_plot",
-    "box plot": "box_plot", "heatmap": "heatmap", "area": "area_chart", "area chart": "area_chart",
-}
-
-def _infer_forced_chart_type(query: str, lang: Literal["zh-tw", "en"]) -> Optional[str]:
-    q = (query or "").lower()
-    if lang == "zh-tw":
-        for k, v in _ZH_FORCED_TYPE.items():
-            if k in query:
-                return v
-    else:
-        for k, v in _EN_FORCED_TYPE.items():
-            if k in q:
-                return v
-    return None
-
-def _should_generate_chart(query: str, lang: Literal["zh-tw", "en"], columns: List[str]) -> bool:
-    q = (query or "").lower()
-    if lang == "zh-tw":
-        if any(kw in query for kw in _ZH_CHART_KEYWORDS):
-            return True
-    else:
-        if any(kw in q for kw in _EN_CHART_KEYWORDS):
-            return True
-    return len(columns) >= 2
+_DATE_COL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def _maybe_melt_dates(df: pd.DataFrame, id_vars: Optional[List[str]] = None) -> pd.DataFrame:
+    """
+    If many columns look like YYYY-MM-DD, melt them into (date, value) long format.
+    Helpful for trend/折線圖 queries.
+    """
+    if df is None or df.empty:
+        return df
+    date_like_cols = [c for c in df.columns if _DATE_COL_RE.match(str(c))]
+    if len(date_like_cols) >= 5:
+        id_vars = id_vars or [c for c in df.columns if c not in date_like_cols][:1]
+        long_df = df.melt(id_vars=id_vars, value_vars=date_like_cols, var_name="date", value_name="value")
+        try:
+            long_df["date"] = pd.to_datetime(long_df["date"])
+        except Exception:
+            pass
+        try:
+            long_df["value"] = pd.to_numeric(long_df["value"], errors="coerce")
+        except Exception:
+            pass
+        return long_df
+    return df
+
+
+# ---------------------- Orchestrator ----------------------
 
 class LanguageNativeNLPService:
     """
-    Orchestrator: zh/en-first pipeline with vector retrieval, memory, date rewrite,
-    SQL generation/repair, safe execution, analysis, and optional visualization.
+    Pure orchestrator: delegates to specialized services.
+    Now with detailed structured tracing at each step.
     """
 
-    def __init__(self, db_service: SQLServerDatabaseService, model_name: str = "gpt-4o-mini", temperature: float = 0.1, **_):
+    def __init__(
+        self, 
+        db_service: SQLServerDatabaseService, 
+        model_name: str = "gpt-4o-mini", 
+        temperature: float = 0.1, 
+        **_
+    ):
         self.db_service = db_service
 
         # Core services
-        self.translation_service = AWSTranslationService()  # Only used for fallback templates
-        self.llm_service = UnifiedBilingualOpenAIService(model_name=model_name, temperature=temperature)
+        self.llm_service = UnifiedBilingualOpenAIService(
+            model_name=model_name, 
+            temperature=temperature
+        )
         self.data_analyzer = DataAnalyzer()
-        self.sql_template_service = SQLTemplateService()
-        self.sql_executor = SQLExecutor(db_service)
         self.person_enrichment = PersonEnrichmentService(db_service)
+        self.memory = SimpleQueryMemoryService()
 
-        # Language-aware
-        self.date_processor = LanguageAwareDateProcessor()
+        # Vector search service (owns all vector/date/SQL logic)
         self.vector_search = VectorSearchService(db_service)
-        self.memory = LanguageAwareMemoryService(SimpleQueryMemoryService())
-        self.context_rewriter = LanguageAwareContextRewriter(self.memory, self.llm_service)
 
         # Visualization
         self.viz_service = VisualizationService()
@@ -313,208 +189,160 @@ class LanguageNativeNLPService:
             ),
         )
 
-        # Default off; route can enable
-        self.enable_auto_visualization = False
-
-        self._initialize_data_anchor()
+        # Log constructor config (once)
+        trace(None, "ORCH_INIT", model=model_name, temperature=temperature)
 
     @property
     def viz(self):
         return self.viz_service
 
-    def _initialize_data_anchor(self):
-        """
-        Use latest WORKDATE as the data anchor if available.
-        """
-        try:
-            rows, cols = self.db_service.run_select(
-                "SELECT CONVERT(varchar(10), MAX(CAST(WORKDATE AS date)), 23) FROM dbo.ATDLEAVEDATA"
-            )
-            if rows and rows[0][0]:
-                data_anchor = str(rows[0][0])
-                self.date_processor.set_data_anchor(data_anchor)
-                logger.info("Data anchor (latest WORKDATE) = %s", data_anchor)
-        except Exception as e:
-            logger.warning("Could not determine data anchor: %s", e)
-
     @property
     def person_table(self) -> str:
+        """Delegate to vector search"""
         return self.vector_search.person_table
 
     def vector_status(self) -> Dict[str, Any]:
+        """Get vector database health status"""
         return self.vector_search.health_check()
+
+    # ---------- UI Formatting Helpers ----------
     
-    # inside LanguageNativeNLPService (near the top of the class)
-
-    @staticmethod
-    def _normalize_lang(lang: Optional[str]) -> Literal["zh-tw", "en"]:
-        """
-        Canonicalize language tags coming from the UI or detectors.
-        Accepts: 'zh', 'zh-tw', 'zh_TW', 'ZH-tw', 'zh-Hant', etc.
-        """
-        if not lang:
-            return "en"
-        s = str(lang).strip().lower().replace("_", "-")
-        if s.startswith("zh"):
-            # Treat any zh variant as Traditional Chinese for our prompts
-            # If you later need zh-CN vs zh-TW, branch here using extra signals
-            return "zh-tw"
-        return "en"
-
-
-    # ---------- UI table helpers ----------
-    def _markdown_table(self, columns, rows, limit: int = 20, keep=None) -> str:
-        cols = [c for c in columns or []]
-        if not rows or not cols:
+    def _markdown_table(
+        self, 
+        columns: List[str], 
+        rows: List[List[Any]], 
+        limit: int = 20, 
+        keep: Optional[List[str]] = None
+    ) -> str:
+        """Generate markdown table for preview"""
+        if not rows or not columns:
             return ""
-        proj_rows = []
+
+        # Project to specific columns if requested
         if keep:
-            low = {c.lower(): i for i, c in enumerate(cols)}
-            wanted = []
+            col_map = {c.lower(): i for i, c in enumerate(columns)}
+            kept_cols = []
+            kept_indices = []
+            
             for k in keep:
-                i = low.get(k.lower())
-                if i is not None:
-                    wanted.append((cols[i], i))
-            if wanted:
-                cols = [w[0] for w in wanted]
-                idxs = [w[1] for w in wanted]
-                for r in rows[:limit]:
-                    proj_rows.append([("" if i >= len(r) or r[i] is None else str(r[i])) for i in idxs])
-            else:
-                for r in rows[:limit]:
-                    proj_rows.append([("" if v is None else str(v)) for v in r])
+                idx = col_map.get(k.lower())
+                if idx is not None:
+                    kept_cols.append(columns[idx])
+                    kept_indices.append(idx)
+            
+            if kept_cols:
+                columns = kept_cols
+                rows = [
+                    [row[i] if i < len(row) else "" for i in kept_indices]
+                    for row in rows[:limit]
+                ]
         else:
-            for r in rows[:limit]:
-                proj_rows.append([("" if v is None else str(v)) for v in r])
+            rows = rows[:limit]
 
-        if not proj_rows:
-            return ""
-
-        header = "| " + " | ".join(cols) + " |"
-        sep = "| " + " | ".join(["---"] * len(cols)) + " |"
-        lines = [header, sep]
-        for r in proj_rows:
-            lines.append("| " + " | ".join(r) + " |")
-        return "\n".join(lines)
+        # Build markdown
+        header = "| " + " | ".join(columns) + " |"
+        separator = "| " + " | ".join(["---"] * len(columns)) + " |"
+        
+        body_rows = []
+        for row in rows:
+            str_row = [str(v) if v is not None else "" for v in row]
+            body_rows.append("| " + " | ".join(str_row) + " |")
+        
+        return "\n".join([header, separator] + body_rows)
 
     def _should_show_details(self, query: str, lang: Literal["zh-tw", "en"]) -> bool:
+        """Determine if query wants detailed employee list"""
         if lang == "zh-tw":
-            detail_indicators = ["姓名", "員工", "員工編號", "列表", "顯示", "樣本", "詳細", "明細", "誰", "哪些人", "具體", "清單"]
+            indicators = [
+                "姓名", "員工", "員工編號", "列表", "顯示", 
+                "樣本", "詳細", "明細", "誰", "哪些人", "具體", "清單"
+            ]
         else:
-            detail_indicators = ["name", "names", "employee id", "employee ids", "list", "show", "sample", "detail", "details", "who"]
-        return any(indicator in query.lower() for indicator in detail_indicators)
+            indicators = [
+                "name", "names", "employee id", "employee ids", 
+                "list", "show", "sample", "detail", "details", "who"
+            ]
+        
+        q_lower = query.lower()
+        return any(ind in q_lower for ind in indicators)
 
-    def _get_language_aware_explanation(
-        self, query: str, lang: Literal["zh-tw", "en"], row_count: int, columns: List[str], aggregates: Dict, sample_text: str
-    ) -> str:
+    def _should_generate_chart(
+        self, 
+        query: str, 
+        lang: Literal["zh-tw", "en"], 
+        columns: List[str]
+    ) -> bool:
+        """Determine if visualization is appropriate"""
         if lang == "zh-tw":
-            return self.llm_service.generate_explanation_chinese(query, row_count, columns, aggregates, sample_text)
-        return self.llm_service.generate_explanation(query, row_count, columns, aggregates, sample_text)
+            keywords = [
+                "圖", "圖表", "視覺化", "繪圖", "趨勢圖", 
+                "長條圖", "柱狀圖", "折線圖", "圓餅圖"
+            ]
+        else:
+            keywords = [
+                "chart", "plot", "graph", "visualize", 
+                "visualization", "trend", "bar", "line", "pie"
+            ]
+        
+        has_keyword = any(kw in query for kw in keywords) if lang == "zh-tw" else \
+                      any(kw in query.lower() for kw in keywords)
+        
+        return has_keyword or len(columns) >= 2
 
-    # -------------- display enrichment (Department + EmployeeID + Name) --------------
+    def _infer_forced_chart_type(
+        self, 
+        query: str, 
+        lang: Literal["zh-tw", "en"]
+    ) -> Optional[str]:
+        """Infer specific chart type from query"""
+        if lang == "zh-tw":
+            type_map = {
+                "長條圖": "bar_chart", "柱狀圖": "bar_chart",
+                "折線圖": "line_chart", "趨勢圖": "line_chart",
+                "圓餅圖": "pie_chart", "散點圖": "scatter_plot",
+                "箱型圖": "box_plot", "熱圖": "heatmap"
+            }
+            for keyword, chart_type in type_map.items():
+                if keyword in query:
+                    return chart_type
+        else:
+            q = query.lower()
+            type_map = {
+                "bar chart": "bar_chart", "bar": "bar_chart",
+                "line chart": "line_chart", "line": "line_chart",
+                "pie": "pie_chart", "scatter": "scatter_plot",
+                "box": "box_plot", "heatmap": "heatmap"
+            }
+            for keyword, chart_type in type_map.items():
+                if keyword in q:
+                    return chart_type
+        
+        return None
+
+    # UPDATED: delegate enrichment to PersonEnrichmentService
     def _enrich_rows_for_display(
-        self, columns: List[str], rows: List[Tuple[Any, ...]]
+        self, 
+        columns: List[str], 
+        rows: List[Tuple[Any, ...]]
     ) -> Tuple[List[str], List[List[Any]]]:
-        """
-        Create a user-friendly projection by ensuring Department, EmployeeID, Name
-        are present as the first columns. Uses PersonResolver to fill gaps.
-        Returns (enriched_columns, enriched_rows).
-        """
         if not columns or not rows:
             return columns or [], [list(r) for r in rows or []]
-
-        # Index lookups (case-insensitive)
-        low = {c.lower(): i for i, c in enumerate(columns)}
-        idx_pid  = low.get("personid")
-        idx_eid  = low.get("employeeid")
-        idx_name = low.get("truename") or low.get("name")
-        idx_dep_name = low.get("department_name") or low.get("unitname") or low.get("branch_name")
-        idx_dep_code = low.get("department_code") or low.get("unitcode") or low.get("branch_code")
-
-        # Collect IDs to resolve
-        pids, eids = set(), set()
-        for r in rows:
-            if idx_pid is not None and idx_pid < len(r) and r[idx_pid]:
-                s = str(r[idx_pid]).strip()
-                if s:
-                    pids.add(s)
-            if idx_eid is not None and idx_eid < len(r) and r[idx_eid]:
-                s = str(r[idx_eid]).strip()
-                if s:
-                    eids.add(s)
-
-        # Batch resolve via PersonResolver
-        resolved: Dict[str, Dict[str, Optional[str]]] = {}
         try:
-            res = self.person_enrichment.person_resolver.resolve_many(list(pids), employee_ids=list(eids))
-            resolved.update(res or {})
+            new_cols, new_rows = self.person_enrichment.add_readable_columns(
+                rows=rows,
+                columns=columns,
+                add_department_name=True,
+                add_person_name=True,
+                add_employee_id=True,
+                add_leave_type_name=True
+            )
+            return new_cols, new_rows
         except Exception as e:
-            logger.warning("Display enrichment resolver failed: %s", e)
+            logger.warning("DISPLAY_ENRICH_FAIL: %s", e)
+            return columns, [list(r) for r in rows]
 
-        # Decide which friendly headers are needed (avoid duplicates)
-        friendly_headers: List[str] = []
-        if idx_dep_name is None:
-            friendly_headers.append("Department")  # will fill with department_name
-        if idx_eid is None:
-            friendly_headers.append("EmployeeID")
-        # For name, prefer TRUENAME/Name if already present; otherwise add friendly Name
-        add_friendly_name = idx_name is None
-        if add_friendly_name:
-            friendly_headers.append("Name")
+    # ---------- Main Processing Method ----------
 
-        # Build enriched rows
-        enriched_rows: List[List[Any]] = []
-        for r in rows:
-            # pick lookup key (first non-empty among person, employee)
-            lk = None
-            if idx_pid is not None and idx_pid < len(r) and r[idx_pid]:
-                lk = str(r[idx_pid]).strip()
-            elif idx_eid is not None and idx_eid < len(r) and r[idx_eid]:
-                lk = str(r[idx_eid]).strip()
-
-            info = resolved.get(lk or "", {}) if lk else {}
-
-            # Department logic
-            dept = None
-            if idx_dep_name is not None and idx_dep_name < len(r) and r[idx_dep_name]:
-                dept = r[idx_dep_name]
-            else:
-                dept = info.get("department_name") or info.get("department_code") or None
-
-            # EmployeeID logic
-            eid_val = None
-            if idx_eid is not None and idx_eid < len(r) and r[idx_eid]:
-                eid_val = r[idx_eid]
-            else:
-                eid_val = info.get("employee_id")
-
-            # Name logic
-            name_val = None
-            if idx_name is not None and idx_name < len(r) and r[idx_name]:
-                name_val = r[idx_name]
-            else:
-                name_val = info.get("name") or (lk if lk else None)
-
-            # Assemble new row: [friendly headers values] + original row
-            prefix: List[Any] = []
-            for hdr in friendly_headers:
-                if hdr == "Department":
-                    prefix.append(dept)
-                elif hdr == "EmployeeID":
-                    prefix.append(eid_val)
-                elif hdr == "Name":
-                    prefix.append(name_val)
-                else:
-                    prefix.append(None)
-
-            enriched_rows.append(prefix + list(r))
-
-        # Assemble new columns list with friendly headers in front
-        enriched_columns = friendly_headers + columns
-
-        return enriched_columns, enriched_rows
-
-    # ---------- main entry ----------
     def process_complete_query(
         self,
         user_input: str,
@@ -524,257 +352,363 @@ class LanguageNativeNLPService:
         force_chart_type: Optional[str] = None,
         lang_override: Optional[Literal["zh-tw", "en"]] = None,
     ) -> Dict[str, Any]:
-        t0 = time.perf_counter()
+        """
+        Main orchestration method with detailed tracing.
+        Delegates all business logic to specialized services.
+        """
+        start_ms = _now_ms()
         session_id = rid or "default"
 
+        trace(rid, "ORCH_START",
+              schema=schema_name,
+              include_viz=include_visualization,
+              force_chart=force_chart_type,
+              lang_override=lang_override,
+              q_preview=_preview_text(user_input))
+
         try:
-            # 1) Language detect + normalize (handles overrides like 'zh-TW')
-            detected = detect_language_simple(user_input)
-            lang = self._normalize_lang(lang_override or detected)
-            logger.info("rid=%s query=%r lang=%s override=%s", rid, user_input, lang, bool(lang_override))
+            current_year = datetime.now().year
+            sql_warnings: List[str] = []
 
-            # 2) Date rewrite uses normalized lang
-            query_with_dates = self.date_processor.rewrite_relative_dates(user_input, lang)
-
-            # 3) Follow-up context rewrite
-            grounded_query = self.context_rewriter.rewrite_followup_with_context(query_with_dates, lang, session_id)
-
-            # 4) Vector retrieval (bilingual path already inside service)
-            if hasattr(self.vector_search, "find_relevant_tables_with_language"):
-                rel_with_scores = self.vector_search.find_relevant_tables_with_language(
-                    grounded_query, schema_filter=schema_name, language=lang, rid=rid
-                )
-            else:
-                rel_with_scores = self.vector_search.find_relevant_tables(grounded_query, schema_filter=schema_name, rid=rid)
-            rel_tables = [t for (t, _) in rel_with_scores]
-            join_hints = self.vector_search.get_join_hints(rel_tables)
-
-            # 5) Schema context (bilingual)
-            if hasattr(self.vector_search, "get_schema_context_with_language"):
-                schema_ctx = self.vector_search.get_schema_context_with_language(rel_tables, grounded_query, language=lang)
-            else:
-                schema_ctx = self.vector_search.get_schema_context(rel_tables)
-
-            # 6) Memory lookup (store by original)
-            cached_sql, cached_conf = self.memory.check_memory_for_query(
-                original_query=grounded_query,
-                english_query=grounded_query,  # we avoid translation for latency
-                relevant_tables=rel_tables,
-                lang=lang,
+            # ========== STEP 1: Language Detection & Query Processing ==========
+            t_ms = _now_ms()
+            query_context = self.vector_search.process_query_with_context(
+                user_input=user_input,
+                lang_override=lang_override,
                 session_id=session_id,
+                current_year=current_year
             )
+            lang = query_context.get("language")
+            processed_query = query_context.get("processed_query", user_input)
+            trace(rid, "LANG_DONE",
+                  ms=_ms_since(t_ms),
+                  language=lang,
+                  processed_preview=_preview_text(processed_query),
+                  context_keys=sorted(list(query_context.keys())))
 
+            # ========== STEP 2: Vector Retrieval ==========
+            t_ms = _now_ms()
+            retrieval_result = self.vector_search.retrieve_schema_context(
+                query=processed_query,
+                schema_filter=schema_name,
+                language=lang,
+                current_year=current_year,
+                rid=rid
+            )
+            relevant_tables = retrieval_result.get("tables", [])
+            schema_context = retrieval_result.get("schema_context", {})
+            join_hints = retrieval_result.get("join_hints", {})
+            table_scores = retrieval_result.get("table_scores", [])
+            trace(rid, "VEC_DONE",
+                  ms=_ms_since(t_ms),
+                  tables=[t for t, _ in table_scores],
+                  table_scores=[round(s, 3) for _, s in table_scores],
+                  join_hint_keys=sorted(list(join_hints.keys())) if isinstance(join_hints, dict) else None,
+                  schema_ctx_size=len(json.dumps(schema_context, ensure_ascii=False)) if schema_context else 0)
+
+            # ========== STEP 3: Memory Check ==========
+            t_ms = _now_ms()
+            cached_sql = None
+            cached_confidence = 0.0
+            if relevant_tables:
+                cached_sql, cached_confidence = self.memory.check_memory_for_query(
+                    query=processed_query,
+                    relevant_tables=relevant_tables,
+                    session_id=session_id
+                )
+            trace(rid, "MEM_CHECK",
+                  ms=_ms_since(t_ms),
+                  cache_hit=bool(cached_sql),
+                  cached_confidence=round(float(cached_confidence or 0.0), 3),
+                  cached_preview=_preview_text(cached_sql))
+
+            # ========== STEP 4: SQL Generation & Execution ==========
             final_sql = ""
             llm_attempts = 0
             rows: List[Tuple[Any, ...]] = []
             columns: List[str] = []
             execution_error: Optional[str] = None
 
-            exec_t0 = time.perf_counter()
-            try:
-                if cached_sql:
-                    final_sql = normalize_sql_columns(cached_sql)
-                    # Anchor dates inside SQL before executing
-                    final_sql = self.date_processor.rewrite_sql_dates(final_sql)
-                    rows, columns = self.db_service.run_select(final_sql, max_rows=1000, query_timeout=10)
-                    llm_attempts = 0
-                    logger.info("CACHED_QUERY_EXECUTION: query='%s' cached_sql='%s'", grounded_query[:80], final_sql[:160])
+            def _exec_sql(sql_text: str, tag: str) -> Tuple[List[Tuple[Any, ...]], List[str], int]:
+                exec_ms0 = _now_ms()
+                try:
+                    out_rows, out_cols = self.db_service.run_select(sql_text, max_rows=1000, query_timeout=10)
+                    exec_ms = _ms_since(exec_ms0)
+                    trace(rid, f"EXEC_OK", tag=tag, ms=exec_ms, rows=len(out_rows), cols=len(out_cols))
+                    return out_rows, out_cols, exec_ms
+                except Exception as e:
+                    exec_ms = _ms_since(exec_ms0)
+                    trace(rid, f"EXEC_ERR", tag=tag, ms=exec_ms, error=str(e))
+                    raise
+
+            # Branch A: cached SQL
+            if cached_sql:
+                t_ms = _now_ms()
+                final_sql = normalize_sql_columns(cached_sql)
+                final_sql = self.vector_search.anchor_sql_dates(final_sql, current_year)
+
+                ok, corrected, warns = validate_generated_sql(final_sql, current_year, data_anchor_year=None)
+                (sql_warnings or []).extend(warns or [])
+                if corrected and corrected != final_sql:
+                    final_sql = corrected
+                    trace(rid, "SQL_VALIDATED", corrected=True, warn_count=len(sql_warnings or []))
                 else:
-                    if rel_tables:
-                        # LLM generation + repair loop
-                        rows, columns, final_sql, llm_attempts = self.llm_service.run_query_with_llm_repair(
-                            db_service=self.db_service,
-                            user_question=grounded_query,
-                            schema=schema_ctx,
-                            join_hints=join_hints,
-                            params=None,
-                            max_rows=1000,
-                            query_timeout=10,
-                            max_attempts=3,
-                        )
-                        final_sql = normalize_sql_columns(final_sql)
-                        # Anchor SQL dates
-                        final_sql = self.date_processor.rewrite_sql_dates(final_sql)
-                        # Optional re-run after anchoring (only if initial call didn't already run anchored SQL)
-                        if not rows and final_sql:
-                            rows, columns = self.db_service.run_select(final_sql, max_rows=1000, query_timeout=10)
+                    trace(rid, "SQL_VALIDATED", corrected=False, warn_count=len(sql_warnings or []))
+
+                persist_sql(rid, final_sql, stage="SQL_CACHED_FINAL")
+                rows, columns, _ = _exec_sql(final_sql, tag="CACHED")
+                trace(rid, "CACHED_SQL_DONE", ms=_ms_since(t_ms), row_count=len(rows), col_count=len(columns))
+
+            # Branch B: LLM path
+            elif relevant_tables:
+                t_ms = _now_ms()
+                try:
+                    rows, columns, final_sql, llm_attempts = self.llm_service.run_query_with_llm_repair(
+                        db_service=self.db_service,
+                        user_question=processed_query,
+                        schema=schema_context,
+                        join_hints=join_hints,
+                        params=None,
+                        max_rows=1000,
+                        query_timeout=10,
+                        max_attempts=3,
+                    )
+                    trace(rid, "LLM_DONE",
+                          ms=_ms_since(t_ms),
+                          llm_attempts=int(llm_attempts or 0),
+                          sql_preview=_preview_text(final_sql))
+
+                    final_sql = normalize_sql_columns(final_sql or "")
+                    final_sql = self.vector_search.anchor_sql_dates(final_sql, current_year)
+
+                    ok, corrected, warns = validate_generated_sql(final_sql, current_year, data_anchor_year=None)
+                    (sql_warnings or []).extend(warns or [])
+                    if corrected and corrected != final_sql:
+                        final_sql = corrected
+                        persist_sql(rid, final_sql, stage="SQL_REPAIRED_FINAL")
+                        rows, columns, _ = _exec_sql(final_sql, tag="LLM_REPAIR_RERUN")
+                        trace(rid, "LLM_SQL_REPAIR_RERUN", warn_count=len(sql_warnings or []))
                     else:
-                        # Fallback templates (already view-free)
-                        logger.warning("NO_TABLES_FOUND: using fallback SQL")
-                        english_for_template = self.translation_service.translate_to_english(grounded_query, lang)
-                        alt = self.sql_template_service.get_fallback_sql(english_for_template or grounded_query)
-                        final_sql = normalize_sql_columns(alt or "SELECT 1 WHERE 1=0")
-                        final_sql = self.date_processor.rewrite_sql_dates(final_sql)
-                        rows, columns = self.db_service.run_select(final_sql, max_rows=1000, query_timeout=10)
-            except Exception as e:
-                execution_error = str(e)
-                logger.error("QUERY_EXECUTION_ERROR: %s", execution_error)
+                        persist_sql(rid, final_sql, stage="SQL_LLM_FINAL")
+                        # If first run had rows/columns already returned by service, keep them.
+                        # Safety: if empty, execute once ourselves
+                        if not rows and final_sql:
+                            rows, columns, _ = _exec_sql(final_sql, tag="LLM_SINGLE_RUN")
 
-            exec_ms = _ms(exec_t0)
+                except Exception as e:
+                    execution_error = str(e)
+                    trace(rid, "LLM_PATH_ERR", error=_preview_text(execution_error, 400))
 
-            # 7) Memory learn/record
-            english_query_for_fallback = grounded_query if lang == "en" else grounded_query
-            if execution_error is None:
-                self.memory.learn_from_query(
-                    original_query=grounded_query,
-                    english_query=english_query_for_fallback,
-                    relevant_tables=rel_tables,
-                    generated_sql=final_sql,
-                    success=True,
-                    execution_time=exec_ms / 1000.0,
-                    lang=lang,
-                    session_id=session_id,
-                )
-                self.memory.record_success(
-                    session_id=session_id,
-                    original_query=grounded_query,
-                    english_query=english_query_for_fallback,
-                    generated_sql=final_sql,
-                    columns=columns,
-                    rows=rows,
-                    relevant_tables=rel_tables,
-                    schema_ctx=schema_ctx,
-                    lang=lang,
-                )
             else:
-                self.memory.learn_from_query(
-                    original_query=grounded_query,
-                    english_query=english_query_for_fallback,
-                    relevant_tables=rel_tables,
-                    generated_sql=final_sql or "",
-                    success=False,
-                    execution_time=exec_ms / 1000.0,
-                    lang=lang,
-                    session_id=session_id,
-                )
+                # No tables found → deterministic empty
+                final_sql = "SELECT 1 WHERE 1=0"
+                trace(rid, "NO_TABLES_FOUND", reason="vector retrieval returned no candidates")
 
-            # 8) Explanation + table + optional viz
+            # ========== STEP 5: Memory Update ==========
+            mem_ms0 = _now_ms()
+            try:
+                if execution_error is None:
+                    self.memory.learn_from_query(
+                        query=processed_query,
+                        relevant_tables=relevant_tables,
+                        generated_sql=final_sql,
+                        success=True,
+                        execution_time=_ms_since(t_ms) / 1000.0 if 't_ms' in locals() else 0.0,
+                        session_id=session_id,
+                    )
+                    self.memory.record_success(
+                        session_id=session_id,
+                        query=processed_query,
+                        generated_sql=final_sql,
+                        columns=columns,
+                        rows=rows,
+                        relevant_tables=relevant_tables,
+                        schema_ctx=schema_context,
+                    )
+                    trace(rid, "MEM_UPDATED", success=True)
+                else:
+                    self.memory.learn_from_query(
+                        query=processed_query,
+                        relevant_tables=relevant_tables,
+                        generated_sql=final_sql or "",
+                        success=False,
+                        execution_time=_ms_since(t_ms) / 1000.0 if 't_ms' in locals() else 0.0,
+                        session_id=session_id,
+                    )
+                    trace(rid, "MEM_UPDATED", success=False, error=_preview_text(execution_error))
+            except Exception as me:
+                trace(rid, "MEM_UPDATE_ERR", ms=_ms_since(mem_ms0), error=str(me))
+
+            # ========== STEP 6: Display Enrichment & Explanation ==========
             if execution_error:
-                explanation = "查詢執行失敗：" + execution_error if lang == "zh-tw" else "Query execution failed: " + execution_error
+                msg = "查詢執行失敗：" + execution_error if lang == "zh-tw" else "Query execution failed: " + execution_error
+                explanation = msg
                 table_md = ""
-                visualization_payload: Optional[Dict[str, Any]] = None
-                columns_enriched, rows_enriched = columns, [list(r) for r in rows]
+                visualization_payload = None
+                columns_enriched = normalize_column_labels(columns or [])
+                rows_enriched = [tuple(r) for r in (rows or [])]
+                trace(rid, "ENRICH_SKIP", error=_preview_text(execution_error))
             else:
-                # --- Enrich for display (prepend Department, EmployeeID, Name) ---
+                enr_ms0 = _now_ms()
                 columns_enriched, rows_enriched = self._enrich_rows_for_display(columns, rows)
+                columns_enriched = normalize_column_labels(columns_enriched or [])
+                rows_enriched = [tuple(r) for r in (rows_enriched or [])]
+                trace(rid, "ENRICH_DONE",
+                      ms=_ms_since(enr_ms0),
+                      rows=len(rows_enriched),
+                      cols=len(columns_enriched))
 
-                # Use enriched set for analysis and preview
                 aggregates = self.data_analyzer.compute_aggregates(rows_enriched, columns_enriched)
                 sample_text = format_sample_data(rows_enriched, columns_enriched)
 
-                explanation = self._get_language_aware_explanation(
-                    grounded_query, lang, len(rows_enriched), columns_enriched, aggregates, sample_text
-                )
+                if (lang or "").lower() in ("zh-tw", "zh_tw", "zh", "zh-hant", "zh-hk", "zh-mo"):
+                    explanation = self.llm_service.generate_explanation_chinese(
+                        processed_query, len(rows_enriched), columns_enriched, aggregates, sample_text
+                    )
+                else:
+                    explanation = self.llm_service.generate_explanation_english(
+                        processed_query, len(rows_enriched), columns_enriched, aggregates, sample_text
+                    )
 
-                # Details intent → keep human columns in preview
-                want_details = self._should_show_details(grounded_query, lang)
+                want_details = self._should_show_details(processed_query, lang)
                 preferred_cols = [
-                    "Department", "EmployeeID", "Name",
-                    "ATTENDANCETYPE", "LEAVETYPE", "HOURS",
+                    "Department", "department_name",
+                    "EmployeeID", "employeeid",
+                    "Name", "truename", "name", "person_name",
+                    "LeaveType", "classname", "attendancetype", "leavetype",
+                    "HOURS", "TIMECLASSHOURS",
                     "StartDate", "WORKDATE", "EndDate"
                 ]
-                table_md = self._markdown_table(
-                    columns_enriched, rows_enriched, limit=20, keep=preferred_cols if want_details else None
-                )
-                if table_md:
-                    preview_header = "**預覽（前20筆）：**" if lang == "zh-tw" else "**Preview (first 20 rows):**"
-                    explanation = explanation.strip() + f"\n\n{preview_header}\n\n" + table_md
 
-                # Visualization prefers enriched labels
+                table_md = self._markdown_table(
+                    columns_enriched,
+                    rows_enriched,
+                    limit=20,
+                    keep=preferred_cols if want_details else None,
+                )
+
+                # ========== STEP 7: Visualization (Optional) ==========
                 visualization_payload = None
-                if include_visualization and rows_enriched and columns_enriched and (_should_generate_chart(grounded_query, lang, columns_enriched) or force_chart_type):
+                if (include_visualization and rows_enriched and columns_enriched and
+                    (self._should_generate_chart(processed_query, lang, columns_enriched) or force_chart_type)):
                     try:
-                        df = pd.DataFrame(rows_enriched, columns=columns_enriched)
-                        # light datetime coercion
-                        for c in df.columns:
-                            lc = str(c).lower()
-                            if any(k in lc for k in ["date", "day", "time", "workdate", "startdate", "enddate"]):
+                        trace(rid, "VIZ_START",
+                              rows=len(rows_enriched),
+                              cols=len(columns_enriched),
+                              forced=bool(force_chart_type))
+                        df = _build_safe_dataframe(columns_enriched, rows_enriched)
+                        df = _maybe_melt_dates(df)
+
+                        for col in df.columns:
+                            cl = str(col).lower()
+                            if any(k in cl for k in ["date", "day", "time", "workdate", "startdate", "enddate"]):
                                 try:
-                                    df[c] = pd.to_datetime(df[c], errors="ignore")
+                                    df[col] = pd.to_datetime(df[col], errors="ignore")
                                 except Exception:
                                     pass
-                        forced = force_chart_type or _infer_forced_chart_type(grounded_query, lang)
-                        if forced:
+                            if any(k in cl for k in ["hour", "hours", "timeclasshours", "duration"]):
+                                try:
+                                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                                except Exception:
+                                    pass
+
+                        forced_type = force_chart_type or self._infer_forced_chart_type(processed_query, lang)
+                        if forced_type:
                             visualization_payload = self.viz_service.create_visualization(
-                                df, user_query=grounded_query, force_chart_type=forced, title=None
+                                df, user_query=processed_query, force_chart_type=forced_type, title=None
                             )
                         else:
                             visualization_payload = self.chart_agent.generate_chart(
                                 df=df,
-                                user_query=grounded_query,
-                                sql_meta={"sql": final_sql, "tables": rel_tables, "lang": lang},
+                                user_query=processed_query,
+                                sql_meta={"sql": final_sql, "tables": relevant_tables, "lang": lang},
                                 force_chart_type=None,
-                                title=None,
+                                title=None
                             )
-                        if visualization_payload and lang == "zh-tw":
-                            reason = visualization_payload.get("reasoning") or ""
-                            visualization_payload["reasoning"] = f"圖表推薦：{reason}"
-                    except Exception as viz_e:
-                        logger.warning("VISUALIZATION_AGENT_FAILED: %s", viz_e)
-                        visualization_payload = {"enabled": False, "reason": f"Visualization error: {viz_e}"}
 
-            # 9) Build response
-            stats = self.memory.get_memory_stats()
-            chinese_chars = sum(1 for c in user_input if "\u4e00" <= c <= "\u9fff")
-            total_chars = len([c for c in user_input if c.isalnum()])
-            lang_confidence = min(1.0, (chinese_chars / max(total_chars, 1)) * 2) if lang == "zh-tw" else 0.9
+                        if visualization_payload and lang == "zh-tw":
+                            reason = visualization_payload.get("reasoning", "")
+                            visualization_payload["reasoning"] = f"圖表推薦：{reason}"
+                        trace(rid, "VIZ_DONE", ok=True, chart_type=visualization_payload.get("type") if isinstance(visualization_payload, dict) else None)
+                    except Exception as viz_e:
+                        visualization_payload = {"enabled": False, "reason": f"Visualization error: {viz_e}"}
+                        trace(rid, "VIZ_FAIL", ok=False, error=str(viz_e))
+
+            # ========== STEP 8: Build Response ==========
+            memory_stats = self.memory.get_memory_stats()
 
             response = {
                 "original_text": user_input,
                 "detected_language": lang,
-                "language_confidence": lang_confidence,
-                "processed_query": grounded_query,
+                "language_confidence": query_context.get("language_confidence", 0.9),
+                "processed_query": processed_query,
                 "intent": "generic",
                 "schema": schema_name,
-                "relevant_tables": [{"table": t, "score": round(s, 3)} for (t, s) in rel_with_scores],
+                "relevant_tables": [
+                    {"table": t, "score": round(s, 3)} 
+                    for t, s in (table_scores or [])
+                ],
                 "generated_sql": final_sql or "SELECT 1 WHERE 1=0",
-                "llm_attempts": llm_attempts,
+                "llm_attempts": int(llm_attempts or 0),
                 "execution_successful": execution_error is None,
                 "execution_error": execution_error,
 
-                # Raw results preserved for backwards compatibility
+                # Raw results (backwards compatibility)
                 "columns": columns,
                 "results": [[jsonable_value(v) for v in r] for r in rows],
                 "row_count": len(rows),
 
-                # Programmatic person map (unchanged)
-                "resolved_people": self.person_enrichment.enrich_people_data(rows, columns),
+                # Enriched results (for UI)
+                "columns_enriched": columns_enriched if not execution_error else columns,
+                "results_enriched": [[jsonable_value(v) for v in r] for r in (rows_enriched if not execution_error else rows)],
+                "table_markdown": table_md if (not execution_error and table_md) else "",
 
-                # NEW: enriched outputs drive UI
-                "columns_enriched": columns_enriched,
-                "results_enriched": [[jsonable_value(v) for v in r] for r in rows_enriched],
-                "table_markdown": table_md if execution_error is None else "",
-
-                # Explanation in native language
-                "explanation": explanation,
-                "summary": explanation,
+                # Explanation
+                "explanation": explanation if not execution_error else (execution_error or ""),
+                "summary": explanation if not execution_error else (execution_error or ""),
                 "success": execution_error is None,
                 "language_native_processing": True,
 
-                # Visualization payload only when requested & successful
-                "visualization": visualization_payload if (execution_error is None and include_visualization) else None,
+                # Visualization
+                "visualization": (visualization_payload if (execution_error is None and include_visualization) else None),
                 "visualization_requested": bool(include_visualization),
 
                 # Memory stats
                 "memory": {
                     "session_id": session_id,
                     "used_cached_sql": bool(cached_sql),
-                    "cached_confidence": float(cached_conf) if cached_sql else 0.0,
-                    "cache_hit_rate": stats.get("cache_hit_rate"),
+                    "cached_confidence": float(cached_confidence or 0.0),
+                    "cache_hit_rate": memory_stats.get("cache_hit_rate"),
                     "language_aware": True,
                 },
+
+                # SQL validator warnings
+                "sql_warnings": sql_warnings,
+
+                # Metadata
+                "processing_time_ms": _ms_since(start_ms),
+                "current_year": current_year,
             }
 
-            logger.info("rid=%s pipeline ok in %dms (lang=%s)", rid, _ms(t0), lang)
+            trace(rid, "ORCH_DONE",
+                  ms=_ms_since(start_ms),
+                  lang=lang,
+                  rows=len(rows),
+                  cols=len(columns),
+                  viz=bool(response.get("visualization")),
+                  sql_saved=bool(persist_sql(rid, final_sql, stage="SQL_RESPONSE_FINAL")) if final_sql else False)
+
+            logger.info("rid=%s pipeline_ok time=%dms lang=%s rows=%d", rid, _ms_since(start_ms), lang, len(rows))
             return response
 
         except Exception as e:
-            logger.error("rid=%s pipeline failed in %dms: %s", rid, _ms(t0), e, exc_info=True)
-            detected = detect_language_simple(user_input)
-            msg = "處理您的查詢時發生錯誤。" if detected == "zh-tw" else "An error occurred while processing your query."
+            trace(rid, "ORCH_FAIL", ms=_ms_since(start_ms), error=str(e))
+            logger.error("rid=%s pipeline_failed time=%dms error=%s", rid, _ms_since(start_ms), e, exc_info=True)
+            lang = "zh-tw" if any('\u4e00' <= c <= '\u9fff' for c in user_input) else "en"
+            msg = "處理您的查詢時發生錯誤。" if lang == "zh-tw" else "An error occurred while processing your query."
             return {
                 "original_text": user_input,
-                "detected_language": detected,
+                "detected_language": lang,
                 "language_confidence": 0.5,
                 "execution_successful": False,
                 "execution_error": str(e),
@@ -784,4 +718,5 @@ class LanguageNativeNLPService:
                 "language_native_processing": True,
                 "visualization": None,
                 "visualization_requested": False,
+                "processing_time_ms": _ms_since(start_ms),
             }

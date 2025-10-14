@@ -136,9 +136,17 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    logger.info("App version: %s | CORS: %s", os.getenv("APP_VERSION", "0.4"), allow_origins)
 
     # Static mounts
     if FRONTEND_DIR.exists():
+        # --- Serve generated chart images FIRST so it wins route matching ---
+        charts_dir = Path(os.getenv("LOCAL_SAVE_DIR", "charts/images")).resolve()
+        charts_dir.mkdir(parents=True, exist_ok=True)
+        app.mount("/static/images", StaticFiles(directory=str(charts_dir)), name="charts_images")
+        logger.info("Charts images dir: %s (mounted at /static/images)", charts_dir)
+
+        # Then the broader mounts
         if ASSETS_DIR.exists():
             app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
         if STATIC_DIR.exists():
@@ -166,6 +174,7 @@ def create_app() -> FastAPI:
             @app.get("/", include_in_schema=False)
             async def root_index():
                 return FileResponse(str(INDEX_HTML))
+
         logger.info("Frontend dir: %s (exists=%s)", FRONTEND_DIR, True)
     else:
         logger.warning("Frontend dir not found at %s", FRONTEND_DIR)
@@ -173,6 +182,16 @@ def create_app() -> FastAPI:
     # API routes
     app.include_router(api_router)
     app.include_router(speech_router)
+
+    # Lightweight health check
+    @app.get("/api/health", include_in_schema=False)
+    async def health():
+        try:
+            db_ok = hasattr(app.state, "db")
+            nlp_ok = hasattr(app.state, "nlp")
+            return {"ok": True, "db": db_ok, "nlp": nlp_ok}
+        except Exception as e:
+            return {"ok": False, "err": str(e)}
 
     return app
 

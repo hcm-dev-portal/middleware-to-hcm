@@ -605,74 +605,116 @@
     // Send Query (normal or viz mode)
     // ---------------------------
     async function sendQuery(forcedText, fromRetry = false) {
-      const q = (forcedText ?? (queryTA.value || '')).trim();
-      if (!q) return;
+    const q = (forcedText ?? (queryTA.value || '')).trim();
+    if (!q) return;
 
-      if (!fromRetry) {
-        appendMessage('user', q, false);
-        queryTA.value = '';
-      }
-
-      const typing = document.createElement('div');
-      typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
-      typing.innerHTML = `<span class="inline-flex items-center gap-2">
-        <span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>
-        ${vizMode ? '🎨 Generating visualization...' : (i18n.t('ai_assistant.thinking') || 'Thinking...')}
-      </span>`;
-      results.appendChild(typing);
-      results.scrollTop = results.scrollHeight;
-
-      const endpoint = vizMode
-        ? `${API_BASE}/api/assistant/query_with_viz`
-        : `${API_BASE}/api/assistant/query`;
-      const payload = {
-        query: q,
-        lang: i18n.getCurrentLanguage(),
-        include_visualization: vizMode
-      };
-
-      try {
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        let data = null;
-        try { data = await res.json(); } catch { data = null; }
-
-        typing.remove();
-
-        if (res.ok && data?.success) {
-          const responseText = data.summary || data.explanation_localized ||
-                               data.explanation_english || (vizMode ? '' : (i18n.t('errors.done') || 'Done.'));
-          const imageUrl = data.visualization_url || data.image_url || null;
-
-          if (responseText || imageUrl) {
-            appendMessage('assistant', responseText, true, imageUrl);
-          } else if (vizMode) {
-            appendMessage('assistant', 'Visualization generated successfully', true);
-          }
-          return;
-        }
-
-        // Handle backend-declared errors
-        const classified = classifyBackendError(data, res.status);
-        renderErrorPanel(classified, q);
-
-      } catch (err) {
-        typing.remove();
-        const classified = {
-          category: 'network',
-          title: i18n.t('errors.network_error_title') || 'Network error',
-          advice: i18n.t('errors.network_error_advice') || 'Please check your internet connection and retry.',
-          retry: true,
-          backoffMs: 800,
-          rid: null, sqlstate: null, dbcode: null, genSql: null, raw: String(err || '')
-        };
-        renderErrorPanel(classified, q);
-      }
+    if (!fromRetry) {
+      appendMessage('user', q, false);
+      queryTA.value = '';
     }
+
+    const typing = document.createElement('div');
+    typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
+    typing.innerHTML = `<span class="inline-flex items-center gap-2">
+      <span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>
+      ${vizMode ? '🎨 Generating visualization...' : (i18n.t('ai_assistant.thinking') || 'Thinking...')}
+    </span>`;
+    results.appendChild(typing);
+    results.scrollTop = results.scrollHeight;
+
+    const endpoint = vizMode
+      ? `${API_BASE}/api/assistant/query_with_viz`
+      : `${API_BASE}/api/assistant/query`;
+
+    const payload = {
+      query: q,
+      lang: i18n.getCurrentLanguage(),
+      include_visualization: vizMode
+    };
+
+    try {
+      console.debug('[sendQuery] POST', endpoint, payload);
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+
+      console.debug('[sendQuery] Response status:', res.status);
+      console.debug('[sendQuery] Response JSON:', data);
+
+      typing.remove();
+
+      // Accept success from either 'success' or 'ok', fallback to HTTP ok
+      const success =
+        (data && (data.success === true || data.ok === true)) ||
+        (res.ok && data && data.enabled !== false);
+
+      if (success) {
+        // Prefer localized/explanation text; keep empty string in viz mode if none
+        const responseText =
+          data?.summary ??
+          data?.explanation_localized ??
+          data?.explanation_english ??
+          (vizMode ? '' : (i18n.t('errors.done') || 'Done.'));
+
+        // Find visualization URL in multiple shapes
+        const imageUrl =
+          data?.visualization_url ||
+          data?.image_url ||
+          data?.url ||                        // some handlers return url at top-level
+          data?.viz?.image_url ||
+          data?.viz?.visualization_url ||
+          data?.viz?.url ||
+          null;
+
+        console.debug('[sendQuery] success:', success, 'text len:', (responseText||'').length, 'imageUrl:', imageUrl);
+
+        if (imageUrl) {
+          // Render HTML charts (kaleido fallback) via iframe; images via <img>
+          const isHTML = /\.html?(?:\?|#|$)/i.test(imageUrl);
+          if (isHTML) {
+            appendMessage('assistant', responseText, true, null, {
+              kind: 'iframe',
+              src: imageUrl,
+              style: 'width:100%;height:520px;border:0;'
+            });
+          } else {
+            appendMessage('assistant', responseText, true, imageUrl);
+          }
+        } else {
+          // No URL found — still show text (or confirm viz)
+          if (responseText) {
+            appendMessage('assistant', responseText, true);
+          } else if (vizMode) {
+            appendMessage('assistant', 'Visualization generated (no URL returned).', true);
+          }
+        }
+        return;
+      }
+
+      // Handle backend-declared errors
+      const classified = classifyBackendError(data, res.status);
+      console.warn('[sendQuery] backend error classified:', classified);
+      renderErrorPanel(classified, q);
+
+    } catch (err) {
+      typing.remove();
+      console.error('[sendQuery] network/error:', err);
+      const classified = {
+        category: 'network',
+        title: i18n.t('errors.network_error_title') || 'Network error',
+        advice: i18n.t('errors.network_error_advice') || 'Please check your internet connection and retry.',
+        retry: true,
+        backoffMs: 800,
+        rid: null, sqlstate: null, dbcode: null, genSql: null, raw: String(err || '')
+      };
+      renderErrorPanel(classified, q);
+    }
+  }
 
     // Helpers for error render
     function el(html) {
@@ -994,10 +1036,16 @@
     // ---------------------------
     // Refresh & scheduling
     // ---------------------------
-    function scheduleRefresh() {
+    const HOUR_MS = 60 * 60 * 1000;
+    let refreshIntervalLeave;
+
+    function scheduleRefresh(eager = true) {
       if (refreshInterval) clearInterval(refreshInterval);
-      refreshInterval = setInterval(async () => {
-        await loadLeaveMetrics().catch(err => console.error('Scheduled metrics refresh failed:', err));
+
+      const run = async () => {
+        await loadLeaveMetrics().catch(err =>
+          console.error('Scheduled metrics refresh failed:', err)
+        );
         try {
           const url = new URL(`${API_BASE}/api/leave_data`);
           url.searchParams.set('days', TREND_DAYS);
@@ -1006,9 +1054,15 @@
             const data = await res.json();
             if (data?.success) updateLeaveTrend(data.trend);
           }
-        } catch {}
-      }, 30000);
+        } catch (err) {
+          console.error('Scheduled trend refresh failed:', err);
+        }
+      };
+
+      if (eager) run();                  // refresh immediately once
+      refreshIntervalLeave = setInterval(run, HOUR_MS);  // then every hour
     }
+
 
     refreshBtn?.addEventListener('click', async () => {
       refreshBtn.classList.add('animate-spin');

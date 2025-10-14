@@ -6,7 +6,7 @@ from typing import Optional
 import io
 import logging
 
-from app.services.tts_service import PollyService
+from app.services.aws.tts_service import PollyService
 
 logger = logging.getLogger(__name__)
 

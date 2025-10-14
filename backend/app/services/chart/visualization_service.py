@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import shutil
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -13,66 +14,44 @@ import plotly.graph_objects as go
 
 logger = logging.getLogger(__name__)
 
-# ---- Config via env (optional) ----
+# ----------------------------
+# Paths / URL mapping
+# ----------------------------
 STATIC_IMAGE_DIR = os.getenv("STATIC_IMAGE_DIR", "static/images")   # web-served dir
-LOCAL_SAVE_DIR   = os.getenv("LOCAL_SAVE_DIR", "charts/images")     # filesystem dir
-DEFAULT_REGION   = os.getenv("AWS_REGION", "ap-southeast-2")
+LOCAL_SAVE_DIR   = os.getenv("LOCAL_SAVE_DIR", "charts/images")     # filesystem dir (archive)
+PUBLIC_URL_BASE  = os.getenv("PUBLIC_IMAGE_BASE", "/static/images") # URL prefix the FE can reach
 
-# Optional AI (for recommendations only). We keep this tiny & safe.
-try:
-    from langchain_openai import ChatOpenAI
-    from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-    OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-    _OPENAI_OK = bool(OPENAI_KEY)
-except Exception:
-    _OPENAI_OK = False
-
-
+# ----------------------------
+# Service
+# ----------------------------
 class VisualizationService:
     """
-    Secure, deterministic chart generator with optional AI-powered recommendation (no AI codegen).
-    - Chart recommendations: AI (if available) -> fallback rule-based
-    - Chart rendering: deterministic Plotly builders (no exec)
-    - Output: saved PNG + 'visualization' dict the UI expects
+    Deterministic Plotly charts + robust image saving.
+    - Cleans DataFrames (dates, tz-naive, numeric coercion, duplicate cols)
+    - Auto-resamples wide time windows for time series
+    - Safer fallbacks to table/correlation when needed
+    - If PNG export fails (e.g., missing Kaleido), writes a placeholder image (if Pillow available),
+      otherwise raises a clear RuntimeError.
     """
 
-    def __init__(self, use_ai_reco: bool = True, theme: str = "plotly_white"):
-        self.use_ai_reco = use_ai_reco and _OPENAI_OK
+    def __init__(self, use_ai_reco: bool = False, theme: str = "plotly_white"):
+        self.use_ai_reco = False  # keep OFF for stability
         self.theme = theme
 
-        # Ensure save directories exist
         self._local_dir = Path(LOCAL_SAVE_DIR)
         self._local_dir.mkdir(parents=True, exist_ok=True)
+
         self._static_dir = Path(STATIC_IMAGE_DIR)
         self._static_dir.mkdir(parents=True, exist_ok=True)
 
-        # Optional AI: build a tiny prompt (recommendation only)
-        if self.use_ai_reco:
-            try:
-                self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.1)
-                self._reco_prompt = ChatPromptTemplate.from_messages([
-                    SystemMessagePromptTemplate.from_template(
-                        "You are a data visualization expert. Given data structure and user query, "
-                        "recommend the best chart. Return JSON only with keys: "
-                        '{"recommended_chart": "...", "reasoning": "...", "alternative_charts": [], '
-                        '"insights_to_highlight": []}'
-                    ),
-                    HumanMessagePromptTemplate.from_template(
-                        "Shape: {shape}\n"
-                        "Numeric: {numeric}\n"
-                        "Categorical: {categorical}\n"
-                        "Datetime: {datetime}\n"
-                        "User query: {query}\n"
-                        "Columns: {columns}\n"
-                        "Sample: {sample}\n"
-                    ),
-                ])
-            except Exception as e:
-                logger.warning("AI reco disabled: %s", e)
-                self.use_ai_reco = False
+        logger.info(
+            "VIZ_INIT: local_dir=%s static_dir=%s public_url_base=%s",
+            self._local_dir.resolve(), self._static_dir.resolve(), PUBLIC_URL_BASE
+        )
 
-    # ---------- Public entrypoint ----------
-
+    # =====================================================
+    # Public entrypoint
+    # =====================================================
     def create_visualization(
         self,
         df: pd.DataFrame,
@@ -80,255 +59,409 @@ class VisualizationService:
         force_chart_type: Optional[str] = None,
         title: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Decide chart -> build chart -> save image -> return 'visualization' dict for the API response.
-        """
         try:
-            analysis = self._analyze(df)
+            df = self._prep_dataframe(df)
             if force_chart_type:
                 chart_type = force_chart_type
-                reasoning = f"Forced chart type '{force_chart_type}'"
-                alts = []
-                insights_hint: List[str] = []
+                reasoning = f"Forced: {force_chart_type}"
+                alts: List[str] = []
             else:
-                reco = self._recommend_chart(df, user_query, analysis)
-                chart_type = reco["recommended_chart"]
-                reasoning = reco.get("reasoning") or "Recommended by system"
-                alts = reco.get("alternative_charts", [])
-                insights_hint = reco.get("insights_to_highlight", [])
+                chart_type, reasoning, alts = self._fallback_recommendation(df, user_query)
 
-            if not title:
-                title = self._default_title(chart_type, user_query, df)
-
+            title = title or (user_query[:120] if user_query else chart_type.replace("_", " ").title())
             fig = self._build_chart(df, chart_type, title)
-            image_url, filename = self._save_figure(fig, chart_type)
 
-            insights = self._generate_insights(df, chart_type, analysis, insights_hint)
+            image_url, filename = self._save_figure(fig, chart_type)
+            logger.info("VIZ_SAVED: file=%s url=%s", filename, image_url)
+
+            # light analysis + insights (agent may call these directly too)
+            analysis = self._analyze(df)
+            insights = self._generate_insights(df, chart_type, analysis, hints=[])
 
             return {
                 "enabled": True,
                 "type": chart_type,
                 "title": title,
-                "url": image_url,               # UI uses this
-                "filename": filename,           # optional
+                "url": image_url,      # UI uses this
+                "filename": filename,  # optional
                 "reasoning": reasoning,
-                "insights": insights,
                 "alternatives": alts,
+                "insights": insights,
                 "data_summary": {
                     "rows": int(df.shape[0]),
                     "columns": int(df.shape[1]),
                     "column_names": list(map(str, df.columns)),
                 },
             }
-
         except Exception as e:
             logger.exception("Visualization failed: %s", e)
-            return {
-                "enabled": False,
-                "reason": f"Visualization error: {e}",
-            }
+            return {"enabled": False, "reason": f"Visualization error: {e}"}
 
-    # ---------- Analysis & Recommendation ----------
+    # =====================================================
+    # DataFrame prep (robust)
+    # =====================================================
+    def _prep_dataframe(self, df: Optional[pd.DataFrame]) -> pd.DataFrame:
+        """Make df safe & predictable; handle duplicates, dates, numbers, NaNs/Infs."""
+        if df is None:
+            return pd.DataFrame()
+        dfx = df.copy()
 
-    def _analyze(self, df: pd.DataFrame) -> Dict[str, Any]:
-        if df is None or df.empty:
-            return {
-                "empty": True,
-                "shape": (0, 0),
-                "numeric_cols": [],
-                "categorical_cols": [],
-                "datetime_cols": [],
-                "columns": [],
-                "sample": [],
-            }
+        # Drop fully-empty columns
+        try:
+            dfx = dfx.loc[:, ~(dfx.isna().all())]
+        except Exception:
+            pass
 
-        numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-        datetime_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-        categorical_cols = [c for c in df.columns if c not in numeric_cols and c not in datetime_cols]
+        # Deduplicate column labels to avoid hard crashes downstream
+        dfx = self._dedupe_columns(dfx)
 
-        sample = df.head(2).to_dict("records")
-
-        return {
-            "empty": False,
-            "shape": df.shape,
-            "numeric_cols": numeric_cols,
-            "categorical_cols": categorical_cols,
-            "datetime_cols": datetime_cols,
-            "columns": list(df.columns),
-            "sample": sample,
-        }
-
-    def _recommend_chart(self, df: pd.DataFrame, query: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        # Try AI reco
-        if self.use_ai_reco and not analysis.get("empty"):
-            try:
-                msgs = self._reco_prompt.format_messages(
-                    shape=f"{analysis['shape'][0]}x{analysis['shape'][1]}",
-                    numeric=analysis["numeric_cols"],
-                    categorical=analysis["categorical_cols"],
-                    datetime=analysis["datetime_cols"],
-                    query=query,
-                    columns=analysis["columns"],
-                    sample=analysis["sample"],
-                )
-                res = self.llm.invoke(msgs)
-                txt = getattr(res, "content", "") or ""
-                reco = json.loads(txt)
-                rc = reco.get("recommended_chart")
-                if rc:
-                    return {
-                        "recommended_chart": rc,
-                        "reasoning": reco.get("reasoning", ""),
-                        "alternative_charts": reco.get("alternative_charts", []),
-                        "insights_to_highlight": reco.get("insights_to_highlight", []),
-                    }
-            except Exception as e:
-                logger.warning("AI reco failed: %s (falling back)", e)
-
-        # Fallback rules (fast, deterministic)
-        return self._fallback_recommendation(analysis, query)
-
-    def _fallback_recommendation(self, a: Dict[str, Any], query: str) -> Dict[str, Any]:
-        if a.get("empty"):
-            return {
-                "recommended_chart": "table",
-                "reasoning": "No data to visualize",
-                "alternative_charts": [],
-                "insights_to_highlight": [],
-            }
-
-        num = len(a["numeric_cols"])
-        cat = len(a["categorical_cols"])
-        dt  = len(a["datetime_cols"])
-
-        # Soft intent cues
-        q = (query or "").lower()
-        if "trend" in q or "over time" in q or dt >= 1:
-            return {"recommended_chart": "line_chart", "reasoning": "Time trend", "alternative_charts": ["bar_chart"], "insights_to_highlight": []}
-        if "distribution" in q or "histogram" in q:
-            return {"recommended_chart": "histogram", "reasoning": "Distribution requested", "alternative_charts": ["box_plot"], "insights_to_highlight": []}
-        if "correlation" in q or num >= 2:
-            return {"recommended_chart": "scatter_plot", "reasoning": "Two or more numeric variables", "alternative_charts": ["heatmap","bar_chart"], "insights_to_highlight": []}
-        if num == 1 and cat >= 1:
-            return {"recommended_chart": "bar_chart", "reasoning": "Numeric by category", "alternative_charts": ["pie_chart","box_plot"], "insights_to_highlight": []}
-        if cat >= 1:
-            return {"recommended_chart": "bar_chart", "reasoning": "Categorical frequency", "alternative_charts": ["pie_chart","table"], "insights_to_highlight": []}
-        if num == 1:
-            return {"recommended_chart": "histogram", "reasoning": "Single numeric distribution", "alternative_charts": ["box_plot"], "insights_to_highlight": []}
-        return {"recommended_chart": "table", "reasoning": "Fallback to table", "alternative_charts": [], "insights_to_highlight": []}
-
-    def _default_title(self, chart_type: str, query: str, df: pd.DataFrame) -> str:
-        if query:
-            return query[:120]
-        return chart_type.replace("_", " ").title()
-
-    # ---------- Chart Builders (deterministic) ----------
-
-    def _build_chart(self, df: pd.DataFrame, chart_type: str, title: str) -> go.Figure:
-        # Normalize
-        chart_type = (chart_type or "").lower()
-
-        if df is None or df.empty:
-            fig = go.Figure()
-            fig.add_annotation(text="No data", x=0.5, y=0.5, showarrow=False, font=dict(size=18, color="gray"))
-            fig.update_layout(template=self.theme, width=800, height=500, title="No Data")
-            return fig
-
-        # Light automatic dtype fixes
-        df = df.copy()
-        for c in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df[c]):
+        # Coerce datetimes by name/value (timezone → naive)
+        for c in dfx.columns:
+            s = dfx[c]
+            name = str(c).lower()
+            if pd.api.types.is_datetime64_any_dtype(s):
+                dfx[c] = self._strip_tz(s)
                 continue
-            # try to parse dates if column name hints
-            if any(k in str(c).lower() for k in ["date", "time", "day"]):
-                with pd.option_context("mode.chained_assignment", None):
-                    try:
-                        df[c] = pd.to_datetime(df[c], errors="ignore")
-                    except Exception:
-                        pass
+            if any(k in name for k in ("date", "time", "day", "workdate", "startdate", "enddate")):
+                dfx[c] = self._coerce_datetime(s)
 
-        # Auto-pick axes
+        # Coerce numeric-ish by name (but avoid ID-like)
+        for c in dfx.columns:
+            s = dfx[c]
+            name = str(c).lower()
+            if pd.api.types.is_numeric_dtype(s):
+                continue
+            if any(k in name for k in ("amount", "qty", "quantity", "hours", "value", "count", "rate", "score", "minutes")):
+                coerced = pd.to_numeric(s, errors="coerce")
+                if coerced.notna().mean() >= 0.6:
+                    dfx[c] = coerced
+
+        # Replace inf/-inf → NaN, then keep rows with something present
+        dfx = dfx.replace([np.inf, -np.inf], np.nan)
+
+        # If a single datetime column exists, sort for nicer visuals
+        dt_cols = [c for c in dfx.columns if pd.api.types.is_datetime64_any_dtype(dfx[c])]
+        if len(dt_cols) == 1:
+            try:
+                dfx = dfx.sort_values(by=dt_cols[0], ascending=True)
+            except Exception:
+                pass
+
+        return dfx
+
+    def _dedupe_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Ensure unique column names: col, col_1, col_2, ..."""
+        seen: Dict[str, int] = {}
+        new_cols: List[str] = []
+        for c in df.columns:
+            base = str(c)
+            if base not in seen:
+                seen[base] = 0
+                new_cols.append(base)
+            else:
+                seen[base] += 1
+                new_cols.append(f"{base}_{seen[base]}")
+        if list(df.columns) != new_cols:
+            df = df.copy()
+            df.columns = new_cols
+        return df
+
+    @staticmethod
+    def _strip_tz(s: pd.Series) -> pd.Series:
+        try:
+            if hasattr(s.dt, "tz") and s.dt.tz is not None:
+                return s.dt.tz_convert(None)
+        except Exception:
+            pass
+        return s
+
+    @staticmethod
+    def _coerce_datetime(s: pd.Series) -> pd.Series:
+        if pd.api.types.is_datetime64_any_dtype(s):
+            return VisualizationService._strip_tz(s)
+        try:
+            out = pd.to_datetime(s, errors="coerce", infer_datetime_format=True, utc=True)
+            try:
+                out = out.dt.tz_convert(None)
+            except Exception:
+                pass
+            return out
+        except Exception:
+            return s
+
+    # =====================================================
+    # Recommendation (deterministic & simple)
+    # =====================================================
+    def _fallback_recommendation(self, df: pd.DataFrame, query: str) -> Tuple[str, str, List[str]]:
+        if df is None or df.empty:
+            return ("table", "No data to visualize", [])
+
+        cols = list(df.columns)
+        numeric = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
+        datetime_cols = [c for c in cols if pd.api.types.is_datetime64_any_dtype(df[c])]
+        q = (query or "").lower()
+
+        if "trend" in q or "over time" in q or "折線" in q or "趨勢" in q or datetime_cols:
+            return ("line_chart", "Time trend", ["bar_chart"])
+        if "distribution" in q or "histogram" in q or "分佈" in q:
+            return ("histogram", "Numeric distribution", ["box_plot"])
+        if len(numeric) >= 2 or "correlation" in q or "相關" in q:
+            return ("scatter_plot", "Two+ numeric variables", ["heatmap", "bar_chart"])
+        if len(numeric) == 1:
+            return ("bar_chart", "Numeric by category", ["pie_chart", "box_plot"])
+        return ("table", "Fallback to table", [])
+
+    # =====================================================
+    # Chart builders (robust)
+    # =====================================================
+    def _build_chart(self, df: pd.DataFrame, chart_type: str, title: str) -> go.Figure:
+        chart_type = (chart_type or "").lower()
+        theme = self.theme
+
+        if df is None or df.empty:
+            return self._no_data_figure()
+
         cols = list(df.columns)
         numeric = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
         datetime_cols = [c for c in cols if pd.api.types.is_datetime64_any_dtype(df[c])]
         categorical = [c for c in cols if c not in numeric and c not in datetime_cols]
 
-        # Prefer (x, y) = (time/category, numeric)
         x = datetime_cols[0] if datetime_cols else (categorical[0] if categorical else (cols[0] if cols else None))
-        y = (numeric[0] if numeric else (cols[1] if len(cols) > 1 else None))
+        y = numeric[0] if numeric else (cols[1] if len(cols) > 1 else None)
 
-        # Builders
-        if chart_type == "line_chart" and x is not None and y is not None:
-            fig = px.line(df, x=x, y=y, title=title, template=self.theme)
+        # Time-series: auto-resample to keep point count in check
+        if x and pd.api.types.is_datetime64_any_dtype(df[x]) and chart_type in {"line_chart", "bar_chart"}:
+            df = self._maybe_resample_timeseries(df, x, y)
+
+        # Build
+        if chart_type == "line_chart" and x is not None and y is not None and y in df.columns:
+            fig = px.line(df, x=x, y=y, title=title, template=theme)
         elif chart_type == "bar_chart" and x is not None:
-            # If y is None, do frequency
-            if y is None or not pd.api.types.is_numeric_dtype(df[y]):
-                counts = df[x].value_counts().reset_index()
+            if y is None or y not in df.columns or not pd.api.types.is_numeric_dtype(df[y]):
+                counts = df[x].value_counts(dropna=False).reset_index()
                 counts.columns = [str(x), "Count"]
-                fig = px.bar(counts, x=str(x), y="Count", title=title, template=self.theme)
+                fig = px.bar(counts, x=str(x), y="Count", title=title, template=theme)
             else:
-                fig = px.bar(df, x=x, y=y, title=title, template=self.theme)
+                fig = px.bar(df, x=x, y=y, title=title, template=theme)
         elif chart_type == "pie_chart":
-            if x is None:
-                x = cols[0]
-            if y is None or not pd.api.types.is_numeric_dtype(df[y]):
-                # try to compute frequency
-                vc = df[x].value_counts().reset_index()
-                vc.columns = [str(x), "Count"]
-                fig = px.pie(vc, names=str(x), values="Count", title=title)
+            name_col = x or (categorical[0] if categorical else cols[0])
+            if y is None or y not in df.columns or not pd.api.types.is_numeric_dtype(df[y]):
+                vc = df[name_col].fillna("Unknown").value_counts(dropna=False).reset_index()
+                vc.columns = [str(name_col), "Count"]
+                fig = px.pie(vc, names=str(name_col), values="Count", title=title)
             else:
-                fig = px.pie(df, names=x, values=y, title=title)
+                fig = px.pie(df, names=name_col, values=y, title=title)
         elif chart_type == "scatter_plot":
             if len(numeric) >= 2:
-                fig = px.scatter(df, x=numeric[0], y=numeric[1], title=title, template=self.theme)
-            elif x is not None and y is not None:
-                fig = px.scatter(df, x=x, y=y, title=title, template=self.theme)
+                fig = px.scatter(df, x=numeric[0], y=numeric[1], title=title, template=theme)
+            elif x is not None and y is not None and y in df.columns:
+                fig = px.scatter(df, x=x, y=y, title=title, template=theme)
             else:
-                fig = px.scatter(title=title, template=self.theme)
+                fig = px.scatter(title=title, template=theme)
         elif chart_type == "histogram":
             xx = numeric[0] if numeric else (cols[0] if cols else None)
-            fig = px.histogram(df, x=xx, title=title, template=self.theme) if xx else px.histogram(title=title)
-        elif chart_type == "heatmap" and len(numeric) >= 2:
-            corr = df[numeric].corr(numeric_only=True)
-            fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale="Blues"))
-            fig.update_layout(title=title, template=self.theme)
+            if xx and xx in df.columns and pd.api.types.is_numeric_dtype(df[xx]):
+                fig = px.histogram(df, x=xx, title=title, template=theme)
+            else:
+                # fallback table when histogram target is non-numeric
+                fig = self._table_figure(df, "Table (non-numeric for histogram)")
+        elif chart_type == "heatmap":
+            num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            if len(num_cols) >= 2:
+                corr = df[num_cols].corr(numeric_only=True)
+                fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale="Blues"))
+                fig.update_layout(title=title, template=theme)
+            else:
+                fig = self._table_figure(df, "Table (no numeric matrix for heatmap)")
         elif chart_type == "box_plot":
-            yy = numeric[0] if numeric else (cols[0] if cols else None)
-            fig = px.box(df, y=yy, x=(categorical[0] if categorical else None), title=title, template=self.theme)
+            yy = y or (numeric[0] if numeric else None)
+            fig = px.box(df, y=yy, x=(categorical[0] if categorical else None), title=title, template=theme)
         else:
-            # Table fallback
-            header_vals = list(map(str, df.columns))
-            cell_vals = [df[c] for c in df.columns]
-            fig = go.Figure(data=[go.Table(
-                header=dict(values=header_vals, fill_color="#e2e8f0", align="left"),
-                cells=dict(values=cell_vals, fill_color="#ffffff", align="left"),
-            )])
-            fig.update_layout(title=title, template=self.theme, width=800, height=500)
+            fig = self._table_figure(df, title)
 
-        fig.update_layout(width=800, height=500)
+        # Polishing
+        fig.update_layout(
+            width=800, height=500, template=theme,
+            legend_title_text=None,
+            margin=dict(l=40, r=20, t=60, b=40),
+            hovermode="x unified" if (x and x in df.columns and pd.api.types.is_datetime64_any_dtype(df[x])) else "closest",
+        )
+        if x and x in df.columns and pd.api.types.is_datetime64_any_dtype(df[x]):
+            fig.update_xaxes(showgrid=True, tickformat="%Y-%m-%d")
         return fig
 
-    # ---------- Save & Insights ----------
+    def _no_data_figure(self) -> go.Figure:
+        fig = go.Figure()
+        fig.add_annotation(text="No data", x=0.5, y=0.5, showarrow=False)
+        fig.update_layout(template=self.theme, width=800, height=500, title="No Data")
+        return fig
 
+    def _table_figure(self, df: pd.DataFrame, title: str) -> go.Figure:
+        header_vals = list(map(str, df.columns))
+        # Convert each column to plain Python to avoid serialization surprises
+        cell_vals = [df[c].tolist() for c in df.columns]
+        fig = go.Figure(data=[go.Table(
+            header=dict(values=header_vals, fill_color="#e2e8f0", align="left"),
+            cells=dict(values=cell_vals, fill_color="#ffffff", align="left"),
+        )])
+        fig.update_layout(title=title, template=self.theme, width=800, height=500)
+        return fig
+
+    # =====================================================
+    # Time-series resampling
+    # =====================================================
+    def _maybe_resample_timeseries(self, df: pd.DataFrame, x_col: str, y_col: Optional[str], *, target_points: int = 400) -> pd.DataFrame:
+        """Resample long time series to D/W/M/Q/Y by span to keep visuals readable."""
+        if x_col not in df.columns:
+            return df
+        s = df[x_col].dropna()
+        if not pd.api.types.is_datetime64_any_dtype(s) or s.empty:
+            return df
+        if len(df) <= target_points:
+            return df
+
+        # Span-based frequency
+        try:
+            span_days = (s.max() - s.min()).days
+        except Exception:
+            return df
+        if span_days <= 60:
+            freq = "D"
+        elif span_days <= 365 * 2:
+            freq = "W"
+        elif span_days <= 365 * 5:
+            freq = "M"
+        elif span_days <= 365 * 12:
+            freq = "Q"
+        else:
+            freq = "Y"
+
+        dfy = df.copy().set_index(x_col)
+        if y_col and y_col in dfy.columns and pd.api.types.is_numeric_dtype(dfy[y_col]):
+            grouped = dfy[y_col].resample(freq).sum().reset_index()
+            grouped.columns = [x_col, y_col]
+            return grouped
+        # Count fallback
+        grouped = dfy.resample(freq).size().reset_index(name="Count")
+        return grouped
+
+    # =====================================================
+    # Save (PNG) with resilient fallback
+    # =====================================================
     def _save_figure(self, fig: go.Figure, chart_type: str) -> Tuple[str, str]:
         """
-        Save to filesystem (LOCAL_SAVE_DIR) and return a web URL under /static/images.
-        Requires kaleido installed for static export.
+        Save a PNG into LOCAL_SAVE_DIR and mirror to STATIC_IMAGE_DIR.
+        Returns (web_url, filename).
         """
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fname = f"{chart_type}_{ts}_{uuid.uuid4().hex[:8]}.png"
-        fpath = self._local_dir / fname
+        local_abs = (self._local_dir / fname).resolve()
+        static_abs = (self._static_dir / fname).resolve()
+
+        # Try to render PNG via Kaleido
+        try:
+            fig.write_image(str(local_abs), width=800, height=500)
+            logger.info("VIZ_WRITE_IMAGE_OK: %s", local_abs)
+        except Exception as e:
+            logger.error(
+                "Static PNG export failed: %s. Will attempt Pillow placeholder. "
+                "Install Kaleido: `pip install -U kaleido`.", e
+            )
+            if not self._write_placeholder_png(local_abs, str(e)):
+                # No placeholder available → escalate clearly
+                raise RuntimeError(
+                    f"Static PNG export failed: {e}. "
+                    "Install Kaleido (`pip install -U kaleido`) or enable image service."
+                )
+
+        # Mirror to static dir (so the app can serve it)
+        try:
+            if local_abs != static_abs:
+                shutil.copyfile(local_abs, static_abs)
+        except Exception as e:
+            logger.warning("Failed to copy chart to static dir: %s", e)
+
+        web_url = f"{PUBLIC_URL_BASE.rstrip('/')}/{fname}"
+        return web_url, fname
+
+    def _write_placeholder_png(self, out_path: Path, error_msg: str) -> bool:
+        """If Pillow exists, write a simple placeholder PNG explaining the error."""
+        try:
+            from PIL import Image, ImageDraw, ImageFont  # type: ignore
+        except Exception:
+            return False
 
         try:
-            fig.write_image(str(fpath), width=800, height=500)  # needs kaleido
-        except Exception as e:
-            logger.warning("Static export failed (%s). Falling back to HTML image via to_image()", e)
-            # Fallback: use plotly to_image (still kaleido under the hood)
-            fig.write_image(str(fpath), width=800, height=500)
+            img = Image.new("RGB", (800, 500), color=(255, 255, 255))
+            draw = ImageDraw.Draw(img)
 
-        # Your web server should map LOCAL_SAVE_DIR -> /static/images (nginx, uvicorn StaticFiles, etc.)
-        web_url = f"/static/images/{fname}"
-        return web_url, fname
+            title = "Chart rendering unavailable"
+            body1 = "Static export failed (Kaleido missing)."
+            body2 = "Ask admin to install: pip install -U kaleido"
+            body3 = f"Details: {str(error_msg)[:120]}..."
+
+            try:
+                font_title = ImageFont.truetype("arial.ttf", 22)
+                font_body  = ImageFont.truetype("arial.ttf", 16)
+            except Exception:
+                font_title = None
+                font_body = None
+
+            draw.text((40, 40), title, fill=(20, 20, 20), font=font_title)
+            draw.text((40, 100), body1, fill=(40, 40, 40), font=font_body)
+            draw.text((40, 130), body2, fill=(40, 40, 40), font=font_body)
+            draw.text((40, 170), body3, fill=(70, 70, 70), font=font_body)
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            img.save(str(out_path), format="PNG")
+            logger.info("Placeholder PNG written: %s", out_path)
+            return True
+        except Exception as e:
+            logger.warning("Failed to write placeholder PNG: %s", e)
+            return False
+
+    # =====================================================
+    # Lightweight profiling + insights (used by agent)
+    # =====================================================
+    def _analyze(self, df: pd.DataFrame) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "rows": int(df.shape[0]) if df is not None else 0,
+            "cols": int(df.shape[1]) if df is not None else 0,
+            "numeric_cols": [],
+            "datetime_cols": [],
+            "categorical_cols": [],
+            "time_span_days": None,
+            "top_categories": {},
+        }
+        if df is None or df.empty:
+            return out
+
+        for c in df.columns:
+            if pd.api.types.is_numeric_dtype(df[c]):
+                out["numeric_cols"].append(str(c))
+            elif pd.api.types.is_datetime64_any_dtype(df[c]):
+                out["datetime_cols"].append(str(c))
+            else:
+                out["categorical_cols"].append(str(c))
+
+        # time span
+        if out["datetime_cols"]:
+            s = df[out["datetime_cols"][0]].dropna()
+            try:
+                if not s.empty:
+                    out["time_span_days"] = int((s.max() - s.min()).days)
+            except Exception:
+                pass
+
+        # top categories for first few categoricals
+        for c in out["categorical_cols"][:3]:
+            try:
+                vc = df[c].fillna("Unknown").value_counts().head(5)
+                out["top_categories"][c] = [(str(k), int(v)) for k, v in vc.items()]
+            except Exception:
+                out["top_categories"][c] = []
+
+        return out
 
     def _generate_insights(
         self,
@@ -337,37 +470,21 @@ class VisualizationService:
         analysis: Dict[str, Any],
         hints: Optional[List[str]] = None,
     ) -> List[str]:
+        """Very lightweight heuristics; safe, deterministic."""
         insights: List[str] = []
-        if df is None or df.empty:
-            insights.append("No data available for analysis.")
-            return insights
-
-        rows, cols = analysis.get("shape", (len(df), len(df.columns)))
-        insights.append(f"Dataset has {rows} rows and {cols} columns.")
-
-        # Very light heuristics
-        if chart_type == "line_chart":
-            insights.append("Line chart highlights trends across the x-axis progression.")
-        elif chart_type == "bar_chart":
-            insights.append("Bar chart compares values across categories.")
-        elif chart_type == "pie_chart":
-            insights.append("Pie chart shows proportional composition.")
-        elif chart_type == "scatter_plot":
-            insights.append("Scatter plot can reveal correlations and outliers.")
-        elif chart_type == "histogram":
-            insights.append("Histogram shows the distribution of a numeric variable.")
-        elif chart_type == "heatmap":
-            insights.append("Heatmap visualizes relationships in a matrix (e.g., correlations).")
-        elif chart_type == "box_plot":
-            insights.append("Box plot summarizes distribution and outliers.")
-
+        if not df is None and not df.empty:
+            insights.append(f"{analysis.get('rows', 0)} rows × {analysis.get('cols', 0)} columns.")
+            if analysis.get("datetime_cols"):
+                span = analysis.get("time_span_days")
+                if span is not None:
+                    insights.append(f"Time span ~ {span} days.")
+            if analysis.get("top_categories"):
+                for col, pairs in analysis["top_categories"].items():
+                    if pairs:
+                        top = ", ".join([f"{k} ({v})" for k, v in pairs])
+                        insights.append(f"Top in {col}: {top}")
         if hints:
-            insights.extend(hints[:3])
-
-        # Nulls
-        nulls = df.isnull().sum()
-        if (nulls > 0).any():
-            cols_with_nulls = [c for c, v in nulls.items() if v > 0]
-            insights.append(f"Missing values present in: {', '.join(map(str, cols_with_nulls))}")
-
+            for h in hints:
+                if isinstance(h, str) and h.strip():
+                    insights.append(h.strip())
         return insights

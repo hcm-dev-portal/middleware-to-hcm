@@ -22,27 +22,40 @@ BOOTSTRAP_DISABLED = os.getenv("VECTOR_BOOTSTRAP_DISABLED", "0").lower() in ("1"
 def _has(obj: Any, name: str) -> bool:
     try:
         attr = getattr(obj, name, None)
-        return callable(attr)
+        # We consider both callables and simple attrs as "has"
+        return attr is not None
     except Exception:
         return False
 
-async def _maybe_async_call(fn: Callable, *args, **kwargs):
-    """Call sync or async function uniformly in asyncio context."""
-    if asyncio.iscoroutinefunction(fn):
-        return await fn(*args, **kwargs)
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+async def _maybe_async_call(fn_or_attr, *args, **kwargs):
+    """
+    Call sync/async function uniformly; if a plain attribute is passed, just return it.
+    """
+    try:
+        # If it's a function or bound method, possibly coroutine
+        if callable(fn_or_attr):
+            if asyncio.iscoroutinefunction(fn_or_attr):
+                return await fn_or_attr(*args, **kwargs)
+            res = fn_or_attr(*args, **kwargs)
+            if asyncio.iscoroutine(res):
+                return await res
+            return res
+        # Plain attribute value
+        return fn_or_attr
+    except Exception as e:
+        raise e
 
 async def _with_timeout(coro_or_func, timeout_ms: int, *args, **kwargs):
     """
     Run a coroutine or sync function with asyncio timeout.
-    Accepts either a coroutine/function reference.
+    Accepts either a coroutine/function or a value.
     """
     try:
         if callable(coro_or_func):
             coro = _maybe_async_call(coro_or_func, *args, **kwargs)
         else:
-            coro = coro_or_func
+            # Might already be a coroutine/value
+            coro = _maybe_async_call(coro_or_func)
         return await asyncio.wait_for(coro, timeout=timeout_ms / 1000.0)
     except asyncio.TimeoutError:
         raise TimeoutError(f"operation timed out after {timeout_ms} ms")
@@ -50,8 +63,7 @@ async def _with_timeout(coro_or_func, timeout_ms: int, *args, **kwargs):
 class VectorBootstrapper:
     """
     Proactively builds/loads vector indices at startup (and on demand).
-    This class tolerates different vector service implementations by probing
-    for common methods and falling back if they don't exist.
+    Tolerates different vector service implementations by probing for common methods.
     """
     def __init__(
         self,
@@ -96,26 +108,78 @@ class VectorBootstrapper:
           1) embeddings readiness: ensure_embeddings_ready() / lazy_load_embeddings()
           2) index build/load: ensure_index_loaded() / build_or_load_index() / load()
           3) warmup: warmup() / prewarm() / warm()
-          4) readiness check: vector_status()
-        All optional; we try what's available. Each step has a per-service timeout.
+          4) readiness check: vector_status()/health_check()/is_ready()/ready or structural hints
+        Each step has a per-service timeout.
         """
         info = {"service": name, "attempts": 0, "ready": False, "error": None, "ms": 0}
         t0 = time.perf_counter()
 
-        def _is_ready(s: Any) -> bool:
-            try:
-                if _has(s, "vector_status"):
-                    st = s.vector_status()
+        async def _is_ready_async(s: Any) -> bool:
+            # 1) vector_status()
+            if _has(s, "vector_status"):
+                try:
+                    st = await _with_timeout(getattr(s, "vector_status"), self._service_timeout_ms)
                     if isinstance(st, dict):
-                        ready = bool(st.get("ready"))
-                        return ready
-            except Exception as e:
-                logger.debug("vector_status probe failed for %s: %s", name, e)
-            # Fallback: consider presence of an embedded index object (best-effort)
+                        if "ready" in st:
+                            return bool(st["ready"])
+                        # some services may return {"status":"ready"} etc.
+                        val = st.get("status") or st.get("state")
+                        if isinstance(val, str) and val.lower() in ("ready", "ok", "healthy"):
+                            return True
+                    elif isinstance(st, bool):
+                        return st
+                except Exception as e:
+                    logger.debug("vector_status probe failed for %s: %s", name, e)
+
+            # 2) health_check()
+            if _has(s, "health_check"):
+                try:
+                    hc = await _with_timeout(getattr(s, "health_check"), self._service_timeout_ms)
+                    if isinstance(hc, dict):
+                        if isinstance(hc.get("ready"), bool):
+                            return bool(hc["ready"])
+                        # Heuristic: embeddings present + vector_items exist
+                        emb_ok = bool(hc.get("embeddings_en_shape") or hc.get("embeddings_zh_shape"))
+                        items_ok = (hc.get("vector_items") or 0) > 0
+                        if emb_ok and items_ok:
+                            return True
+                except Exception as e:
+                    logger.debug("health_check probe failed for %s: %s", name, e)
+
+            # 3) is_ready() method or property
+            if _has(s, "is_ready"):
+                try:
+                    val = await _with_timeout(getattr(s, "is_ready"), self._service_timeout_ms)
+                    if isinstance(val, bool):
+                        return val
+                except Exception as e:
+                    logger.debug("is_ready() probe failed for %s: %s", name, e)
+            # property 'ready'
             try:
-                return bool(getattr(s, "index", None) or getattr(s, "_index", None))
+                if _has(s, "ready"):
+                    val = getattr(s, "ready")
+                    if isinstance(val, bool):
+                        return val
             except Exception:
-                return False
+                pass
+
+            # 4) structural hints (works for LeaveVectorDB)
+            try:
+                # any index object?
+                if getattr(s, "index", None) or getattr(s, "_index", None):
+                    return True
+                # bilingual indexes/embeddings
+                idx_en = getattr(s, "index_en", None)
+                idx_zh = getattr(s, "index_zh", None)
+                emb_en = getattr(s, "embeddings_en", None)
+                emb_zh = getattr(s, "embeddings_zh", None)
+                items = getattr(s, "_vector_items", None)
+                if (idx_en or idx_zh) and (emb_en is not None or emb_zh is not None) and items:
+                    return True
+            except Exception:
+                pass
+
+            return False
 
         async def _call_safe(label: str, func_name: str):
             if not _has(svc, func_name):
@@ -128,40 +192,46 @@ class VectorBootstrapper:
                 logger.warning("vector %s.%s failed: %s", name, label, e)
                 return False
 
-        # If it's already ready, we're done
-        if _is_ready(svc):
-            info["ready"] = True
-            info["ms"] = int((time.perf_counter() - t0) * 1000)
-            return info
+        # Already ready? (fast path)
+        try:
+            if await _is_ready_async(svc):
+                info["ready"] = True
+                info["ms"] = int((time.perf_counter() - t0) * 1000)
+                return info
+        except Exception:
+            # continue normal flow
+            pass
 
         # Else, build & warm with retries
         retries = 0
         while retries <= self._max_retries:
             info["attempts"] += 1
             try:
-                # (1) Embeddings readiness (optional but helpful when SentenceTransformer downloads)
-                # Try any known method name; ignore failures to keep going.
+                # (1) Embeddings readiness (optional)
                 await _call_safe("embeddings", "ensure_embeddings_ready") or \
                 await _call_safe("embeddings", "lazy_load_embeddings")
 
                 # (2) Build or load an index
-                built = await _call_safe("build_or_load_index", "ensure_index_loaded") or \
-                        await _call_safe("build_or_load_index", "build_or_load_index") or \
-                        await _call_safe("build_or_load_index", "load")
+                await _call_safe("build_or_load_index", "ensure_index_loaded") or \
+                await _call_safe("build_or_load_index", "build_or_load_index") or \
+                await _call_safe("build_or_load_index", "load")
 
-                # (3) Warmup / small probe
-                warmed = await _call_safe("warmup", "warmup") or \
-                         await _call_safe("warmup", "prewarm") or \
-                         await _call_safe("warmup", "warm")
+                # (3) Warmup / prewarm (optional)
+                await _call_safe("warmup", "warmup") or \
+                await _call_safe("warmup", "prewarm") or \
+                await _call_safe("warmup", "warm")
 
-                # Soft probe of search if available (non-fatal)
+                # (4) Soft search probe — treat success as ready
                 if _has(svc, "search"):
                     try:
                         await _with_timeout(lambda: svc.search("healthcheck", top_k=1), self._service_timeout_ms)
+                        # If search doesn't throw, that's a strong signal it's ready
+                        info["ready"] = True
                     except Exception as e:
                         logger.debug("vector %s.search probe failed (non-fatal): %s", name, e)
 
-                if _is_ready(svc):
+                # Final readiness check
+                if info["ready"] or await _is_ready_async(svc):
                     info["ready"] = True
                     break
 

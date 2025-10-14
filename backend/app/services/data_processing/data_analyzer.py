@@ -2,8 +2,6 @@
 # backend/app/services/data_processing/data_analyzer.py
 from __future__ import annotations
 
-import json
-import os
 import logging
 from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime, date
@@ -16,50 +14,112 @@ from ..helpers.data_utils import (
 
 logger = logging.getLogger(__name__)
 
-LEAVE_TYPE_LABELS_PATH = os.getenv("LEAVE_TYPE_LABELS", "./storage/leave_type_labels.json")
-
 
 class DataAnalyzer:
-    """Analyzes query results and computes aggregates (leave-centric)."""
+    """
+    Analyzes query results and computes aggregates (leave-centric).
+    Now resolves leave types directly from dbo.ATDATTENDANCECLASS instead of JSON.
+    """
 
-    def __init__(self):
-        self.leave_type_labels: Dict[str, str] = {}
-        self._load_leave_type_labels()
+    def __init__(self, db_service: Optional[Any] = None):
+        """
+        :param db_service: Optional SQLServerDatabaseService for live leave-type lookup.
+                           If not provided, analyzer falls back to raw values.
+        """
+        self.db_service = db_service
+        # Unified map: keys can be ID (as str), CLASSCODE (upper), or CLASSNAME (as-is) → CLASSNAME (label)
+        self._leave_type_map: Dict[str, str] = {}
+        self._leave_type_loaded: bool = False
 
     # ----------------------------
-    # Leave-type labeling & config
+    # Leave-type resolution
     # ----------------------------
-    def _load_leave_type_labels(self):
-        """Load friendly labels for leave types from JSON file."""
+    def _ensure_leave_type_map(self) -> None:
+        """Lazy-load leave-type map from dbo.ATDATTENDANCECLASS (ID, CLASSCODE, CLASSNAME)."""
+        if self._leave_type_loaded:
+            return
+        self._leave_type_loaded = True  # set early to avoid re-entry loops
+
+        if not self.db_service:
+            logger.info("DataAnalyzer: no db_service; using raw leave type values.")
+            return
+
         try:
-            if os.path.exists(LEAVE_TYPE_LABELS_PATH):
-                with open(LEAVE_TYPE_LABELS_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    # normalize keys to str + strip
-                    self.leave_type_labels = {str(k).strip(): str(v).strip() for k, v in data.items()}
-                    logger.info("Loaded leave type labels: %d entries", len(self.leave_type_labels))
+            sql = (
+                "SELECT "
+                "  CAST(ID AS NVARCHAR(100)) AS id_norm, "
+                "  CAST(CLASSCODE AS NVARCHAR(100)) AS class_code, "
+                "  CAST(CLASSNAME AS NVARCHAR(400)) AS class_name "
+                "FROM dbo.ATDATTENDANCECLASS"
+            )
+            rows, cols = self.db_service.run_select(sql, max_rows=10000, query_timeout=8)
+            col_map = {c.upper(): i for i, c in enumerate(cols or [])}
+
+            i_id = col_map.get("ID_NORM") or col_map.get("ID")
+            i_code = col_map.get("CLASS_CODE") or col_map.get("CLASSCODE")
+            i_name = col_map.get("CLASS_NAME") or col_map.get("CLASSNAME")
+
+            m: Dict[str, str] = {}
+            for r in rows or []:
+                idv = str(r[i_id]).strip() if (i_id is not None and len(r) > i_id and r[i_id] is not None) else ""
+                code = str(r[i_code]).strip() if (i_code is not None and len(r) > i_code and r[i_code] is not None) else ""
+                name = str(r[i_name]).strip() if (i_name is not None and len(r) > i_name and r[i_name] is not None) else ""
+
+                if not name:
+                    continue
+
+                # Map by ID
+                if idv:
+                    m[idv] = name
+
+                # Map by CLASSCODE (use UPPER for stable lookup)
+                if code:
+                    m[code.upper()] = name
+
+                # Map by CLASSNAME (identity)
+                m[name] = name
+
+            self._leave_type_map = m
+            logger.info("DataAnalyzer: loaded leave type map from DB (%d entries).", len(self._leave_type_map))
         except Exception as e:
-            logger.warning("Could not load leave type labels: %s", e)
+            logger.warning("DataAnalyzer: failed to load leave types from DB, using raw values. Error: %s", e)
 
     def _norm_key(self, raw: Any) -> str:
         """Conservative normalization for lookup keys."""
         if raw is None:
             return ""
         s = str(raw).strip()
-        # unify common ASCII variants
         return s
 
     def label_leave_type(self, raw: Any) -> str:
         """
-        Return a human-friendly label for ATTENDANCETYPE / LEAVETYPE / CLASSNAME-like values.
-        - Looks up exact key in leave_type_labels (preloaded JSON).
-        - Falls back to raw text.
+        Return a human-friendly label for ATTENDANCETYPE / LEAVETYPE / CLASSNAME / LEAVEID-like values.
+        Resolution order (after normalization):
+        1) Exact ID string (e.g., '12') in map → CLASSNAME
+        2) Uppercased CLASSCODE in map → CLASSNAME
+        3) Exact CLASSNAME in map → CLASSNAME
+        4) Fallback: original raw text
         """
+        self._ensure_leave_type_map()
+
         key = self._norm_key(raw)
         if not key:
             return "(unknown)"
-        return self.leave_type_labels.get(key, key)
+
+        # Try ID
+        if key in self._leave_type_map:
+            return self._leave_type_map[key]
+
+        # Try CLASSCODE (UPPER)
+        key_u = key.upper()
+        if key_u in self._leave_type_map:
+            return self._leave_type_map[key_u]
+
+        # Try CLASSNAME (identity)
+        if key in self._leave_type_map:
+            return self._leave_type_map[key]
+
+        return key  # fallback to raw
 
     # ----------------------------
     # Aggregation entry point
@@ -87,10 +147,12 @@ class DataAnalyzer:
         idx_name = find_column_index(columns, "TRUENAME", "Name", "person_name")
 
         # Leave type can appear under multiple columns depending on the query
-        idx_type = find_column_index(
+        idx_type_name = find_column_index(
             columns,
             "ATTENDANCETYPE", "LEAVETYPE", "LEAVE_TYPE", "LEAVE_TYPE_NAME", "CLASSNAME"
         )
+        # Some queries return the ID instead of the name
+        idx_type_id = find_column_index(columns, "LEAVEID", "LEAVE_ID", "ATTENDANCECLASSID", "CLASS_ID")
 
         # Hours may be emitted as HOURS or TIMECLASSHOURS (minutes)
         idx_hours = find_column_index(columns, "HOURS", "TIMECLASSHOURS")
@@ -105,14 +167,14 @@ class DataAnalyzer:
 
         # ---- Types & hours ----
         type_counts_raw, hours_by_type_raw, hours_vals, hours_col_name = self._analyze_types_and_hours(
-            rows, idx_type, idx_hours, columns
+            rows, idx_type_name, idx_type_id, idx_hours, columns
         )
 
         # Decide whether values look like minutes → convert
         total_hours_num, converted = minutes_to_hours_heuristic(hours_vals)
         hours_by_type_hrs = self._convert_hours_by_type(hours_by_type_raw, converted)
 
-        # Apply labels after conversion to collapse synonyms
+        # Apply labels after conversion to collapse synonyms / ids
         labeled_counts = self._apply_labels_to_counts(type_counts_raw)
         labeled_hours = self._apply_labels_to_hours(hours_by_type_hrs)
 
@@ -161,7 +223,8 @@ class DataAnalyzer:
     def _analyze_types_and_hours(
         self,
         rows: List[Tuple],
-        idx_type: Optional[int],
+        idx_type_name: Optional[int],
+        idx_type_id: Optional[int],
         idx_hours: Optional[int],
         columns: List[str],
     ) -> Tuple[Dict[str, int], Dict[str, float], List[float], str]:
@@ -182,25 +245,31 @@ class DataAnalyzer:
             try:
                 if v is None:
                     return None
-                # common strings like '480.00'
                 return float(v)
             except Exception:
                 return None
 
         for r in rows:
+            # Determine raw type key (name preferred; fallback to id)
+            raw_key = None
+            if idx_type_name is not None and len(r) > idx_type_name:
+                raw_key = "(unknown)" if r[idx_type_name] is None else str(r[idx_type_name]).strip()
+            elif idx_type_id is not None and len(r) > idx_type_id:
+                # Keep as string; label resolver will map IDs too
+                if r[idx_type_id] is not None:
+                    raw_key = str(r[idx_type_id]).strip()
+
             # Count leave types
-            if idx_type is not None and len(r) > idx_type:
-                raw_t = "(unknown)" if r[idx_type] is None else str(r[idx_type]).strip()
-                type_counts_raw[raw_t] = type_counts_raw.get(raw_t, 0) + 1
+            if raw_key is not None:
+                type_counts_raw[raw_key] = type_counts_raw.get(raw_key, 0) + 1
 
             # Collect hours values
             if idx_hours is not None and len(r) > idx_hours:
                 hv = _num(r[idx_hours])
                 if hv is not None:
                     hours_vals.append(hv)
-                    if idx_type is not None and len(r) > idx_type:
-                        raw_t = "(unknown)" if r[idx_type] is None else str(r[idx_type]).strip()
-                        hours_by_type_raw[raw_t] = hours_by_type_raw.get(raw_t, 0.0) + hv
+                    if raw_key is not None:
+                        hours_by_type_raw[raw_key] = hours_by_type_raw.get(raw_key, 0.0) + hv
 
         return type_counts_raw, hours_by_type_raw, hours_vals, hours_col_name
 
@@ -247,9 +316,8 @@ class DataAnalyzer:
         # datetime/date objects
         try:
             if hasattr(v, "date"):
-                # datetime or date
                 try:
-                    return v.date().isoformat()  # datetime -> date
+                    return v.date().isoformat()
                 except Exception:
                     pass
             if isinstance(v, date) and not isinstance(v, datetime):
@@ -263,7 +331,6 @@ class DataAnalyzer:
             if not s:
                 return None
 
-            # Try a small set of explicit formats first (fast path)
             candidates = [
                 "%Y-%m-%d",
                 "%Y-%m-%d %H:%M",
@@ -277,11 +344,8 @@ class DataAnalyzer:
                 "%Y-%m-%dT%H:%M:%S.%f",
                 "%Y-%m-%dT%H:%M:%S.%f%z",
             ]
-            base = s
-            # Common cleanup: strip trailing Z, remove milliseconds if present, ignore timezone for date-only
-            base = base.rstrip("Zz")
+            base = s.rstrip("Zz")
             try:
-                # keep only the left part before timezone if present like "+08:00"
                 if "+" in base and "T" in base:
                     base = base.split("+", 1)[0]
             except Exception:
@@ -294,7 +358,6 @@ class DataAnalyzer:
                 except Exception:
                     continue
 
-            # Handle compact "YYYYMMDD"
             if len(s) >= 8 and s[:8].isdigit():
                 try:
                     dt = datetime.strptime(s[:8], "%Y%m%d")
@@ -302,7 +365,6 @@ class DataAnalyzer:
                 except Exception:
                     pass
 
-            # Last resort: regex extract YYYY-MM-DD or YYYY/MM/DD
             import re as _re
             m = _re.search(r"(\d{4})[-/](\d{2})[-/](\d{2})", s)
             if m:
@@ -312,7 +374,6 @@ class DataAnalyzer:
                 except Exception:
                     return None
 
-        # Unknown type
         return None
 
     def _analyze_dates_enhanced(
@@ -353,7 +414,6 @@ class DataAnalyzer:
         min_date = uniq_sorted[0]
         max_date = uniq_sorted[-1]
 
-        # frequency map
         freq: Dict[str, int] = {}
         for d in all_dates:
             freq[d] = freq.get(d, 0) + 1
