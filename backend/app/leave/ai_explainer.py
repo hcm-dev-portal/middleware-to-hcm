@@ -303,7 +303,7 @@ def llm_enhance(
 
     try:
         client = OpenAIService(
-            model_name=model_name or os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+            model_name=model_name or os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1"),
             temperature=temperature,
         )
 

@@ -1,4 +1,5 @@
 # backend/app/services/leave_vector.py
+# backend/app/services/leave_vector.py
 from __future__ import annotations
 
 import os
@@ -34,11 +35,136 @@ except Exception:
     _langdetect_detect = None
     LangDetectException = Exception  # type: ignore
 
-# Use ORG_TABLE to override fully-qualified org table name if needed
+# ───────────────────────────────────────────────────────────────────────────────
+# Configurable FQNs (no duplicates)
+# ───────────────────────────────────────────────────────────────────────────────
 ORG_TABLE = os.getenv("ORG_TABLE", "[eHRAntung_DB].[dbo].[ORGStdStruct]")
+VAC_RESULT_TABLE = os.getenv("VAC_RESULT_TABLE", "[eHRAntung_DB].[dbo].[ATDCALCUVACATIONRESULT]")
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Intent-first scaffold (bilingual, lightweight)
+# ───────────────────────────────────────────────────────────────────────────────
+INTENT_SKILLS = [
+    {
+        "id": "remaining_balance_by_person",
+        "title": "Remaining annual leave by person (authoritative snapshot)",
+        "tables": [VAC_RESULT_TABLE, "dbo.PSNACCOUNT", ORG_TABLE],
+        "measure": ["annual_leave"],
+        "action": ["remaining"],
+        "slots": ["year?", "vacationtype?"],
+        "phrases_zh": ["剩餘特休", "剩餘特休假", "年假餘額", "還有年假", "未用年假"],
+        "phrases_en": ["remaining annual leave", "unused pto", "annual leave balance"],
+        "template_ref": "remaining_balance_by_person",
+    },
+    {
+        "id": "cancellations_detail",
+        "title": "Leave cancellations with original record",
+        "tables": ["dbo.ATDLEAVECANCELDATA", "dbo.ATDLEAVEDATA", "dbo.PSNACCOUNT"],
+        "measure": ["any"],
+        "action": ["cancelled"],
+        "slots": ["date_range?"],
+        "phrases_zh": ["取消", "撤銷", "改期"],
+        "phrases_en": ["cancellation", "cancelled", "rescheduled", "voided"],
+        "template_ref": "cancellations_detail",
+    },
+    {
+        "id": "resolve_leave_class",
+        "title": "Resolve leave type for records",
+        "tables": ["dbo.ATDLEAVEDATA", "dbo.ATDATTENDANCECLASS", "dbo.PSNACCOUNT"],
+        "measure": ["any"],
+        "action": ["resolve_class"],
+        "slots": [],
+        "phrases_zh": ["假別", "請假類別", "類型"],
+        "phrases_en": ["leave type", "class name", "category"],
+        "template_ref": "resolve_leave_class",
+    },
+    {
+        "id": "person_branch_map",
+        "title": "Map employees to branch/department",
+        "tables": ["dbo.PSNACCOUNT", ORG_TABLE],
+        "measure": ["org_map"],
+        "action": ["lookup"],
+        "slots": [],
+        "phrases_zh": ["單位", "部門", "分公司", "部門對應"],
+        "phrases_en": ["branch", "department", "org mapping"],
+        "template_ref": "person_branch_map",
+    },
+]
+
+LEXICON = {
+    "measure": {
+        "annual_leave": {
+            "zh": ["特休", "年假", "年休", "年假時數", "年假天數"],
+            "en": ["annual leave", "pto"],
+        },
+        "org_map": {
+            "zh": ["部門", "單位", "分公司"],
+            "en": ["branch", "department", "org"],
+        },
+    },
+    "action": {
+        "remaining": {"zh": ["剩餘", "餘額", "未用", "還有", "可用"], "en": ["remaining", "unused", "balance", "available"]},
+        "cancelled": {"zh": ["取消", "撤銷", "改期"], "en": ["cancelled", "voided", "rescheduled"]},
+        "lookup": {"zh": ["查詢", "對應", "查看"], "en": ["lookup", "map"]},
+        "resolve_class": {"zh": ["假別", "類別", "類型"], "en": ["class", "type", "category"]},
+    },
+}
+
+def _extract_slots_from_text(q: str, lang_hint: Optional[str] = None) -> Dict[str, Optional[Any]]:
+    qlow = (q or "").lower()
+    # measure
+    measure = None
+    for key, val in LEXICON["measure"].items():
+        terms = (val.get("zh", []) + val.get("en", [])) if not lang_hint else val.get(lang_hint, [])
+        if any(t in q for t in terms) or any(t.lower() in qlow for t in terms):
+            measure = key
+            break
+    # action
+    action = None
+    for key, val in LEXICON["action"].items():
+        terms = (val.get("zh", []) + val.get("en", [])) if not lang_hint else val.get(lang_hint, [])
+        if any(t in q for t in terms) or any(t.lower() in qlow for t in terms):
+            action = key
+            break
+    # year
+    m = re.search(r"(20\d{2})", q)
+    year = int(m.group(1)) if m else None
+    # vacationtype (heuristic): 年假/特休/annual → 1 (can be overridden upstream)
+    vtype = None
+    if any(tok in q for tok in ["特休", "年假", "annual"]):
+        vtype = 1
+    return {"measure": measure, "action": action, "year": year, "vacationtype": vtype}
+
+def canonicalize_query_intent(q: str, lang: Optional[str]) -> Dict[str, Optional[Any]]:
+    lang_hint = "zh" if (lang and "zh" in lang) else None
+    return _extract_slots_from_text(q, lang_hint)
+
+def rank_intent_candidates(q: str, lang: Optional[str]) -> List[Dict[str, Any]]:
+    slots = canonicalize_query_intent(q, lang)
+    cands = []
+    txt = (q or "").lower()
+    for skill in INTENT_SKILLS:
+        score = 0.0
+        if slots["action"] and slots["action"] in skill.get("action", []):
+            score += 0.45
+        if slots["measure"] and (("any" in skill.get("measure", [])) or slots["measure"] in skill.get("measure", [])):
+            score += 0.35
+        if any(p in q for p in skill.get("phrases_zh", [])) or any(p in txt for p in [s.lower() for s in skill.get("phrases_en", [])]):
+            score += 0.20
+        cands.append({
+            "skill_id": skill["id"],
+            "score": round(score, 4),
+            "template_ref": skill["template_ref"],
+            "slots": slots,
+            "tables": skill["tables"],
+            "title": skill["title"],
+        })
+    return sorted(cands, key=lambda x: x["score"], reverse=True)[:4]
+
+# ───────────────────────────────────────────────────────────────────────────────
+# zh synonyms (for recall)
+# ───────────────────────────────────────────────────────────────────────────────
 _ZH_TO_EN_SYNONYMS: List[Tuple[re.Pattern, str]] = [
-    # time
     (re.compile(r"今天|今日"), "today"),
     (re.compile(r"昨天|昨日"), "yesterday"),
     (re.compile(r"明天|翌日"), "tomorrow"),
@@ -50,8 +176,6 @@ _ZH_TO_EN_SYNONYMS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"下月|下個月|下个月"), "next month"),
     (re.compile(r"歷史|历史|趨勢|趋势|過去|过去"), "history trend past"),
     (re.compile(r"未來|未来|即將|即将"), "future upcoming"),
-
-    # domain nouns/verbs
     (re.compile(r"請假|休假"), "leave"),
     (re.compile(r"員工|人員|人力|同仁"), "employee person"),
     (re.compile(r"部門|單位|分行|分部"), "department branch unit"),
@@ -60,7 +184,7 @@ _ZH_TO_EN_SYNONYMS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"工號|員工編號|員編|人員代碼"), "employee id employeeid personid"),
     (re.compile(r"事業部|公司別|BU"), "business unit"),
     (re.compile(r"已核准|已批准|已驗證|已验证"), "validated approved"),
-    (re.compile(r"餘額|余额"), "balance"),
+    (re.compile(r"餘額|余额|剩餘|剩下|可用"), "balance remaining available"),
     (re.compile(r"取消"), "cancel cancelation"),
 ]
 
@@ -86,6 +210,9 @@ def detect_language(text: str) -> Literal["zh-tw", "en"]:
             pass
     return "en"
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Data model meta
+# ───────────────────────────────────────────────────────────────────────────────
 class JoinType(Enum):
     INNER = "INNER"
     LEFT = "LEFT"
@@ -146,7 +273,6 @@ class TableSchema:
     is_historical: bool = False
     is_deleted_data: bool = False
     temporal_columns: List[str] = field(default_factory=list)
-
     description_zh: str = ""
     business_context: str = ""
     business_context_zh: str = ""
@@ -158,7 +284,6 @@ class TableSchema:
     priority: int = 1
     last_updated: Optional[str] = None
     kpi_relevance: List[str] = field(default_factory=list)
-
     def __post_init__(self):
         if not self.last_updated:
             self.last_updated = datetime.now().isoformat()
@@ -202,10 +327,10 @@ class VectorItem:
     text_zh: str
     priority: int = 2
     payload: Dict[str, Any] = field(default_factory=dict)
-
     def get_text_for_lang(self, lang: Literal["zh-tw", "en"]) -> str:
         return self.text_zh if lang == "zh-tw" else self.text_en
 
+# Column alias heuristics
 COLUMN_ALIASES: Dict[str, Set[str]] = {
     "BUSINESSUNITID": {"BUSINESSUINTID"},
     "EFFECTIVEDATE": {"EFFINIENTDATE", "EFFICIENTDATE", "EFFDATE"},
@@ -223,6 +348,10 @@ def _has_col(table: "TableSchema", name: str) -> bool:
                 return True
     return False
 
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Main Vector DB
+# ───────────────────────────────────────────────────────────────────────────────
 class LeaveVectorDB:
     def __init__(
         self,
@@ -258,19 +387,58 @@ class LeaveVectorDB:
         self._build_vector_items()
         self._build_indexes()
 
+    # ---------------- intent routing
+    def get_intent_routing(self, query: str) -> Dict[str, Any]:
+        lang = detect_language(query)
+        q = (query or "").lower()
+
+        plan = {
+            "intent": "generic",
+            "template_ref": None,
+            "slots": {},
+            "tables": [t.full for t in self.tables[:3]],
+            "language": lang,
+        }
+
+        m = re.search(r"\b(20\d{2})\b", q)
+        if m:
+            plan["slots"]["year"] = m.group(1)
+
+        # Prefer the authoritative snapshot for balance questions
+        if any(k in q for k in ["剩餘", "餘額", "余额", "remaining", "balance"]) and any(k in q for k in ["特休", "年假", "annual"]):
+            if self._exists(VAC_RESULT_TABLE):
+                plan.update({
+                    "intent": "remaining_balance_by_person",
+                    "template_ref": "remaining_balance_by_person",
+                    "tables": [VAC_RESULT_TABLE, self._person_table or "dbo.PSNACCOUNT", ORG_TABLE],
+                })
+            else:
+                plan.update({
+                    "intent": "remaining_balance_by_person",
+                    "template_ref": None,
+                    "unavailable_reason": "No vacation snapshot table in schema.",
+                    "fallback_intent": "leave_usage_by_person",
+                    "tables": ["dbo.ATDLEAVEDATA", self._person_table or "dbo.PSNACCOUNT", ORG_TABLE],
+                })
+            return plan
+
+        cands = rank_intent_candidates(query, lang)
+        return {
+            "lang": lang,
+            "candidates": cands,
+            "slots": cands[0]["slots"] if cands else canonicalize_query_intent(query, lang),
+        }
+
     def _resolve_person_table(self) -> Optional[str]:
-        candidates = [
-            "dbo.PSNACCOUNT",
-            "dbo.PSNACCOUNT_D",
-        ]
-        for name in candidates:
+        for name in ["dbo.PSNACCOUNT", "dbo.PSNACCOUNT_D"]:
             if name.lower() in self._by_name:
                 return name
         return None
 
     def _exists(self, full: str) -> bool:
-        return full.lower() in self._by_name
+        return (full or "").lower() in self._by_name
 
+    # ---------------- embeddings/index
     def _load_model(self) -> None:
         if SentenceTransformer is None:
             logger.warning("sentence-transformers not installed; using hashing-based fallback embeddings.")
@@ -296,35 +464,25 @@ class LeaveVectorDB:
                 " ".join(t.common_queries_zh or t.common_queries), " ".join(t.relationships),
                 " ".join(t.kpi_relevance), t.full, " ".join(t.columns[:40])
             ]
-
         elif obj_type == "join":
             j: TableJoin = obj
-            en_parts = [
-                j.description, j.purpose, " ".join(j.tags),
-                j.left_table, j.right_table,
-                f"{j.left_table}.{j.left_column}={j.right_table}.{j.right_column}",
-                j.join_type.value, j.cardinality.value
-            ]
-            zh_parts = [
-                j.description_zh or j.description, j.purpose, " ".join(j.tags),
-                j.left_table, j.right_table,
-                f"{j.left_table}.{j.left_column}={j.right_table}.{j.right_column}",
-                j.join_type.value, j.cardinality.value
-            ]
-
+            en_parts = [j.description, j.purpose, " ".join(j.tags), j.left_table, j.right_table,
+                        f"{j.left_table}.{j.left_column}={j.right_table}.{j.right_column}",
+                        j.join_type.value, j.cardinality.value]
+            zh_parts = [j.description_zh or j.description, j.purpose, " ".join(j.tags), j.left_table, j.right_table,
+                        f"{j.left_table}.{j.left_column}={j.right_table}.{j.right_column}",
+                        j.join_type.value, j.cardinality.value]
         elif obj_type == "pattern":
             p: QueryPattern = obj
             en_parts = [p.pattern, p.description, " ".join(p.tags), " ".join(p.primary_tables), " ".join(p.examples)]
             zh_parts = [p.pattern, p.description_zh or p.description, " ".join(p.tags),
                         " ".join(p.primary_tables), " ".join(p.examples_zh or p.examples)]
-
         elif obj_type == "kpi":
             k: KPIDef = obj
             en_parts = [k.name, k.description, " ".join(k.tags), " ".join(k.tables),
                         k.formula_sql_hint, k.grain, k.interpretation]
             zh_parts = [k.name, k.description_zh or k.description, " ".join(k.tags), " ".join(k.tables),
                         k.formula_sql_hint, k.grain, k.interpretation]
-
         elif obj_type == "recipe":
             r: SQLRecipe = obj
             en_parts = [r.title, r.description, " ".join(r.tags), " ".join(r.tables), " ".join(r.expected_columns)]
@@ -335,14 +493,12 @@ class LeaveVectorDB:
 
         en_text = " ".join([p for p in en_parts if p])
         zh_text = " ".join([p for p in zh_parts if p])
-
         if not zh_text.strip() or len(zh_text.strip()) < 10:
             zh_text = en_text
         return en_text, zh_text
 
     def _build_vector_items(self) -> None:
         self._vector_items = []
-
         for t in self.tables:
             en_text, zh_text = self._combine_text_by_language(t, "table")
             self._vector_items.append(VectorItem(
@@ -350,39 +506,30 @@ class LeaveVectorDB:
                 text_en=en_text, text_zh=zh_text, priority=t.priority,
                 payload={"table": t}
             ))
-
         for j in self._joins:
             en_text, zh_text = self._combine_text_by_language(j, "join")
             self._vector_items.append(VectorItem(
                 key=f"JOIN::{j.left_table}::{j.right_table}::{j.left_column}::{j.right_column}",
-                item_type=VectorItemType.JOIN,
-                text_en=en_text, text_zh=zh_text, priority=2, payload={"join": j}
+                item_type=VectorItemType.JOIN, text_en=en_text, text_zh=zh_text, priority=2, payload={"join": j}
             ))
-
         for p in self._query_patterns:
             en_text, zh_text = self._combine_text_by_language(p, "pattern")
             self._vector_items.append(VectorItem(
-                key=f"PATTERN::{p.pattern}",
-                item_type=VectorItemType.PATTERN,
+                key=f"PATTERN::{p.pattern}", item_type=VectorItemType.PATTERN,
                 text_en=en_text, text_zh=zh_text, priority=1, payload={"pattern": p}
             ))
-
         for k in self._kpis:
             en_text, zh_text = self._combine_text_by_language(k, "kpi")
             self._vector_items.append(VectorItem(
-                key=f"KPI::{k.name}",
-                item_type=VectorItemType.KPI,
+                key=f"KPI::{k.name}", item_type=VectorItemType.KPI,
                 text_en=en_text, text_zh=zh_text, priority=1, payload={"kpi": k}
             ))
-
         for r in self._recipes:
             en_text, zh_text = self._combine_text_by_language(r, "recipe")
             self._vector_items.append(VectorItem(
-                key=f"RECIPE::{r.recipe_id}",
-                item_type=VectorItemType.RECIPE,
+                key=f"RECIPE::{r.recipe_id}", item_type=VectorItemType.RECIPE,
                 text_en=en_text, text_zh=zh_text, priority=1, payload={"recipe": r}
             ))
-
         logger.info("VECTOR_ITEMS: built=%d", len(self._vector_items))
 
     @staticmethod
@@ -454,9 +601,7 @@ class LeaveVectorDB:
     def _boost_score(self, vi: VectorItem, sim: float, query: str, lang: Literal["zh-tw", "en"]) -> float:
         score = float(sim)
         score *= (1.0 + (4 - vi.priority) * 0.10)
-
         ql = query.lower()
-
         if vi.item_type == VectorItemType.TABLE:
             t: TableSchema = vi.payload["table"]
             for kname in t.kpi_relevance:
@@ -467,20 +612,15 @@ class LeaveVectorDB:
                 if c in ql or any(w in ql for w in c.split("_")):
                     score *= 1.05
                     break
-
         elif vi.item_type == VectorItemType.KPI:
             kpi: KPIDef = vi.payload["kpi"]
             if kpi.name.lower() in ql:
                 score *= 1.15
-            if any(w in (kpi.description_zh or kpi.description).lower() for w in ql.split()):
-                score *= 1.05
-
         elif vi.item_type == VectorItemType.PATTERN:
             pat: QueryPattern = vi.payload["pattern"]
             examples = pat.examples_zh if lang == "zh-tw" and pat.examples_zh else pat.examples
             if any(any(w in ex.lower() for w in ql.split()) for ex in (examples or [])):
                 score *= 1.05
-
         return score
 
     def _do_search_once(self, query: str, lang: Literal["zh-tw", "en"], top_k: int) -> List[Tuple[VectorItem, float]]:
@@ -488,13 +628,10 @@ class LeaveVectorDB:
             index, embeddings = self.index_zh, self.embeddings_zh
         else:
             index, embeddings = self.index_en, self.embeddings_en
-
         if embeddings is None:
             return []
-
         qvec = self._encode_query(query).astype("float32")
         k = min(top_k * 3, len(self._vector_items))
-
         if index is not None and faiss is not None:
             try:
                 distances, indices = index.search(qvec, k)  # type: ignore
@@ -504,7 +641,6 @@ class LeaveVectorDB:
                 sims, idxs = self._numpy_search(qvec, embeddings, k)  # type: ignore
         else:
             sims, idxs = self._numpy_search(qvec, embeddings, k)  # type: ignore
-
         results: List[Tuple[VectorItem, float]] = []
         for sim, idx in zip(sims, idxs):
             if int(idx) >= len(self._vector_items):
@@ -517,32 +653,23 @@ class LeaveVectorDB:
     def search(self, query: str, top_k: int = 8, min_score: float = 0.25) -> List[Tuple[VectorItem, float]]:
         if not self._vector_items or (self.embeddings_en is None and self.embeddings_zh is None):
             return []
-
         base_lang = detect_language(query)
         q_expanded = _expand_zh_synonyms(query) if base_lang == "zh-tw" else query
-
         logger.info("VDB_SEARCH: lang=%s base_query='%s' expanded='%s'",
                     base_lang, query, q_expanded if q_expanded != query else "(none)")
-
         results = self._do_search_once(q_expanded, base_lang, top_k)
-
         strong = [(vi, s) for (vi, s) in results if s >= min_score]
         if len(strong) < max(2, top_k // 3):
             other_lang: Literal["zh-tw", "en"] = "en" if base_lang == "zh-tw" else "zh-tw"
-            logger.debug("VDB_SEARCH: weak results (%d). Trying other_lang=%s", len(strong), other_lang)
             results += self._do_search_once(q_expanded, other_lang, top_k)
-
         dedup: Dict[str, Tuple[VectorItem, float]] = {}
         for vi, s in results:
             if s < min_score:
                 continue
             if vi.key not in dedup or s > dedup[vi.key][1]:
                 dedup[vi.key] = (vi, s)
-
         out = sorted(dedup.values(), key=lambda x: x[1], reverse=True)[:top_k]
         logger.info("VDB_SEARCH: final_hits=%d", len(out))
-        for vi, s in out[:6]:
-            logger.debug("VDB_HIT: type=%s key=%s score=%.3f", vi.item_type.value, vi.key, s)
         return out
 
     def search_relevant_tables(self, query: str, top_k: int = 5) -> List[Tuple[str, float]]:
@@ -553,10 +680,12 @@ class LeaveVectorDB:
                 tables.append((vi.payload["table"].full, s))
             if len(tables) >= top_k:
                 break
-
         if not tables:
             ql = (query or "").lower()
             likely = []
+            if any(k in ql for k in ["balance", "餘額", "年假", "特休"]):
+                if self._exists(VAC_RESULT_TABLE):
+                    likely.append((VAC_RESULT_TABLE, 0.26))
             if any(k in ql for k in ["leave", "請假", "休假", "today", "今天", "current", "當前"]):
                 for guess in ["dbo.ATDLEAVEDATA"]:
                     if self._exists(guess):
@@ -567,7 +696,6 @@ class LeaveVectorDB:
             tables = likely[:top_k]
             if tables:
                 logger.warning("VDB_SEARCH: returning heuristic tables due to empty vector hits: %s", tables)
-
         return tables
 
     def join_hints(self, tables: Iterable[str]) -> List[str]:
@@ -576,8 +704,7 @@ class LeaveVectorDB:
 
         if self._person_table:
             hints.append(f"-- FACT.PERSONID → {self._person_table}.PERSONID (LEFT JOIN)")
-            hints.append(f"-- e.g. LEFT JOIN {self._person_table} p ON p.PERSONID = l.PERSONID")
-
+            hints.append(f"-- e.g. LEFT JOIN {self._person_table} p ON p.PERSONID = <FACT>.PERSONID  (declare your fact alias first)")
             if self._exists(ORG_TABLE):
                 hints.append(f"-- {self._person_table}.BRANCHID → {ORG_TABLE}.UNITID (LEFT JOIN)")
                 hints.append(f"-- e.g. LEFT JOIN {ORG_TABLE} org ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))")
@@ -597,7 +724,6 @@ class LeaveVectorDB:
 
         if any(n.startswith("dbo.atd") for n in table_set):
             hints.append("-- Performance: ATD* facts are large; add STARTDATE/ENDDATE (or WORKDATE) range predicates")
-
         return list(dict.fromkeys(hints))
 
     def get_schema_context(self, query: str, include_examples: bool = True) -> str:
@@ -650,16 +776,13 @@ class LeaveVectorDB:
                     f"  Data Volume: {t.row_count_estimate or (('large' if (t.row_estimate or 0) > 200000 else 'medium') if t.row_estimate else '')}",
                 ])
                 examples = t.common_queries
-
             if t.key_columns:
                 header = "  關鍵欄位:" if lang == "zh-tw" else "  Key Columns:"
                 lines.append(header)
                 for c, d in list(t.key_columns.items())[:8]:
                     lines.append(f"    • {c}: {d}")
-
             if t.kpi_relevance:
                 lines.append(f"  KPIs: {', '.join(t.kpi_relevance)}")
-
             if examples and include_examples:
                 header = "  範例:" if lang == "zh-tw" else "  Examples:"
                 lines.append(header)
@@ -705,100 +828,103 @@ class LeaveVectorDB:
         if lang == "zh-tw":
             lines.extend([
                 "=== 查詢建構建議 ===",
-                "• 歷史大表務必加日期範圍過濾",
-                "• 包含 VALIDATED=1 以僅統計已批准假期",
-                "• 僅在需要時加人員維度以避免不必要 JOIN",
-                "• 考慮按 PERSONID/DEPARTMENTID 分組做彙總",
+                "• 餘額/給予：以 ATDCALCUVACATIONRESULT 為權威；需套用 @today 在可用區間（CANUSEDATE ≤ @today ≤ DISABLEDDATE）。",
+                "• 使用明細/取消：以 ATDLEAVEDATA / ATDLEAVECANCELDATA。",
+                "• 歷史大表務必加日期範圍過濾；核准資料包含 VALIDATED = 1。",
             ])
         else:
             lines.extend([
                 "=== Query Construction Tips ===",
-                "• Filter historical tables by date range",
-                "• Include VALIDATED=1 for approved leave",
-                "• Only join the person dimension when needed",
-                "• Consider grouping by PERSONID/DEPARTMENTID",
+                "• Balances/entitlement: authoritative via ATDCALCUVACATIONRESULT; respect @today within CANUSEDATE..DISABLEDDATE.",
+                "• Usage/cancellation detail: ATDLEAVEDATA / ATDLEAVECANCELDATA.",
+                "• Filter large facts by date; include VALIDATED = 1 for approved records.",
             ])
-
         return "\n".join(lines)
 
     @staticmethod
     def preview_projection_sql(lang: Literal["zh-tw","en"] = "en") -> str:
         dept_expr = "COALESCE(org.UNITDISPLAYNAME, org.UNITNAME)"
         if lang == "zh-tw":
-            return (
-                f"{dept_expr} AS 部門, "
-                "p.EMPLOYEEID AS 員編, "
-                "p.TRUENAME AS 姓名"
-            )
+            return f"{dept_expr} AS 部門, p.EMPLOYEEID AS 員編, p.TRUENAME AS 姓名"
         else:
-            return (
-                f"{dept_expr} AS department_name, "
-                "p.EMPLOYEEID AS employee_id, "
-                "p.TRUENAME AS person_name"
-            )
+            return f"{dept_expr} AS department_name, p.EMPLOYEEID AS employee_id, p.TRUENAME AS person_name"
 
     def get_business_prompt(self, query: str) -> str:
         lang = detect_language(query)
+        routing = self.get_intent_routing(query)
         context = self.get_schema_context(query, include_examples=True)
         pv = self.preview_projection_sql("zh-tw" if lang == "zh-tw" else "en")
+
+        top_intent = routing["candidates"][0] if routing.get("candidates") else None
+        intent_lines = []
+        if top_intent:
+            intent_lines.append(f"id={top_intent['skill_id']}, title={top_intent['title']}, score={top_intent['score']}")
+            intent_lines.append(f"slots={json.dumps(top_intent['slots'], ensure_ascii=False)}")
+            intent_lines.append(f"tables_hint={','.join(top_intent['tables'])}")
+        intent_block = ("\n".join(intent_lines)) if intent_lines else "(no strong intent match)"
+
         if lang == "zh-tw":
             prompt = f"""
-    您是一位請假/考勤領域的專業分析工程師。請提供SQL和推理，生成業務就緒的答案，而不僅僅是原始資料。
+您是一位請假/考勤領域的專業分析工程師。請提供可執行且正確的 SQL 與推理（以業務可讀輸出為目標）。
 
-    使用者查詢：
-    {query}
+使用者查詢：
+{query}
 
-    {context}
+[意圖（候選）]
+{intent_block}
 
-    必須遵守：
-    1) 產出正確的SQL，並包含以下 JOIN（若需要人員/部門顯示）：
-    • FACT.PERSONID → dbo.PSNACCOUNT.PERSONID
-    • dbo.PSNACCOUNT.BRANCHID → {ORG_TABLE}.UNITID
-    2) 預覽欄位務必包含：{pv}
-    3) 查詢暗示時間時，加入合理的日期視窗；涉及核准資料時加入 VALIDATED = 1
-    4) 提供聚合/KPI時，說明粒度（人員/部門/日/月）與效能建議（索引、範圍條件）
-    5) 可能為空時，建議切換歷史表（如 ATDHIS*）
+{context}
 
-    回傳格式：
-    - 簡短推理要點
-    - SQL
-    - 預期欄位與資料粒度
-    - 後續驗證建議（可選）
-    """
+必須遵守（SQL SAFETY）：
+1) 若使用別名，先在 FROM/JOIN 宣告；不得引用未宣告的別名。
+2) 優先完整表名與限定欄位（table.column）。
+3) 餘額/給予請以 {VAC_RESULT_TABLE} 為主；於有效期內（CANUSEDATE..DISABLEDDATE）加入 @today 條件。
+4) 統計核准請假含 VALIDATED = 1；ATD* 大表請加日期過濾（WORKDATE 或 STARTDATE/ENDDATE）。
+5) 僅在需要時 JOIN 人員/部門；BRANCHID 與 ORG.UNITID 請以 NVARCHAR 對齊。
+
+預覽欄位（若需顯示人員/部門）：
+{pv}
+
+回傳格式：
+- 簡短推理要點
+- SQL
+- 預期欄位與資料粒度
+- 後續驗證建議（可選）
+""".strip()
         else:
             prompt = f"""
-    You are an expert analytics engineer for the leave/attendance domain. Provide SQL and reasoning that deliver
-    business-ready answers.
+You are an expert analytics engineer for the leave/attendance domain. Provide executable, correct SQL with reasoning.
 
-    USER QUERY:
-    {query}
+USER QUERY:
+{query}
 
-    {context}
+[INTENT (candidates)]
+{intent_block}
 
-    MUST DO:
-    1) When person/department context is needed, include JOINs:
-    • FACT.PERSONID → dbo.PSNACCOUNT.PERSONID
-    • dbo.PSNACCOUNT.BRANCHID → {ORG_TABLE}.UNITID
-    2) The preview SELECT must include: {pv}
-    3) Add a sensible date window if time is implied; use VALIDATED = 1 for approved data
-    4) For aggregations/KPIs, state the grain (person/department/day/month) and add performance tips
-    5) If current tables may be empty, suggest switching to historical (ATDHIS*) tables
+{context}
 
-    Return:
-    - Short reasoning bullets
-    - SQL
-    - Expected columns and grain
-    - Optional follow-up checks
-    """
-        return prompt.strip()
+SQL SAFETY:
+1) Declare aliases before use; never reference undeclared aliases.
+2) Prefer fully-qualified tables and qualified columns.
+3) For balances/entitlement, prefer {VAC_RESULT_TABLE}; respect @today in CANUSEDATE..DISABLEDDATE.
+4) Use VALIDATED = 1 for approved leave; filter ATD* facts by date (WORKDATE or STARTDATE/ENDDATE).
+5) Join person/department only when needed; align BRANCHID↔ORG.UNITID via NVARCHAR casts.
 
+Preview fields (if showing person/department):
+{pv}
+
+Return:
+- Short reasoning bullets
+- SQL
+- Expected columns and grain
+- Optional follow-up checks
+""".strip()
+        return prompt
+
+    # ---------------- metadata builders
     def _build_comprehensive_joins(self) -> List[TableJoin]:
         joins: List[TableJoin] = []
-
-        leave_core = [
-            "dbo.ATDLEAVEDATA",
-            "dbo.ATDLEAVECANCELDATA",
-        ]
+        leave_core = ["dbo.ATDLEAVEDATA", "dbo.ATDLEAVECANCELDATA", VAC_RESULT_TABLE]
 
         if self._person_table:
             for lt in leave_core:
@@ -807,24 +933,24 @@ class LeaveVectorDB:
                         left_table=lt, left_column="PERSONID",
                         right_table=self._person_table, right_column="PERSONID",
                         join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE,
-                        description="Resolve PERSONID to person attributes (TRUENAME, EMPLOYEEID, BRANCHID).",
-                        description_zh="將 PERSONID 關聯到人員屬性（姓名、員編、部門BRANCHID）。",
-                        purpose="Preview requires 姓名/員編 and further join to department.",
-                        tags=["person","dimension","name","employee_id","branch"]
+                        description="Resolve PERSONID to person attributes (TRUENAME, EMPLOYEEID, BRANCHID). VAC snapshot is authoritative for balances.",
+                        description_zh="以 PERSONID 關聯人員屬性（姓名/員編/BRANCHID）。餘額以快照表為權威。",
+                        purpose="Preview needs names/employee_id and department joins.",
+                        tags=["person","dimension","name","employee_id","branch","balance","authoritative"]
                     ))
-
         if self._exists(self._person_table or "") and self._exists(ORG_TABLE):
             joins.append(TableJoin(
                 left_table=self._person_table, left_column="BRANCHID",
                 right_table=ORG_TABLE, right_column="UNITID",
                 join_type=JoinType.LEFT, cardinality=Cardinality.MANY_TO_ONE,
                 description="Resolve BRANCHID to department/branch (UNITID → UNITDISPLAYNAME/UNITNAME/UNITCODE).",
-                description_zh="以 BRANCHID 關聯部門（UNITID → UNITDISPLAYNAME/UNITNAME/UNITCODE）。",
+                description_zh="BRANCHID 連到部門（UNITID → UNITDISPLAYNAME/UNITNAME/UNITCODE）。",
                 purpose="Show 部門名稱 in previews and groupings.",
                 tags=["department","org","branch","unit"]
             ))
-
         return joins
+
+
 
     def _build_query_patterns(self) -> List[QueryPattern]:
         return [
@@ -858,7 +984,20 @@ class LeaveVectorDB:
                 examples_zh=["上季度取消請假的數量與原因"],
                 tags=["cancel", "reason"]
             ),
+            QueryPattern(
+                pattern="annual_balance_snapshot",
+                description="Annual leave balance (days) from authoritative snapshot with validity window",
+                description_zh="從權威快照表取年度年假餘額（天），包含有效期過濾",
+                primary_tables=[VAC_RESULT_TABLE],
+                suggested_joins=["PERSONID"],  # guarantees PSNACCOUNT/ORG are reachable
+                required_filters=["VACAYEAR=@year", "CANUSEDATE..DISABLEDDATE contains @today"],
+                performance_notes=["Pick latest row per PERSONID/YEAR/TYPE"],
+                examples=["Annual remaining days by person and department"],
+                examples_zh=["各部門人員年假剩餘天數"],
+                tags=["balance","annual","snapshot","force-balance"]
+            ),
         ]
+
 
     def _build_kpis(self) -> List[KPIDef]:
         return [
@@ -872,11 +1011,21 @@ class LeaveVectorDB:
                 interpretation="Higher values may indicate seasonal effects or issues",
                 tags=["volume", "hours"]
             ),
+            KPIDef(
+                name="annual_leave_remaining_days",
+                description="Remaining annual leave days per person (from snapshot table).",
+                description_zh="每人年假剩餘天數（取快照表 REMAINDAYS）。",
+                formula_sql_hint="Pick latest valid row per person/year/type=1; use REMAINDAYS.",
+                tables=[VAC_RESULT_TABLE],
+                grain="person-year",
+                tags=["balance","days","force-balance"]
+            ),
         ]
+
 
     def _build_recipes(self) -> List[SQLRecipe]:
         return [
-           SQLRecipe(
+            SQLRecipe(
                 recipe_id="current_on_leave_by_dept",
                 title="Current on-leave employees by department",
                 description="Lists employees currently on validated leave grouped by department.",
@@ -888,34 +1037,73 @@ class LeaveVectorDB:
                     "  COALESCE(org.UNITDISPLAYNAME, org.UNITNAME) AS department_name,\n"
                     "  p.EMPLOYEEID AS employee_id,\n"
                     "  p.TRUENAME   AS person_name,\n"
-                    "  l.ATTENDANCETYPE,\n"
-                    "  CAST(l.STARTDATE AS date) AS STARTDATE,\n"
-                    "  CAST(l.ENDDATE   AS date) AS ENDDATE\n"
-                    "FROM dbo.ATDLEAVEDATA l\n"
-                    "LEFT JOIN dbo.PSNACCOUNT p\n"
-                    "  ON p.PERSONID = l.PERSONID\n"
-                    f"LEFT JOIN {ORG_TABLE} org\n"
+                    "  fact.ATTENDANCETYPE,\n"
+                    "  CAST(fact.STARTDATE AS date) AS STARTDATE,\n"
+                    "  CAST(fact.ENDDATE   AS date) AS ENDDATE\n"
+                    "FROM dbo.ATDLEAVEDATA AS fact\n"
+                    "LEFT JOIN dbo.PSNACCOUNT AS p\n"
+                    "  ON p.PERSONID = fact.PERSONID\n"
+                    f"LEFT JOIN {ORG_TABLE} AS org\n"
                     "  ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))\n"
-                    "WHERE l.VALIDATED = 1\n"
-                    "  AND CAST(GETDATE() AS date) BETWEEN CAST(l.STARTDATE AS date) AND CAST(l.ENDDATE AS date)\n"
+                    "WHERE fact.VALIDATED = 1\n"
+                    "  AND CAST(GETDATE() AS date) BETWEEN CAST(fact.STARTDATE AS date) AND CAST(fact.ENDDATE AS date)\n"
                     "ORDER BY department_name, person_name;"
                 ),
                 caution_notes=["Ensure BRANCHID data type matches ORG.UNITID; CAST to NVARCHAR when needed."],
                 tags=["current","validated","preview"]
             ),
+            SQLRecipe(
+                recipe_id="annual_balance_by_person",
+                title="Annual leave balance by person (snapshot table)",
+                description="Latest valid snapshot per person/year/type with entitlement/used/remaining days.",
+                description_zh="每人/年度/類型之最新有效快照（給予/已用/剩餘天數）。",
+                tables=[VAC_RESULT_TABLE, "dbo.PSNACCOUNT", ORG_TABLE],
+                expected_columns=["department_name","employee_id","person_name",
+                                "VACAYEAR","VACATIONTYPE","VACDAYS","USEDAYS","REMAINDAYS",
+                                "CANUSEDATE","DISABLEDDATE"],
+                sql_template=(
+                    "WITH latest AS (\n"
+                    f"  SELECT r.PERSONID, r.VACAYEAR, r.VACAMONTH, r.VACATIONTYPE,\n"
+                    "         r.VACDAYS, r.USEDAYS, r.REMAINDAYS, r.CANUSEDATE, r.DISABLEDDATE,\n"
+                    "         r.LASTEDITTIME, r.CREATIONTIME,\n"
+                    "         ROW_NUMBER() OVER (\n"
+                    "           PARTITION BY r.PERSONID, r.VACAYEAR, r.VACATIONTYPE\n"
+                    "           ORDER BY ISNULL(r.LASTEDITTIME, r.CREATIONTIME) DESC,\n"
+                    "                    ISNULL(r.DISABLEDDATE, '9999-12-31') DESC,\n"
+                    "                    r.VACAMONTH DESC\n"
+                    "         ) AS rn\n"
+                    f"  FROM {VAC_RESULT_TABLE} AS r\n"
+                    "  WHERE (@year IS NULL OR r.VACAYEAR = @year)\n"
+                    "    AND (@vacationtype IS NULL OR r.VACATIONTYPE = @vacationtype)\n"
+                    "    AND (r.CANUSEDATE IS NULL OR CAST(@today AS date) >= CAST(r.CANUSEDATE AS date))\n"
+                    "    AND (r.DISABLEDDATE IS NULL OR CAST(@today AS date) <= CAST(r.DISABLEDDATE AS date))\n"
+                    ")\n"
+                    "SELECT COALESCE(org.UNITDISPLAYNAME, org.UNITNAME) AS department_name,\n"
+                    "       p.EMPLOYEEID AS employee_id,\n"
+                    "       p.TRUENAME   AS person_name,\n"
+                    "       l.VACAYEAR, l.VACATIONTYPE, l.VACDAYS, l.USEDAYS, l.REMAINDAYS,\n"
+                    "       l.CANUSEDATE, l.DISABLEDDATE\n"
+                    "FROM latest AS l\n"
+                    "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = l.PERSONID\n"
+                    f"LEFT JOIN {ORG_TABLE} AS org ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))\n"
+                    "WHERE l.rn = 1\n"
+                    "ORDER BY department_name, person_name;"
+                ),
+                caution_notes=[
+                    "Use @year/@vacationtype; respect validity window via @today.",
+                    "VACATIONTYPE code for annual leave is system-specific (often 1)."
+                ],
+                tags=["balance","annual","snapshot","days","force-balance"]
+            ),
         ]
 
+
+    # ---------------- readiness, health, persistence
     def is_ready(self) -> bool:
         return bool(self.tables) and (self.embeddings_en is not None or self.embeddings_zh is not None)
 
     def health_check(self) -> Dict[str, object]:
-        faiss_used = False
-        try:
-            if faiss is not None and self.index_en is not None and self.index_zh is not None:
-                faiss_used = True
-        except Exception:
-            faiss_used = False
-
+        faiss_used = bool(faiss is not None and self.index_en is not None and self.index_zh is not None)
         return {
             "ready": self.is_ready(),
             "tables_indexed": len(self.tables),
@@ -943,7 +1131,7 @@ class LeaveVectorDB:
             "recipes": [asdict(r) for r in self._recipes],
             "model_name": self.model_name,
             "created_at": datetime.now().isoformat(),
-            "version": "4.0",
+            "version": "5.0",  # bumped because of snapshot-table support
         }
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with open(self.db_path, "wb") as f:
@@ -956,17 +1144,15 @@ class LeaveVectorDB:
             raise FileNotFoundError(f"No vector DB at {db_path}")
         with open(db_path, "rb") as f:
             data = pickle.load(f)
-
         tables = [TableSchema(**d) for d in data.get("schemas", [])]
         joins = [TableJoin(**d) for d in data.get("joins", [])]
         patterns = [QueryPattern(**d) for d in data.get("patterns", [])]
         kpis = [KPIDef(**d) for d in data.get("kpis", [])]
         recipes = [SQLRecipe(**d) for d in data.get("recipes", [])]
-
         inst = cls(
             tables=tables,
             db_path=db_path,
-            model_name=data.get("model_name", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"),
+            model_name=data.get("model_name", "sentence-transformers/all-MiniLM-L6-v2"),
             joins=joins,
             patterns=patterns,
             kpis=kpis,
@@ -974,13 +1160,21 @@ class LeaveVectorDB:
         )
         return inst
 
+    # ---------------- convenience
+    # --- optional but helpful: broaden quick intent recognizer to catch balance phrasing ---
     def get_query_pattern(self, query: str) -> Optional[QueryPattern]:
-        q = query.lower()
-        if any(x in q for x in ["當前", "今天", "現在", "今日"]) or ("leave" in q and any(x in q for x in ["current", "today", "now"])):
+        q = (query or "").lower()
+        if any(x in q for x in ["當前", "今天", "現在", "今日", "今日", "目前"]) or ("leave" in q and any(x in q for x in ["current", "today", "now"])):
             return next((p for p in self._query_patterns if p.pattern == "current_leave_status"), None)
         if any(x in q for x in ["取消", "已取消"]) or any(x in q for x in ["cancel", "cancelled", "cancellation"]):
             return next((p for p in self._query_patterns if p.pattern == "leave_cancellations"), None)
+        if (
+            any(x in q for x in ["餘額", "余额", "剩餘", "剩下", "可用"]) and
+            any(x in q for x in ["年假", "特休", "annual"])
+        ) or any(x in q for x in ["annual leave balance", "remaining annual", "vacation balance"]):
+            return next((p for p in self._query_patterns if p.pattern == "annual_balance_snapshot"), None)
         return None
+
 
     def relationships_sanity_check(self) -> Dict[str, List[str]]:
         errors, warnings = [], []
@@ -998,6 +1192,16 @@ class LeaveVectorDB:
                 warnings.append(f"Condition placeholders missing in join {j.left_table} → {j.right_table}")
         return {"errors": errors, "warnings": warnings}
 
+    def debug_intent_block(self, query: str) -> str:
+        routing = self.get_intent_routing(query)
+        lines = [f"lang={routing.get('lang')}"]
+        for i, c in enumerate(routing.get("candidates", []), 1):
+            lines.append(f"[{i}] {c['skill_id']} score={c['score']} slots={json.dumps(c['slots'], ensure_ascii=False)} tables={','.join(c['tables'])}")
+        return "\n".join(lines)
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Builder
+# ───────────────────────────────────────────────────────────────────────────────
 def build_leave_index() -> LeaveVectorDB:
     def T(full: str, cols: List[str], desc: str = "", tags: List[str] = None,  # type: ignore
           pks: List[str] = None, indexed: List[str] = None, rows: int = None,  # type: ignore
@@ -1020,63 +1224,84 @@ def build_leave_index() -> LeaveVectorDB:
         )
 
     tables: List[TableSchema] = [
+        # Usage fact (lines/hours/days)
         T("dbo.ATDLEAVEDATA",
           ["ATTENDANCETYPE","PERSONID","WORKDATE","STARTTIME","ENDTIME","HOURS",
-           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","STARTDATE","ENDDATE"],
-          desc="Current validated leave data",
-          description_zh="當前已驗證的請假資料",
-          tags=["leave","current","validated"],
+           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","STARTDATE","ENDDATE",
+           "AutoRevise","TIMECLASSID","TIMECLASSHOURS","CREATIONTIME","CREATEDBY",
+           "LASTUPDATETIME","LASTUPDATEDBY","LEAVEID","FORMKIND","FROM_SOURCE",
+           "FORM_NO","RECORD_ID","FLEAVEBYDAYTYPE","TLEAVEBYDAYTYPE","LEAVEREASON"],
+          desc="Leave usage lines (hours/days) including date span; VALIDATED=1 → approved.",
+          description_zh="請假使用明細（小時/天），包含起迄；VALIDATED=1 表示已批准。",
+          tags=["leave","usage","validated"],
           priority=1,
           business_context="Operational day-level leave records",
           business_context_zh="日粒度的作業性請假紀錄",
-          common_queries=[
-              "Who is on leave today?",
-              "Count validated leaves by department"
-          ],
-          common_queries_zh=[
-              "今天有哪些員工在休假？",
-              "各部門已核准請假數量"
-          ],
-          key_cols={"PERSONID": "Person surrogate key", "DEPARTMENTID": "Department surrogate key"},
+          common_queries=["Who is on leave today?","Count validated leaves by department"],
+          common_queries_zh=["今天有哪些員工在休假？","各部門已核准請假數量"],
+          key_cols={"PERSONID": "Person key", "DEPARTMENTID": "Department key"},
         ),
+        # Cancellations
         T("dbo.ATDLEAVECANCELDATA",
           ["OID","ATTENDANCETYPE","PERSONID","WORKDATE","STARTDATE","STARTTIME","ENDDATE","ENDTIME","HOURS",
-           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","REASON","LEAVEREASON","CREATEDATE","LASTEDITTIME"],
-          desc="Leave cancellation records",
-          description_zh="請假取消資料",
+           "DEPARTMENTID","VALIDATED","BUSINESSUNITID","ISHISDATA","AutoRevise","CREATEDATE","CREATEUSERID",
+           "LASTEDITUSERID","LASTEDITTIME","REASON","FLEAVEBYDAYTYPE","TLEAVEBYDAYTYPE","LEAVEREASON",
+           "FROM_SOURCE","FORM_NO","RECORD_ID","FORMKIND"],
+          desc="Leave cancellation records (reversals).",
+          description_zh="請假取消資料（沖銷）。",
           tags=["leave","cancel","reason"],
           priority=2,
           temporal=["WORKDATE","CREATEDATE","LASTEDITTIME"],
         ),
-        T("dbo.PSNACCOUNT",
-          ["CARDNUM","TRUENAME","PERSONID","EMPLOYEEID","COMPANYEMAIL","BRANCHID","BUSINESSUNITID","FIRSTNAME","MIDDLENAME","LASTNAME","ENGNAME"],
-          desc="Person dimension (authoritative; includes BRANCHID for department)",
-          description_zh="人員維度（權威來源；含BRANCHID以解析部門）",
-          tags=["person","dimension","branch"],
+        # Authoritative snapshot: balances/entitlement (days) per person/year/month/type
+        T(VAC_RESULT_TABLE,
+          ["VACATIONID","PERSONID","VACAYEAR","VACAMONTH","VACATIONTYPE","USEDAYS","REMAINDAYS","VACDAYS",
+           "CANUSEDATE","LASTYEARREMAINDAYS","BUSINESSUNITID","DISABLEDDATE","LASTEDITUSERID","LASTEDITTIME",
+           "CREATIONTIME","CREATEDBY","TOPAYROLLDATE","PACKAGEID","PROCSTATE"],
+          desc="Computed vacation snapshot (balances/usage/entitlement) by person, year, month, type.",
+          description_zh="每人/年/月/類型之已計算休假快照（使用/剩餘/給予等）。",
+          tags=["balance","usage","entitlement","vacation"],
           key_cols={
-              "PERSONID": "人員鍵 (join to facts)",
-              "EMPLOYEEID": "員編",
-              "BRANCHID": "部門/單位鍵 → ORGStdStruct.UNITID"
+              "PERSONID": "人員鍵（連接 PSNACCOUNT）",
+              "VACAYEAR": "休假年度",
+              "VACAMONTH": "休假月份",
+              "VACATIONTYPE": "休假類型（年假通常為 1）",
+              "USEDAYS": "已使用天數（累計）",
+              "REMAINDAYS": "剩餘天數（系統計算）",
+              "VACDAYS": "給予天數（年度或方案）",
+              "CANUSEDATE": "可使用起始日",
+              "DISABLEDDATE": "失效日（到期）"
           },
+          business_context="Authoritative source for remaining balance & entitlement; pick latest row per person/year/type within validity window.",
+          business_context_zh="餘額與給予之權威來源；於有效期內，取每人/年度/類型最新一筆。",
+          common_queries=["Annual leave remaining by person for a given year",
+                          "Entitlement vs used vs remaining by department"],
+          common_queries_zh=["指定年度每位員工年假餘額","部門別給予/已用/剩餘對照"],
+          priority=1
+        ),
+        # Dimensions
+        T("dbo.PSNACCOUNT",
+          ["CARDNUM","TRUENAME","PERSONID","EMPLOYEEID","COMPANYEMAIL","BRANCHID","BUSINESSUNITID","FIRSTNAME",
+           "MIDDLENAME","LASTNAME","ENGNAME","LASTUPDATETIME","MOBILE","EXT_NO"],
+          desc="Person dimension (authoritative; includes BRANCHID for department).",
+          description_zh="人員維度（權威來源；含BRANCHID以解析部門）。",
+          tags=["person","dimension","branch"],
+          key_cols={"PERSONID": "人員鍵 (join to facts)", "EMPLOYEEID": "員編", "BRANCHID": "部門/單位鍵 → ORGStdStruct.UNITID"},
           priority=1
         ),
         T(ORG_TABLE,
           ["UNITID","UNITCODE","UNITNAME","UNITDISPLAYNAME","ISDELETE"],
-          desc="Organization structure / branch dimension (UNITID as key)",
-          description_zh="組織/單位維度（以 UNITID 為鍵）",
+          desc="Organization structure / branch dimension (UNITID as key).",
+          description_zh="組織/單位維度（以 UNITID 為鍵）。",
           tags=["org","department","branch"],
-          key_cols={
-              "UNITID": "部門鍵 ← PSNACCOUNT.BRANCHID",
-              "UNITNAME": "部門名稱",
-              "UNITDISPLAYNAME": "部門顯示名稱",
-              "UNITCODE": "部門代碼"
-          },
+          key_cols={"UNITID": "部門鍵 ← PSNACCOUNT.BRANCHID", "UNITNAME": "部門名稱", "UNITDISPLAYNAME": "部門顯示名稱", "UNITCODE": "部門代碼"},
           priority=1
         ),
+        # Leave type dictionary (for name lookups)
         T("dbo.ATDATTENDANCECLASS",
           ["CLASSCODE","ID","CLASSNAME","CLASSTYPE"],
-          desc="Attendance/leave class dictionary (maps LEAVEID → readable type)",
-          description_zh="出勤/請假類別字典（LEAVEID → 假別名稱）",
+          desc="Attendance/leave class dictionary (maps LEAVEID/VACATIONTYPE → readable type).",
+          description_zh="出勤/請假類別字典（LEAVEID/VACATIONTYPE → 假別名稱）。",
           tags=["dictionary","leave-type"],
           key_cols={"ID": "LEAVEID ↔ ATDLEAVEDATA.LEAVEID"},
           priority=1
@@ -1084,91 +1309,3 @@ def build_leave_index() -> LeaveVectorDB:
     ]
 
     return LeaveVectorDB(tables)
-
-def _contains_all(haystack: str, needles: Iterable[str]) -> bool:
-    hs = (haystack or "").lower()
-    return all(n.lower() in hs for n in needles)
-
-def run_zh_tw_smoke_tests():
-    print("=== zh-TW Vector→SQL Smoke Tests ===")
-    db = build_leave_index()
-    health = db.health_check()
-    print("Health:", health)
-
-    zh_queries = [
-        "今天有誰在休假？",
-        "查看本月請假統計",
-        "請列出各部門今天在休假的人員（顯示部門＋員編＋姓名）",
-    ]
-
-    required_join_hints = [
-        f"-- FACT.PERSONID → {db._person_table}.PERSONID (LEFT JOIN)".lower() if db._person_table else "",
-        f"-- {db._person_table}.BRANCHID → {ORG_TABLE}.UNITID (LEFT JOIN)".lower() if db._person_table else "",
-    ]
-    required_join_hints = [h for h in required_join_hints if h]
-
-    pv_tokens = ["部門", "員編", "姓名"]
-
-    failures = 0
-    for q in zh_queries:
-        print(f"\n--- Query: {q} ---")
-        lang = detect_language(q)
-        print("Detected lang:", lang, "(expected: zh-tw)")
-        if lang != "zh-tw":
-            print("❌ lang detection mismatch")
-            failures += 1
-
-        hits = db.search(q, top_k=5)
-        for item, score in hits:
-            print(f"  HIT {item.item_type.value:<7} {item.key:<55} score={score:.3f}")
-
-        prompt = db.get_business_prompt(q)
-        print("\nPrompt (first 20 lines):")
-        for i, line in enumerate(prompt.splitlines()[:20], 1):
-            print(f"{i:02d}: {line}")
-
-        if not all(tok in prompt for tok in pv_tokens):
-            print("❌ preview tokens missing (需要『部門／員編／姓名』)")
-            failures += 1
-
-        low = prompt.lower()
-        if required_join_hints and not _contains_all(low, required_join_hints):
-            print("❌ join hints missing (PERSONID→PSNACCOUNT, BRANCHID→ORG)")
-            failures += 1
-
-        expanded = _expand_zh_synonyms(q)
-        if expanded == q:
-            print("⚠️  no synonym expansion appended (may be fine depending on wording)")
-        else:
-            print("Synonym expansion:", expanded)
-
-    print("\n=== Summary ===")
-    if failures == 0:
-        print("✅ All zh-TW smoke tests passed.")
-    else:
-        print(f"❌ zh-TW smoke tests found {failures} issue(s).")
-
-if __name__ == "__main__":
-    def test_language_detection():
-        tests = [
-            ("今天有誰在休假？", "zh-tw"),
-            ("Who is on leave today?", "en"),
-            ("查看本月請假統計", "zh-tw"),
-            ("Show monthly leave statistics", "en"),
-            ("查看 leave 資料", "zh-tw"),
-            ("Check the 請假 data", "zh-tw"),
-        ]
-        for q, expect in tests:
-            got = detect_language(q)
-            print(f"Query: '{q}' -> {got} (expected: {expect})")
-
-    test_language_detection()
-    db = build_leave_index()
-    print(f"Health check: {db.health_check()}")
-    for query in ["今天有誰在休假？", "Who is on leave today?"]:
-        print(f"\n--- Query: {query} ---")
-        for item, score in db.search(query, top_k=3):
-            print(f"  {item.item_type.value}: {item.key} (score: {score:.3f})")
-
-    print("\n\n==============================")
-    run_zh_tw_smoke_tests()

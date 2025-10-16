@@ -95,7 +95,7 @@ class ChartReco(BaseModel):
 # -----------------------------
 @dataclass
 class ChartVisualizationAgentConfig:
-    model: str = "gpt-4o-mini"  # small & cheap; change as you like
+    model: str = "gpt-4.1"  # small & cheap; change as you like
     temperature: float = 0.0
     max_cols_in_schema: int = 30
     max_uniques_sample: int = 12

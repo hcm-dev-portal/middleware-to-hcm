@@ -55,7 +55,7 @@ report_sessions: Dict[str, Dict] = {}
 def get_llm_client() -> LLMClient:
     """Factory function to create LLM client with proper services."""
     try:
-        openai_service = OpenAIService(model_name="gpt-4o-mini", temperature=0.2)
+        openai_service = OpenAIService(model_name="gpt-4.1", temperature=0.2)
         translation_service = AWSTranslationService()
         return LLMClient(llm=openai_service, translator=translation_service)
     except Exception as e:

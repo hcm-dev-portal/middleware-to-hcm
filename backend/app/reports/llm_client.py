@@ -62,7 +62,7 @@ class LLMClient:
         translator: Optional[AWSTranslationService] = None,
         default_lang: str = "en-US",
     ):
-        self.llm = llm or OpenAIService(model_name="gpt-4o-mini", temperature=0.2)
+        self.llm = llm or OpenAIService(model_name="gpt-4.1", temperature=0.2)
         self.translator = translator or AWSTranslationService()
         self.default_lang = default_lang
 

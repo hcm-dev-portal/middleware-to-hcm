@@ -72,13 +72,13 @@ def _year_bounds(d: date) -> Tuple[date, date]:
 
 class DateProcessor:
     """
-    Smart bilingual date processor that handles both current dates and data-anchored queries.
+    Smart bilingual date processor.
 
-    Principles:
-    - 'today/今天' etc. -> actual current date (operational queries)
-    - 'latest/最近(的資料)' -> data anchor (historical/analytical)
-    - Ranges like 'last 7 days / 過去7天' choose base = current or data_anchor
-      based on operational vs analytical cues.
+    **Policy (updated):**
+    - Relative words like 'today/this week/last 7 days/今天/本週/過去7天' always use the ACTUAL current date.
+    - Only when the user explicitly asks for *latest data* (e.g., 'latest data', '最近的資料', '最近期資料'),
+      do we anchor to the data_anchor.
+    - SQL functions (GETDATE(), CURRENT_TIMESTAMP, etc.) are rewritten to the ACTUAL current date.
     """
 
     def __init__(self, data_anchor: Optional[str] = None):
@@ -105,22 +105,36 @@ class DateProcessor:
         end = start + timedelta(days=6)                # Sunday
         return start, end
 
+    # NEW: explicit anchor intent detection
+    def _has_anchor_intent(self, text: str) -> bool:
+        """
+        Detect explicit 'latest data' intent; only then we use data_anchor.
+        """
+        t = (text or "").lower()
+        patterns_en = [
+            r"\blatest data\b",
+            r"\bmost\s+recent\s+data\b",
+            r"\bdata\s*as\s*of\b",      # e.g., "as of the latest data"
+            r"\bas\s+of\s+latest\b",
+        ]
+        patterns_zh = [
+            r"最新(的)?資料", r"最近的資料", r"最(近|新)期資料", r"資料錨點", r"数据锚点",
+            r"數據錨點", r"截至最新資料", r"以最新資料為準",
+        ]
+        for p in patterns_en + patterns_zh:
+            if re.search(p, t, flags=re.IGNORECASE):
+                return True
+        return False
+
     def _determine_base_date_for_range(self, query_context: str) -> date:
         """
-        Decide whether to use current date or data anchor for range calculations.
+        For ranges like 'last 7 days', default to CURRENT DATE.
+        Only switch to data_anchor if the query explicitly asks for latest/anchored data.
         """
-        operational_indicators = [
-            "on leave", "currently", "active", "status", "who is", "working",
-            "absent", "present", "available", "正在", "目前", "現在", "状态", "狀態"
-        ]
-        if any(indicator in (query_context or "").lower() for indicator in operational_indicators):
-            return self.current_date
-
-        if self.data_anchor:
+        if self._has_anchor_intent(query_context) and self.data_anchor:
             anchor_date = _parse_iso(self.data_anchor)
             if anchor_date:
                 return anchor_date
-
         return self.current_date
 
     def _range_from_units(self, n: int, unit: str, direction: str, base: date) -> Tuple[date, date]:
@@ -156,7 +170,6 @@ class DateProcessor:
             return start, end
 
         if unit.startswith("quarter"):
-            # quarters counted as 3 months each
             months = n * 3
             if direction in ("past", "last", "recent"):
                 start_m = _shift_months(base, -(months - 1))
@@ -205,7 +218,9 @@ class DateProcessor:
     # ------------ core normalization ------------
     def rewrite_relative_dates(self, query_text: str) -> str:
         """
-        Convert relative date expressions into absolute dates with smart context awareness.
+        Convert relative date expressions into absolute dates with explicit policy:
+        - Relative → current-date based
+        - Explicit 'latest data' terms → data_anchor (if set)
         """
         original = query_text or ""
         text = original
@@ -225,15 +240,15 @@ class DateProcessor:
                 target_date = self.current_date + timedelta(days=delta)
                 text = re.sub(pat, _fmt(target_date), text, flags=re.IGNORECASE)
 
-        # 2) Data-anchored terms → anchor (if available)
-        if self.data_anchor:
+        # 2) Data-anchored terms → anchor (if explicitly asked)
+        if self.data_anchor and self._has_anchor_intent(text):
             anchor = _parse_iso(self.data_anchor)
             if anchor:
                 data_relative_patterns = [
                     (r"\b(latest)\b", 0),
                     (r"\b(most\s+recent)\b", 0),
                     (r"\b(current\s+data)\b", 0),
-                    (r"(?:最新|最近的資料|最近的数据)", 0),
+                    (r"(?:最新|最近的資料|最近的数据|最(近|新)期資料)", 0),
                     (r"(?:目前資料|目前数据)", 0),
                 ]
                 for pat, delta in data_relative_patterns:
@@ -300,12 +315,12 @@ class DateProcessor:
             direction = m.group("dir").lower()
             n = int(m.group("n"))
             unit = m.group("u").lower()
-            base_date = self._determine_base_date_for_range(text)
+            base_date = self._determine_base_date_for_range(text)  # now defaults to CURRENT
             start, end = self._range_from_units(n, unit, direction, base_date)
             return f"between {_fmt(start)} and {_fmt(end)}"
         text = pattern_en.sub(_repl_en, text)
 
-        # 6) ZH: 過去/最近/近/未來 N 天/週/月/季/年  (with Chinese numerals too)
+        # 6) ZH: 過去/最近/近/未來 N 天/週/月/季/年  (support Chinese numerals)
         pattern_zh = re.compile(
             r"(?:(?P<past>過去|过去|最近|近)|(?P<next>未來|未来|接下來|接下来))\s*"
             r"(?P<n>[一二兩两三四五六七八九十\d]+)\s*"
@@ -327,7 +342,7 @@ class DateProcessor:
                 unit = "quarters"
             else:
                 unit = "years"
-            base_date = self._determine_base_date_for_range(text)
+            base_date = self._determine_base_date_for_range(text)  # now defaults to CURRENT
             start, end = self._range_from_units(n, unit, direction, base_date)
             return f"between {_fmt(start)} and {_fmt(end)}"
         text = pattern_zh.sub(_repl_zh, text)
@@ -340,25 +355,20 @@ class DateProcessor:
     # ------------ SQL rewriting ------------
     def rewrite_sql_dates(self, sql: str) -> str:
         """
-        Replace SQL date functions with appropriate anchored dates.
-        Uses current date for operational queries, data anchor for historical analysis.
+        Replace SQL date/time functions with **current date**.
+        (Previously this sometimes used data_anchor implicitly.)
         """
         if not sql:
             return sql
 
         result = sql
-
-        is_operational_query = any(pattern in sql.upper() for pattern in [
-            "VALIDATED = 1", "CURRENT", "ACTIVE", "STATUS"
-        ])
-        target_date = self.get_current_date() if is_operational_query else (self.data_anchor or self.get_current_date())
+        target_date = self.get_current_date()  # ALWAYS current date now
 
         replacements = [
             (r"CAST\s*\(\s*GETDATE\(\)\s*AS\s*date\s*\)", f"'{target_date}'"),
             (r"\bGETDATE\(\)", f"'{target_date} 00:00:00'"),
             (r"\bSYSDATETIME\(\)", f"'{target_date} 00:00:00'"),
             (r"\bCURRENT_TIMESTAMP\b", f"'{target_date} 00:00:00'"),
-            # common FORMAT wrappers used in T-SQL snippets
             (r"FORMAT\s*\(\s*GETDATE\(\)\s*,\s*'yyyy-MM-dd'\s*\)", f"'{target_date}'"),
             (r"CONVERT\s*\(\s*date\s*,\s*GETDATE\(\)\s*\)", f"'{target_date}'"),
         ]
@@ -366,7 +376,7 @@ class DateProcessor:
             result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
         if result != sql:
-            logger.debug("SQL date rewrite: %s -> %s", sql[:120], result[:120])
+            logger.debug("SQL date rewrite (current-only): %s -> %s", sql[:120], result[:120])
 
         return result
 

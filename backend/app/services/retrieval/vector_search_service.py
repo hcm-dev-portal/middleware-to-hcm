@@ -1,74 +1,53 @@
-# ================================================================================
 # backend/app/services/retrieval/vector_search_service.py
 from __future__ import annotations
 
 import logging
+import functools
 from typing import List, Tuple, Optional, Dict, Any, Literal, Iterable
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 # Language-aware vector system
 from app.services.leave_vector import LeaveVectorDB, build_leave_index, detect_language
+# Bring in the DB-qualified VAC table name + ORG constant
+from app.services.leave_vector import VAC_RESULT_TABLE, ORG_TABLE
+
 # Translation fallback
 from app.services.aws.translation_service import AWSTranslationService
 
 logger = logging.getLogger(__name__)
 
-# --- put near the top of vector_search_service.py, replace _try_opencc_trad2simp ---
-
-# Translation fallback
-from app.services.aws.translation_service import AWSTranslationService
-import functools
-
+# ────────────────────────────────────────────────────────────────────────────────
+# Traditional → Simplified conversion (best-effort, cached)
+# ────────────────────────────────────────────────────────────────────────────────
 @functools.lru_cache(maxsize=1)
 def _get_trad2simp_impl():
-    """
-    Try several libraries for Traditional -> Simplified conversion, in order:
-    1) opencc-python-reimplemented
-    2) hanziconv
-    3) zhconv
-    If none are available, return (False, simple_map_fn).
-    """
-    # 1) opencc-python-reimplemented (pure Python)
     try:
         import opencc  # type: ignore
-        # Its API mirrors OpenCC
         cc = opencc.OpenCC('t2s')
         return (True, lambda s: cc.convert(s))
     except Exception:
         pass
-
-    # 2) hanziconv
     try:
         from hanziconv import HanziConv  # type: ignore
         return (True, lambda s: HanziConv.toSimplified(s))
     except Exception:
         pass
-
-    # 3) zhconv
     try:
         from zhconv import convert  # type: ignore
         return (True, lambda s: convert(s, 'zh-cn'))
     except Exception:
         pass
-
-    # 4) Minimal in-house char map for common HCM/HR words
-    # NOTE: This is intentionally small; we only cover frequent tokens in your domain.
     _MINI_MAP = {
-        "部門": "部门", "單位": "单位", "員工": "员工", "工號": "工号",
-        "請假": "请假", "出勤": "出勤", "假別": "假别", "資料": "资料",
-        "這": "这", "個": "个", "週": "周", "當天": "当天", "現": "现",
-        "狀": "状", "態": "态", "數": "数", "據": "据", "離": "离", "職": "职",
+        "部門": "部门","單位":"单位","員工":"员工","工號":"工号",
+        "請假":"请假","出勤":"出勤","假別":"假别","資料":"资料",
+        "這":"这","個":"个","週":"周","當天":"当天","現":"现","狀":"状","態":"态",
+        "數":"数","據":"据","離":"离","職":"职",
     }
     def _mini_trad2simp(s: str) -> str:
         return "".join(_MINI_MAP.get(ch, ch) for ch in s)
     return (False, _mini_trad2simp)
 
-
 def _trad2simp(text: str) -> str:
-    """
-    Convert zh-TW (Traditional) to zh-CN (Simplified) with best-effort fallbacks.
-    Returns the input if no change occurs.
-    """
     try:
         _ok, fn = _get_trad2simp_impl()
         out = fn(text)
@@ -76,10 +55,10 @@ def _trad2simp(text: str) -> str:
     except Exception:
         return text
 
-
-
+# ────────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────────────────────────────────────
 def _merge_hits(hit_lists: Iterable[List[Tuple[str, float]]], top_k: int = 5) -> List[Tuple[str, float]]:
-    """Merge multiple (table, score) lists by taking the max score per table, then sort desc."""
     best: Dict[str, float] = defaultdict(float)
     for hits in hit_lists:
         for t, s in (hits or []):
@@ -88,22 +67,56 @@ def _merge_hits(hit_lists: Iterable[List[Tuple[str, float]]], top_k: int = 5) ->
     merged = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
     return merged[:top_k]
 
+# Simple keyword gate to prefer VAC snapshot for “remaining annual/特休”
+def _should_prefer_vac_result(q: str) -> bool:
+    ql = (q or "").lower()
+    zh_hit = ("餘" in q or "餘額" in q or "剩" in q or "剩餘" in q or "還有" in q) and ("年假" in q or "特休" in q)
+    en_hit = any(w in ql for w in ["remaining", "unused", "balance"]) and any(w in ql for w in ["annual", "pto", "vacation"])
+    return zh_hit or en_hit
 
+# Tiny bounded dict with eviction
+class _BoundedCache(OrderedDict):
+    def __init__(self, maxsize: int = 512):
+        super().__init__()
+        self.maxsize = maxsize
+    def getset(self, key, compute_fn):
+        if key in self:
+            self.move_to_end(key)
+            return self[key], True
+        value = compute_fn()
+        self[key] = value
+        if len(self) > self.maxsize:
+            self.popitem(last=False)
+        return value, False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Service
+# ────────────────────────────────────────────────────────────────────────────────
 class VectorSearchService:
-    """Enhanced language-aware vector-based table retrieval and schema operations."""
+    """Enhanced language-aware vector-based retrieval, schema context & intent routing."""
 
     def __init__(self, db_service):
         self.db_service = db_service
         self.vector: Optional[LeaveVectorDB] = None
         self.person_table: str = "dbo.PSNACCOUNT_D"
-        self.translator = AWSTranslationService()  # English fallback when needed
+        self.translator = AWSTranslationService()
+
+        # Per-process tiny cache: key = (rid, lang, normalized_query, schema_filter or "")
+        self._req_cache: _BoundedCache = _BoundedCache(maxsize=512)
 
         self._initialize_vector_index()
         self._determine_person_table()
 
-    # ---------------- init ----------------
+    # ---- optional: health check used by native class ----
+    def health_check(self) -> Dict[str, Any]:
+        try:
+            if not self.vector:
+                return {"ready": False, "error": "no vector index"}
+            return self.vector.health_check()  # type: ignore
+        except Exception as e:
+            return {"ready": False, "error": str(e)}
+
     def _initialize_vector_index(self):
-        """Initialize the enhanced language-aware vector index."""
         try:
             self.vector = build_leave_index()
             logger.info("Enhanced language-aware vector index ready.")
@@ -112,7 +125,6 @@ class VectorSearchService:
             logger.warning("Language-aware vector unavailable: %s", e)
 
     def _determine_person_table(self):
-        """Determine the correct person table to use."""
         try:
             if self.vector:
                 vt = getattr(self.vector, "_person_table", None)
@@ -121,19 +133,29 @@ class VectorSearchService:
         except Exception:
             pass
 
+    # ---------------- INTENT ROUTING ----------------
+    def get_intent_routing(self, query: str) -> Dict[str, Any]:
+        if not self.vector:
+            return {"lang": detect_language(query), "slots": {}, "candidates": []}
+        try:
+            routing = self.vector.get_intent_routing(query)
+            routing.setdefault("slots", {})
+            routing.setdefault("candidates", [])
+            return routing
+        except Exception as e:
+            logger.error("INTENT_ROUTING_FAIL: %s", e, exc_info=True)
+            return {"lang": detect_language(query), "slots": {}, "candidates": []}
+
     # ---------------- search (legacy wrapper) ----------------
     def find_relevant_tables(self, english_query: str, schema_filter: Optional[str] = None,
                              rid: Optional[str] = None) -> List[Tuple[str, float]]:
-        """
-        Legacy entry point kept for compatibility: auto-detect language and route to bilingual search.
-        """
         lang = detect_language(english_query)
         logger.debug("VECTOR_SEARCH_LEGACY: query='%s' detected_lang=%s", english_query[:100], lang)
         return self.find_relevant_tables_with_language(
             english_query, schema_filter=schema_filter, language=lang, rid=rid
         )
 
-    # ---------------- bilingual search ----------------
+    # ---------------- bilingual search (dedup + cache) ----------------
     def find_relevant_tables_with_language(
         self,
         query: str,
@@ -141,74 +163,69 @@ class VectorSearchService:
         language: Optional[Literal["zh-tw", "en"]] = None,
         rid: Optional[str] = None
     ) -> List[Tuple[str, float]]:
-        """
-        Bilingual table search:
-          zh-TW → direct
-               → zh-CN (t2s) if available
-               → EN (AWS translate)
-          EN    → direct
-        Merges results by max score per table; applies optional schema filter.
-        """
         try:
             if not self.vector:
                 logger.warning("VECTOR_SEARCH: No vector index available")
                 return []
 
+            # Normalize language to only two rails: zh-tw or en
             if language is None:
                 language = detect_language(query)
+            language = "zh-tw" if (language or "").lower().startswith("zh") else "en"
 
-            logger.info("VECTOR_SEARCH_START: rid=%s lang=%s query='%s'", rid, language, query[:100])
+            # -------- Per-request tiny cache to avoid duplicate passes --------
+            norm_q = (query or "").strip()
+            cache_key = (rid or "", language, norm_q, (schema_filter or "").lower())
 
-            hit_sets: List[List[Tuple[str, float]]] = []
-            tried: List[Tuple[str, int]] = []
+            def _compute():
+                logger.info("VECTOR_SEARCH_START: rid=%s lang=%s query='%s'", rid, language, norm_q[:100])
 
-            def _search_and_filter(q: str, label: str) -> List[Tuple[str, float]]:
-                try:
-                    hits = self.vector.search_relevant_tables(q, top_k=5)
-                    if schema_filter:
-                        hits = [(t, s) for (t, s) in hits if t.lower().startswith(schema_filter.lower() + ".")]
-                    logger.info("VECTOR_HITS: rid=%s label=%s count=%d", rid, label, len(hits))
-                    for t, s in hits:
-                        logger.debug("VECTOR_HIT: rid=%s label=%s table=%s score=%.3f", rid, label, t, s)
-                    return hits
-                except Exception as e:
-                    logger.warning("VECTOR_SEARCH_FAIL: rid=%s label=%s err=%s", rid, label, e)
-                    return []
+                hit_sets: List[List[Tuple[str, float]]] = []
+                tried: List[Tuple[str, int]] = []
 
-            if (language or "").lower().startswith("zh"):
-                # 1) zh-TW original
-                hits_ztw = _search_and_filter(query, "zh-tw")
-                hit_sets.append(hits_ztw); tried.append(("zh-tw", len(hits_ztw)))
+                def _search_and_filter(q: str, label: str) -> List[Tuple[str, float]]:
+                    try:
+                        hits = self.vector.search_relevant_tables(q, top_k=5)
+                        if schema_filter:
+                            hits = [(t, s) for (t, s) in hits if t.lower().startswith(schema_filter.lower() + ".")]
+                        logger.info("VECTOR_HITS: rid=%s label=%s count=%d", rid, label, len(hits))
+                        for t, s in hits:
+                            logger.debug("VECTOR_HIT: rid=%s label=%s table=%s score=%.3f", rid, label, t, s)
+                        return hits
+                    except Exception as e:
+                        logger.warning("VECTOR_SEARCH_FAIL: rid=%s label=%s err=%s", rid, label, e)
+                        return []
 
-                # 2) zh-CN simplified (optional)
-                q_zcn = _trad2simp(query)
-                if q_zcn and q_zcn != query:
-                    hits_zcn = _search_and_filter(q_zcn, "zh-cn")
-                    hit_sets.append(hits_zcn); tried.append(("zh-cn", len(hits_zcn)))
+                if language == "zh-tw":
+                    # Only two passes: zh-tw + english translation (NO zh-cn pass)
+                    hits_ztw = _search_and_filter(norm_q, "zh-tw")
+                    hit_sets.append(hits_ztw); tried.append(("zh-tw", len(hits_ztw)))
 
-                # 3) English translation fallback
-                q_en = self.translator.translate_to_english(query, "zh-tw") or ""
-                if q_en:
-                    hits_en = _search_and_filter(q_en, "en")
+                    q_en = self.translator.translate_to_english(norm_q, "zh-tw") or ""
+                    if q_en:
+                        hits_en = _search_and_filter(q_en, "en")
+                        hit_sets.append(hits_en); tried.append(("en", len(hits_en)))
+                else:
+                    hits_en = _search_and_filter(norm_q, "en")
                     hit_sets.append(hits_en); tried.append(("en", len(hits_en)))
-            else:
-                # English-only path
-                hits_en = _search_and_filter(query, language or "en")
-                hit_sets.append(hits_en); tried.append((language or "en", len(hits_en)))
 
-            logger.info("VECTOR_TRIED: rid=%s tried=%s", rid, tried)
-            merged = _merge_hits(hit_sets, top_k=5)
-            logger.info("VECTOR_MERGED: rid=%s merged=%s", rid, merged)
+                logger.info("VECTOR_TRIED: rid=%s tried=%s", rid, tried)
+                merged = _merge_hits(hit_sets, top_k=5)
+                logger.info("VECTOR_MERGED: rid=%s merged=%s", rid, merged)
+                return merged
+
+            merged, was_cache = self._req_cache.getset(cache_key, _compute)
+            if was_cache:
+                logger.debug("VECTOR_CACHE_HIT: rid=%s lang=%s", rid, language)
             return merged
 
         except Exception as e:
             logger.error("VECTOR_SEARCH_ERROR: rid=%s query='%s' lang=%s error=%s",
-                         rid, query[:100], language, str(e), exc_info=True)
+                         rid, (query or "")[:100], language, str(e), exc_info=True)
             return []
 
     # ---------------- join hints ----------------
     def get_join_hints(self, tables: List[str]) -> str:
-        """Get join hints for the given tables."""
         try:
             if not self.vector:
                 return "None"
@@ -222,7 +239,6 @@ class VectorSearchService:
 
     # ---------------- schema context ----------------
     def get_schema_context(self, tables: List[str], max_cols: int = 64) -> str:
-        """Get schema context for tables, ensuring person table is included."""
         if not tables:
             logger.debug("SCHEMA_CONTEXT: No tables provided")
             return "No relevant tables found"
@@ -247,21 +263,18 @@ class VectorSearchService:
         language: Optional[Literal["zh-tw", "en"]] = None,
         max_cols: int = 64
     ) -> str:
-        """Language-aware schema context, combining vector examples with DB schema."""
         try:
             if not self.vector:
                 return self.get_schema_context(tables, max_cols)
 
             if language is None:
                 language = detect_language(query)
+            language = "zh-tw" if (language or "").lower().startswith("zh") else "en"
 
             logger.debug("ENHANCED_SCHEMA_CONTEXT: lang=%s tables=%s query='%s'",
-                         language, tables, query[:100])
+                         language, tables, (query or "")[:100])
 
-            # Vector-driven semantic schema/examples (bilingual inside the index)
             enhanced_context = self.vector.get_schema_context(query, include_examples=True)
-
-            # Actual DB schema selection (ensure person table is included)
             db_schema = self.get_schema_context(tables, max_cols)
 
             combined = f"{enhanced_context}\n\n=== DATABASE SCHEMA ===\n{db_schema}"
@@ -272,40 +285,102 @@ class VectorSearchService:
             logger.error("ENHANCED_SCHEMA_CONTEXT_ERROR: tables=%s error=%s", tables, str(e))
             return self.get_schema_context(tables, max_cols)
 
-    # ---------------- health ----------------
-    def health_check(self) -> Dict[str, Any]:
-        """Enhanced health check with language awareness details."""
-        try:
-            if not self.vector:
-                return {"ready": False, "reason": "no index"}
-            base = self.vector.health_check()
-            enhanced = {
-                **base,
-                "service_version": "language_aware_v2",
-                "person_table": self.person_table,
-                "language_fallbacks": ["zh-tw", "zh-cn (optional)", "en"],
-            }
-            logger.debug("HEALTH_CHECK: %s", enhanced)
-            return enhanced
-        except Exception as e:
-            logger.error("HEALTH_CHECK_ERROR: %s", str(e))
-            return {"ready": False, "error": str(e)}
+    # ---------------- planning helpers ----------------
+    def plan_for(
+        self,
+        query: str,
+        *,
+        schema_filter: Optional[str] = None,
+        rid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build plan (intent + schema + joins). Force VAC snapshot when question asks for remaining annual/特休.
+        """
+        language = detect_language(query)
+        language = "zh-tw" if (language or "").lower().startswith("zh") else "en"
 
-    # ---------------- business prompt ----------------
-    def get_business_prompt(self, query: str, language: Optional[Literal["zh-tw", "en"]] = None) -> str:
-        """Generate business-aware prompts for LLM with language context."""
-        try:
-            if not self.vector:
-                return f"Business context unavailable. Query: {query}"
-            if language is None:
-                language = detect_language(query)
-            logger.debug("BUSINESS_PROMPT: lang=%s query='%s'", language, query[:100])
-            prompt = self.vector.get_business_prompt(query)
-            logger.debug("BUSINESS_PROMPT_SUCCESS: prompt_length=%d", len(prompt))
-            return prompt
-        except Exception as e:
-            logger.error("BUSINESS_PROMPT_ERROR: lang=%s error=%s", language, str(e))
-            return f"Business context error. Query: {query}"
+        routing = self.get_intent_routing(query)
+
+        # Preferred tables from top intent
+        top_cand = (routing.get("candidates") or [{}])[0]
+        tables_from_intent = top_cand.get("tables") or []
+
+        # Vector fallback (uses dedup + cache internally)
+        vector_tables = [t for t, _ in self.find_relevant_tables_with_language(
+            query, schema_filter=schema_filter, language=language, rid=rid
+        )]
+
+        # Merge
+        tables = list(dict.fromkeys((tables_from_intent or []) + vector_tables))
+
+        # ── PREFER VAC RESULT for “remaining annual/特休” ─────────────────────
+        if _should_prefer_vac_result(query) and VAC_RESULT_TABLE not in tables:
+            tables.insert(0, VAC_RESULT_TABLE)
+
+        # Join hints from vector
+        join_hints = self.get_join_hints(tables)
+
+        # Strengthen hints when VAC is present
+        if any(t.lower().endswith("atdcalcuvacationresult]") or "ATDCALCUVACATIONRESULT" in t.upper() for t in tables):
+            vac_hint = (
+                f"-- PREFER {VAC_RESULT_TABLE} as authoritative for balances.\n"
+                f"-- Filters: r.REMAINDAYS > 0, r.VACAYEAR = @year (if provided), r.VACATIONTYPE = 1 (annual, if applicable),\n"
+                f"--           validity window: @today BETWEEN CAST(r.CANUSEDATE AS date) AND CAST(r.DISABLEDDATE AS date) (when present).\n"
+                f"-- Join: r.PERSONID → dbo.PSNACCOUNT.PERSONID; optional PSNACCOUNT.BRANCHID → {ORG_TABLE}.UNITID for department."
+            )
+            join_hints = f"{vac_hint}\n\n{join_hints or ''}".strip()
+
+        schema_ctx = self.get_schema_context_with_language(tables, query, language)
+
+        plan = {
+            "language": language,
+            "intent_context": {
+                "template_ref": top_cand.get("template_ref"),
+                "slots": routing.get("slots", {}),
+                "tables": tables,
+                "candidates": routing.get("candidates", []),
+                # Surface recommended filters to the LLM
+                "recommended_filters": ["REMAINDAYS > 0", "VACAYEAR = @year", "VACATIONTYPE = 1",
+                                        "BETWEEN CANUSEDATE AND DISABLEDDATE"],
+            },
+            "tables": tables,
+            "join_hints": join_hints,
+            "schema": schema_ctx,
+        }
+        logger.info("PLAN_FOR: lang=%s tables=%s template_ref=%s", language, tables, plan["intent_context"]["template_ref"])
+        return plan
+
+    # ---------------- end-to-end runner ----------------
+    def run_with_openai(
+        self,
+        openai_service,             # UnifiedBilingualOpenAIService
+        query: str,
+        *,
+        schema_filter: Optional[str] = None,
+        rid: Optional[str] = None,
+        max_rows: int = 1000,
+        query_timeout: int = 10,
+        max_attempts: int = 3,
+    ) -> Tuple[List[Tuple], List[str], str, int, Dict[str, Any]]:
+        """
+        Full pipeline:
+        - Build plan (intent + schema + joins)
+        - Call OpenAI service with intent_context
+        - Execute with DB service, attempt LLM repair if needed
+        Returns (rows, columns, sql, attempts, plan)
+        """
+        plan = self.plan_for(query, schema_filter=schema_filter, rid=rid)
+        rows, cols, sql, attempts = openai_service.run_query_with_llm_repair(
+            db_service=self.db_service,
+            user_question=query,
+            schema=plan["schema"],
+            join_hints=plan["join_hints"],
+            intent_context=plan["intent_context"],
+            max_rows=max_rows,
+            query_timeout=query_timeout,
+            max_attempts=max_attempts,
+        )
+        return rows, cols, sql, attempts, plan
 
     # ---------------- debug ----------------
     def debug_search(self, query: str, language: Optional[Literal["zh-tw", "en"]] = None) -> Dict[str, Any]:
@@ -316,6 +391,7 @@ class VectorSearchService:
 
             if language is None:
                 language = detect_language(query)
+            language = "zh-tw" if (language or "").lower().startswith("zh") else "en"
 
             results_overall: List[Dict[str, Any]] = []
             tried = []
@@ -338,16 +414,16 @@ class VectorSearchService:
                 except Exception as e:
                     tried.append((label, f"error: {e}"))
 
-            if (language or "").lower().startswith("zh"):
+            if language == "zh-tw":
                 _collect(query, "zh-tw")
-                q_zcn = _trad2simp(query)
-                if q_zcn and q_zcn != query:
-                    _collect(q_zcn, "zh-cn")
                 q_en = self.translator.translate_to_english(query, "zh-tw") or ""
                 if q_en:
                     _collect(q_en, "en")
             else:
-                _collect(query, language or "en")
+                _collect(query, "en")
+
+            # Also surface current intent routing for transparency
+            routing = self.get_intent_routing(query)
 
             return {
                 "query": query,
@@ -355,6 +431,7 @@ class VectorSearchService:
                 "tried": tried,
                 "results_count": len(results_overall),
                 "results": results_overall,
+                "intent_routing": routing,
             }
 
         except Exception as e:
