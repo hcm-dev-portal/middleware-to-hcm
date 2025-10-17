@@ -672,14 +672,26 @@ class LanguageNativeNLPService:
                 visualization_payload = None
                 if include_visualization and rows and columns and (_should_generate_chart(grounded_query, lang, columns) or force_chart_type):
                     try:
+                        # just before calling viz_service / chart_agent
                         df = pd.DataFrame(rows, columns=columns)
+
+                        # Parse likely date/time columns
                         for c in df.columns:
                             lc = str(c).lower()
                             if any(k in lc for k in ["date", "day", "time", "workdate", "startdate", "enddate", "canusedate", "disableddate"]):
                                 try:
-                                    df[c] = pd.to_datetime(df[c], errors="ignore")
+                                    df[c] = pd.to_datetime(df[c], errors="coerce")  # was "ignore"
                                 except Exception:
                                     pass
+
+                        # Parse numeric-looking columns
+                        for c in df.columns:
+                            if df[c].dtype == object:
+                                try:
+                                    df[c] = pd.to_numeric(df[c].str.replace(',', ''), errors="ignore")
+                                except Exception:
+                                    pass
+
                         forced = force_chart_type or _infer_forced_chart_type(grounded_query, lang)
                         if forced:
                             visualization_payload = self.viz_service.create_visualization(
@@ -696,6 +708,8 @@ class LanguageNativeNLPService:
                         if visualization_payload and lang == "zh-tw":
                             reason = visualization_payload.get("reasoning") or ""
                             visualization_payload["reasoning"] = f"圖表推薦：{reason}"
+                            logger.info("VIZ_INPUT: cols=%s rows=%d", list(df.columns), len(df))
+
                     except Exception as viz_e:
                         logger.warning("VISUALIZATION_AGENT_FAILED: %s", viz_e)
                         visualization_payload = {"enabled": False, "reason": f"Visualization error: {viz_e}"}

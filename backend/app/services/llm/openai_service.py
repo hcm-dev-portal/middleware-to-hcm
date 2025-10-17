@@ -66,24 +66,24 @@ def _schema_table_suffix(fullish: str) -> str:
 _ORG_SUFFIX = _schema_table_suffix(ORG_TABLE)
 _VAC_SUFFIX = _schema_table_suffix(VAC_RESULT_TABLE)
 
-# add to ALLOWED_TABLE_SUFFIXES
 ALLOWED_TABLE_SUFFIXES = {
     "dbo.atdleavedata",
     "dbo.atdleavecanceldata",
     "dbo.atdattendanceclass",
     "dbo.psnaccount",
-    "dbo.atdcalcuvacationresult",   # ← NEW
+    "dbo.atdcalcuvacationresult",
     _ORG_SUFFIX,
+    _VAC_SUFFIX,
 }
 
-# in TABLE_WHITELIST_TEXT join, include the exact name:
 TABLE_WHITELIST_TEXT = ", ".join(sorted({
     "dbo.ATDLEAVEDATA",
     "dbo.ATDLEAVECANCELDATA",
     "dbo.ATDATTENDANCECLASS",
     "dbo.PSNACCOUNT",
-    "dbo.ATDCALCUVACATIONRESULT",   # ← NEW
+    "dbo.ATDCALCUVACATIONRESULT",
     re.sub(r"[\[\]]", "", ORG_TABLE),
+    re.sub(r"[\[\]]", "", VAC_RESULT_TABLE),
 }))
 
 def _extract_sql_tables(sql: str) -> list[str]:
@@ -133,8 +133,26 @@ def detect_query_language(text: str) -> Literal["zh-tw", "en"]:
 class UnifiedBilingualOpenAIService:
     """
     Bilingual T-SQL generation/repair/explanation with strict SELECT-only guardrails,
-    now intent-aware (template_ref + slots + tables) and balance-snapshot aware.
+    intent-aware (template_ref + slots + tables) and balance-snapshot aware.
     """
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Template-ID aliases to keep LLM few-shots in sync with planner/recipes
+    # ────────────────────────────────────────────────────────────────────────
+    TEMPLATE_ID_ALIASES: Dict[str, str] = {
+        # balance synonyms
+        "annual_balance_by_person": "remaining_balance_by_person",
+        "remaining_balance_by_person": "annual_balance_by_person",
+        # range/weekly variants → map to concrete few-shots
+        "range_who_on_leave": "range_who_on_leave",
+        "weekly_count_people": "weekly_count_people",
+        # convenience: map day/month variants
+        "today_who_on_leave": "current_on_leave_by_dept",
+        "yday_who_on_leave": "current_on_leave_by_dept",
+        "month_who_on_leave": "usage_by_type_when_who",
+        # person history by emp no
+        "person_history_by_empno": "person_history_by_empno",
+    }
 
     # ────────────────────────────────────────────────────────────────────────
     # Few-shot templates keyed by template_ref (bilingual, alias-safe)
@@ -144,12 +162,6 @@ class UnifiedBilingualOpenAIService:
         "current_on_leave_by_dept": {
             "en": (
                 "-- intent: current_on_leave_by_dept\n"
-                "WITH x AS (\n"
-                "    SELECT fact.PERSONID\n"
-                "    FROM dbo.ATDLEAVEDATA AS fact\n"
-                "    WHERE fact.VALIDATED = 1\n"
-                "      AND CAST(@today AS date) BETWEEN CAST(fact.STARTDATE AS date) AND CAST(fact.ENDDATE AS date)\n"
-                ")\n"
                 "SELECT COALESCE(org.UNITDISPLAYNAME, org.UNITNAME) AS department_name,\n"
                 "       p.EMPLOYEEID AS employee_id,\n"
                 "       p.TRUENAME   AS person_name,\n"
@@ -165,12 +177,6 @@ class UnifiedBilingualOpenAIService:
             ),
             "zh": (
                 "-- 意圖: current_on_leave_by_dept\n"
-                "WITH x AS (\n"
-                "    SELECT fact.PERSONID\n"
-                "    FROM dbo.ATDLEAVEDATA AS fact\n"
-                "    WHERE fact.VALIDATED = 1\n"
-                "      AND CAST(@today AS date) BETWEEN CAST(fact.STARTDATE AS date) AND CAST(fact.ENDDATE AS date)\n"
-                ")\n"
                 "SELECT COALESCE(org.UNITDISPLAYNAME, org.UNITNAME) AS 部門,\n"
                 "       p.EMPLOYEEID AS 員編,\n"
                 "       p.TRUENAME   AS 姓名,\n"
@@ -301,7 +307,7 @@ class UnifiedBilingualOpenAIService:
                 "  ON CAST(fact.LEAVEID AS NVARCHAR(100)) = CAST(cls.ID AS NVARCHAR(100))"
             ),
         },
-        # Usage by type/when/who
+        # Usage by type/when/who (also serves as month scope)
         "usage_by_type_when_who": {
             "en": (
                 "-- intent: usage_by_type_when_who\n"
@@ -348,49 +354,36 @@ class UnifiedBilingualOpenAIService:
                 "ORDER BY 工作日, 部門, 姓名, 假別名稱"
             ),
         },
-        # ✅ Authoritative: remaining balance by person (snapshot table)
+        # ✅ Authoritative: remaining balance by person (snapshot table) – BOTH IDs supported
         "remaining_balance_by_person": {
             "en": (
-                "-- intent: remaining_balance_by_person (authoritative balance source)\n"
-                "SELECT p.PERSONID        AS person_id,\n"
-                "       p.EMPLOYEEID      AS employee_id,\n"
-                "       p.TRUENAME        AS person_name,\n"
-                "       bal.VACAYEAR      AS year,\n"
-                "       bal.VACAMONTH     AS month,\n"
-                "       bal.VACATIONTYPE  AS vacation_type_code,\n"
-                "       bal.VACDAYS       AS entitlement_days,\n"
-                "       bal.USEDAYS       AS used_days,\n"
-                "       bal.REMAINDAYS    AS remaining_days,\n"
-                "       bal.CANUSEDATE    AS can_use_from,\n"
-                "       bal.DISABLEDDATE  AS disable_on,\n"
-                "       bal.LASTYEARREMAINDAYS AS carry_over_days\n"
-                "FROM dbo.ATDCALCUVACATIONRESULT AS bal\n"
-                "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = bal.PERSONID\n"
-                "WHERE (@year IS NULL OR bal.VACAYEAR = @year)\n"
-                "  AND bal.REMAINDAYS > 0\n"
-                "  AND (@today IS NULL OR (bal.CANUSEDATE <= CAST(@today AS date))\n"
-                "                        AND (bal.DISABLEDDATE IS NULL OR bal.DISABLEDDATE >= CAST(@today AS date)))\n"
-            ),
-            "zh": (
-                "-- 意圖: remaining_balance_by_person（權威餘額來源）\n"
-                "SELECT p.PERSONID        AS 人員ID,\n"
-                "       p.EMPLOYEEID      AS 員工編號,\n"
-                "       p.TRUENAME        AS 姓名,\n"
-                "       bal.VACAYEAR      AS 年度,\n"
-                "       bal.VACAMONTH     AS 月份,\n"
-                "       bal.VACATIONTYPE  AS 假別代碼,\n"
-                "       bal.VACDAYS       AS 給定天數,\n"
-                "       bal.USEDAYS       AS 已用天數,\n"
-                "       bal.REMAINDAYS    AS 剩餘天數,\n"
-                "       bal.CANUSEDATE    AS 可用起日,\n"
-                "       bal.DISABLEDDATE  AS 失效日,\n"
-                "       bal.LASTYEARREMAINDAYS AS 去年遞延天數\n"
-                "FROM dbo.ATDCALCUVACATIONRESULT AS bal\n"
-                "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = bal.PERSONID\n"
-                "WHERE (@year IS NULL OR bal.VACAYEAR = @year)\n"
-                "  AND bal.REMAINDAYS > 0\n"
-                "  AND (@today IS NULL OR (bal.CANUSEDATE <= CAST(@today AS date))\n"
-                "                        AND (bal.DISABLEDDATE IS NULL OR bal.DISABLEDDATE >= CAST(@today AS date)))\n"
+                f"-- intent: remaining_balance_by_person (authoritative: {VAC_RESULT_TABLE})\n"
+                "WITH latest AS (\n"
+                f"  SELECT r.PERSONID, r.VACAYEAR, r.VACAMONTH, r.VACATIONTYPE,\n"
+                "         r.VACDAYS, r.USEDAYS, r.REMAINDAYS, r.CANUSEDATE, r.DISABLEDDATE,\n"
+                "         r.LASTEDITTIME, r.CREATIONTIME,\n"
+                "         ROW_NUMBER() OVER (\n"
+                "           PARTITION BY r.PERSONID, r.VACAYEAR, r.VACATIONTYPE\n"
+                "           ORDER BY ISNULL(r.LASTEDITTIME, r.CREATIONTIME) DESC,\n"
+                "                    ISNULL(r.DISABLEDDATE, '9999-12-31') DESC,\n"
+                "                    r.VACAMONTH DESC\n"
+                "         ) AS rn\n"
+                f"  FROM {VAC_RESULT_TABLE} AS r\n"
+                "  WHERE (@year IS NULL OR r.VACAYEAR = @year)\n"
+                "    AND (@vacationtype IS NULL OR r.VACATIONTYPE = @vacationtype)\n"
+                "    AND (r.CANUSEDATE IS NULL OR CAST(@today AS date) >= CAST(r.CANUSEDATE AS date))\n"
+                "    AND (r.DISABLEDDATE IS NULL OR CAST(@today AS date) <= CAST(r.DISABLEDDATE AS date))\n"
+                ")\n"
+                "SELECT COALESCE(org.UNITDISPLAYNAME, org.UNITNAME) AS department_name,\n"
+                "       p.EMPLOYEEID AS employee_id,\n"
+                "       p.TRUENAME   AS person_name,\n"
+                "       l.VACAYEAR, l.VACATIONTYPE, l.VACDAYS, l.USEDAYS, l.REMAINDAYS,\n"
+                "       l.CANUSEDATE, l.DISABLEDDATE\n"
+                "FROM latest AS l\n"
+                "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = l.PERSONID\n"
+                f"LEFT JOIN {ORG_TABLE} AS org ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))\n"
+                "WHERE l.rn = 1 AND l.REMAINDAYS > 0\n"
+                "ORDER BY department_name, person_name"
             ),
             "zh": (
                 f"-- 意圖: remaining_balance_by_person（權威來源：{VAC_RESULT_TABLE}）\n"
@@ -418,9 +411,14 @@ class UnifiedBilingualOpenAIService:
                 "FROM latest AS l\n"
                 "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = l.PERSONID\n"
                 f"LEFT JOIN {ORG_TABLE} AS org ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))\n"
-                "WHERE l.rn = 1\n"
+                "WHERE l.rn = 1 AND l.REMAINDAYS > 0\n"
                 "ORDER BY 部門, 姓名"
             ),
+        },
+        # Mirror for alias id
+        "annual_balance_by_person": {  # maps to same few-shot
+            "en": "",  # will be resolved to remaining_balance_by_person
+            "zh": "",
         },
         # Person → Branch map
         "person_branch_map": {
@@ -447,6 +445,85 @@ class UnifiedBilingualOpenAIService:
                 "FROM dbo.PSNACCOUNT AS p\n"
                 f"LEFT JOIN {ORG_TABLE} AS org\n"
                 "  ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))"
+            ),
+        },
+        # 🔹 Date range "who's on leave"
+        "range_who_on_leave": {
+            "en": (
+                "-- intent: range_who_on_leave\n"
+                "SELECT DISTINCT p.EMPLOYEEID AS employee_id,\n"
+                "       p.TRUENAME   AS person_name,\n"
+                "       CAST(fact.WORKDATE AS date) AS work_date,\n"
+                "       fact.ATTENDANCETYPE,\n"
+                "       ISNULL(fact.HOURS,0) AS leave_hours\n"
+                "FROM dbo.ATDLEAVEDATA AS fact\n"
+                "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = fact.PERSONID\n"
+                "WHERE fact.VALIDATED = 1\n"
+                "  AND CAST(fact.WORKDATE AS date) BETWEEN CAST(@start_date AS date) AND CAST(@end_date AS date)\n"
+                "ORDER BY work_date DESC, person_name ASC"
+            ),
+            "zh": (
+                "-- 意圖: range_who_on_leave\n"
+                "SELECT DISTINCT p.EMPLOYEEID AS 員編,\n"
+                "       p.TRUENAME   AS 姓名,\n"
+                "       CAST(fact.WORKDATE AS date) AS 工作日,\n"
+                "       fact.ATTENDANCETYPE,\n"
+                "       ISNULL(fact.HOURS,0) AS 請假時數\n"
+                "FROM dbo.ATDLEAVEDATA AS fact\n"
+                "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = fact.PERSONID\n"
+                "WHERE fact.VALIDATED = 1\n"
+                "  AND CAST(fact.WORKDATE AS date) BETWEEN CAST(@start_date AS date) AND CAST(@end_date AS date)\n"
+                "ORDER BY 工作日 DESC, 姓名 ASC"
+            ),
+        },
+        # 🔹 Weekly count of people on leave
+        "weekly_count_people": {
+            "en": (
+                "-- intent: weekly_count_people\n"
+                "SELECT COUNT(DISTINCT fact.PERSONID) AS PeopleOnLeave\n"
+                "FROM dbo.ATDLEAVEDATA AS fact\n"
+                "WHERE fact.VALIDATED = 1\n"
+                "  AND CAST(fact.WORKDATE AS date) BETWEEN CAST(@week_start AS date) AND CAST(@week_end AS date)"
+            ),
+            "zh": (
+                "-- 意圖: weekly_count_people\n"
+                "SELECT COUNT(DISTINCT fact.PERSONID) AS 本週請假人數\n"
+                "FROM dbo.ATDLEAVEDATA AS fact\n"
+                "WHERE fact.VALIDATED = 1\n"
+                "  AND CAST(fact.WORKDATE AS date) BETWEEN CAST(@week_start AS date) AND CAST(@week_end AS date)"
+            ),
+        },
+        # 🔹 Person history by employee no.
+        "person_history_by_empno": {
+            "en": (
+                "-- intent: person_history_by_empno\n"
+                "SELECT p.EMPLOYEEID AS employee_id,\n"
+                "       p.TRUENAME   AS person_name,\n"
+                "       CAST(fact.WORKDATE AS date) AS work_date,\n"
+                "       fact.ATTENDANCETYPE,\n"
+                "       ISNULL(fact.HOURS,0) AS leave_hours,\n"
+                "       CAST(fact.STARTDATE AS date) AS start_date,\n"
+                "       CAST(fact.ENDDATE   AS date) AS end_date,\n"
+                "       fact.LEAVEREASON\n"
+                "FROM dbo.ATDLEAVEDATA AS fact\n"
+                "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = fact.PERSONID\n"
+                "WHERE (@emp_no IS NULL OR p.EMPLOYEEID = @emp_no)\n"
+                "ORDER BY work_date DESC, start_date DESC"
+            ),
+            "zh": (
+                "-- 意圖: person_history_by_empno\n"
+                "SELECT p.EMPLOYEEID AS 員編,\n"
+                "       p.TRUENAME   AS 姓名,\n"
+                "       CAST(fact.WORKDATE AS date) AS 工作日,\n"
+                "       fact.ATTENDANCETYPE,\n"
+                "       ISNULL(fact.HOURS,0) AS 請假時數,\n"
+                "       CAST(fact.STARTDATE AS date) AS 起始日,\n"
+                "       CAST(fact.ENDDATE   AS date) AS 結束日,\n"
+                "       fact.LEAVEREASON\n"
+                "FROM dbo.ATDLEAVEDATA AS fact\n"
+                "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = fact.PERSONID\n"
+                "WHERE (@emp_no IS NULL OR p.EMPLOYEEID = @emp_no)\n"
+                "ORDER BY 工作日 DESC, 起始日 DESC"
             ),
         },
     }
@@ -529,7 +606,6 @@ class UnifiedBilingualOpenAIService:
 
     def _explain_cache_put(self, k: str, v: str):
         if len(self._explain_cache) >= self._explain_cache_max:
-            # simple FIFO trim
             old_key = next(iter(self._explain_cache))
             self._explain_cache.pop(old_key, None)
         self._explain_cache[k] = v
@@ -697,16 +773,31 @@ class UnifiedBilingualOpenAIService:
     # ────────────────────────────────────────────────────────────────────────────
     # Utilities (intent block, few-shot rendering, extraction, sanitation, fixes)
     # ────────────────────────────────────────────────────────────────────────────
+    def _resolve_template_id(self, template_ref: Optional[str]) -> Optional[str]:
+        if not template_ref:
+            return None
+        # if present, keep; else map via alias
+        if template_ref in self.FEW_SHOT_TEMPLATES and any(self.FEW_SHOT_TEMPLATES[template_ref].values()):
+            return template_ref
+        alt = self.TEMPLATE_ID_ALIASES.get(template_ref)
+        if alt and alt in self.FEW_SHOT_TEMPLATES:
+            return alt
+        return template_ref
+
     def _render_few_shot(self, template_ref: Optional[str], slots: Dict[str, Any],
                          language: Literal["zh-tw", "en"]) -> str:
         if not template_ref:
             return ""
-        tpl = self.FEW_SHOT_TEMPLATES.get(template_ref)
+        tpl_id = self._resolve_template_id(template_ref)
+        tpl = self.FEW_SHOT_TEMPLATES.get(tpl_id or "")
         if not tpl:
             return ""
-        raw = tpl["zh" if language == "zh-tw" else "en"]
-        # Basic interpolation (keep @year/@today as bind params; only replace {year} if present)
-        year = slots.get("year") or slots.get("Year") or ""
+        # if alias points to blank shell, reroute to the canonical balance template
+        if tpl_id == "annual_balance_by_person":
+            tpl = self.FEW_SHOT_TEMPLATES.get("remaining_balance_by_person", tpl)
+        raw = tpl["zh" if language == "zh-tw" else "en"] or ""
+        # Basic interpolation (keep @year/@today etc. as bind params)
+        year = slots.get("year") or ""
         rendered = raw.replace("{year}", str(year) if year else "2024")
         return rendered
 
@@ -786,6 +877,51 @@ class UnifiedBilingualOpenAIService:
         s = self._tsql_limit_fix(s)
         s = self._ensure_select_only(s)
         return s.strip()
+
+    # --- DEMO-SAFE: inline known @vars from intent slots (avoids @emp_no/@from errors) ---
+    def _inline_known_bind_vars(self, sql: str, slots: Optional[Dict[str, Any]]) -> str:
+        """
+        Replace common @vars with sanitized literals from slots.
+        This is a pragmatic demo fix; for production prefer parametrization in db_service.
+        """
+        if not sql or not slots:
+            return sql
+
+        def q(s: Any) -> str:
+            # NVARCHAR literal with single-quote escaping
+            t = "" if s is None else str(s)
+            return "N'" + t.replace("'", "''") + "'"
+
+        def qi(s: Any) -> str:
+            # integer-ish
+            try:
+                return str(int(s))
+            except Exception:
+                return "NULL"
+
+        def qd(s: Any) -> str:
+            # date literal
+            t = "" if s is None else str(s)
+            return "'" + t.replace("'", "''") + "'"
+
+        # Slot→@var map we know our prompts/cheat SQL use
+        mapping = {
+            "@emp_no":       ("emp_no", q),
+            "@employeeid":   ("employeeid", q),
+            "@vacationtype": ("vacationtype", qi),
+            "@year":         ("year", qi),
+            "@from":         ("from", qd),
+            "@to":           ("to", qd),
+            "@start_date":   ("start_date", qd),
+            "@end_date":     ("end_date", qd),
+            "@week_start":   ("week_start", qd),
+            "@week_end":     ("week_end", qd),
+        }
+        s = sql
+        for var, (slot_key, caster) in mapping.items():
+            if var in s and slot_key in slots:
+                s = s.replace(var, caster(slots.get(slot_key)))
+        return s
 
     def _create_query_signature(self, query: str, language: str) -> str:
         normalized = re.sub(r"\s+", " ", (query or "").lower().strip())
@@ -872,7 +1008,9 @@ class UnifiedBilingualOpenAIService:
 
             intent_debug = self._intent_debug(intent_context)
             slots = (intent_context or {}).get("slots", {}) or {}
-            few_shot = self._render_few_shot((intent_context or {}).get("template_ref"), slots, language)
+            # Resolve alias id to canonical few-shot
+            template_ref = (intent_context or {}).get("template_ref")
+            few_shot = self._render_few_shot(template_ref, slots, language)
 
             sanitized_schema = _prune_schema_text(schema)
 
@@ -951,7 +1089,8 @@ class UnifiedBilingualOpenAIService:
 
                 intent_debug = self._intent_debug(intent_context)
                 slots = (intent_context or {}).get("slots", {}) or {}
-                few_shot = self._render_few_shot((intent_context or {}).get("template_ref"), slots, language)
+                template_ref = (intent_context or {}).get("template_ref")
+                few_shot = self._render_few_shot(template_ref, slots, language)
 
                 messages = repair_prompt.format_messages(
                     failed_sql=failed_sql or sql,
@@ -1010,6 +1149,7 @@ class UnifiedBilingualOpenAIService:
         logger.info("QUERY_START: sig=%s lang=%s rows<=%d timeout=%s attempts<=%d",
                     sig, language, max_rows, query_timeout, max_attempts)
 
+        # First, generate SQL once (fresh gen); repairs happen later if needed.
         sql, attempts = self.generate_sql_with_repair(
             question=user_question,
             schema=schema,
@@ -1021,12 +1161,15 @@ class UnifiedBilingualOpenAIService:
 
         try:
             a0 = time.perf_counter()
-            rows, cols = db_service.run_select(sql, params=params, max_rows=max_rows, query_timeout=query_timeout)
+            # Inline known vars from intent slots before execution (prevents @emp_no/@from/@to errors)
+            sql_exec = self._inline_known_bind_vars(sql, (intent_context or {}).get("slots"))
+            rows, cols = db_service.run_select(sql_exec, params=params, max_rows=max_rows, query_timeout=query_timeout)
             logger.info("QUERY_OK: sig=%s attempts=%d rows=%d cols=%d exec=%.2fs total=%.2fs",
                         sig, attempts, len(rows), len(cols),
                         time.perf_counter() - a0, time.perf_counter() - t0)
-            logger.info("QUERY_SQL_OK: sig=%s sql=%s", sig, sql[:300])
-            return rows, cols, sql, attempts
+            logger.info("QUERY_SQL_OK: sig=%s sql=%s", sig, sql_exec[:300])
+            return rows, cols, sql_exec, attempts
+
         except DBServiceQueryError as e:
             logger.warning("QUERY_FAIL: sig=%s attempt=1 err=%s: %s", sig, type(e).__name__, str(e)[:240])
             if not self._is_repairable_error(e):
@@ -1036,6 +1179,7 @@ class UnifiedBilingualOpenAIService:
             error_details = self._build_error_summary(e, language)
             last_sql = sql
 
+            # Repair loop
             while attempts < max_attempts:
                 attempts += 1
                 logger.debug("QUERY_REPAIR: sig=%s attempt=%d", sig, attempts)
@@ -1051,11 +1195,12 @@ class UnifiedBilingualOpenAIService:
                 )
                 try:
                     a0 = time.perf_counter()
-                    rows, cols = db_service.run_select(sql, params=params, max_rows=max_rows, query_timeout=query_timeout)
+                    sql_exec = self._inline_known_bind_vars(sql, (intent_context or {}).get("slots"))
+                    rows, cols = db_service.run_select(sql_exec, params=params, max_rows=max_rows, query_timeout=query_timeout)
                     logger.info("QUERY_REPAIR_OK: sig=%s attempts=%d rows=%d exec=%.2fs total=%.2fs",
                                 sig, attempts, len(rows), time.perf_counter() - a0, time.perf_counter() - t0)
-                    logger.info("QUERY_SQL_REPAIRED: sig=%s sql=%s", sig, sql[:300])
-                    return rows, cols, sql, attempts
+                    logger.info("QUERY_SQL_REPAIRED: sig=%s sql=%s", sig, sql_exec[:300])
+                    return rows, cols, sql_exec, attempts
                 except DBServiceQueryError as e2:
                     logger.warning("QUERY_REPAIR_FAIL: sig=%s attempt=%d %s: %s",
                                    sig, attempts, type(e2).__name__, str(e2)[:240])
@@ -1067,6 +1212,7 @@ class UnifiedBilingualOpenAIService:
 
             logger.error("QUERY_EXHAUSTED: sig=%s attempts=%d total=%.2fs", sig, attempts, time.perf_counter() - t0)
             raise
+
 
     def _build_error_summary(self, e: DBServiceQueryError, language: Literal["zh-tw", "en"]) -> str:
         parts = []

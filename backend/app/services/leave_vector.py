@@ -1,5 +1,4 @@
 # backend/app/services/leave_vector.py
-# backend/app/services/leave_vector.py
 from __future__ import annotations
 
 import os
@@ -11,7 +10,8 @@ from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Tuple, Iterable, Set, Optional, Any, Literal
-from datetime import datetime
+from datetime import datetime, timedelta
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,52 @@ ORG_TABLE = os.getenv("ORG_TABLE", "[eHRAntung_DB].[dbo].[ORGStdStruct]")
 VAC_RESULT_TABLE = os.getenv("VAC_RESULT_TABLE", "[eHRAntung_DB].[dbo].[ATDCALCUVACATIONRESULT]")
 
 # ───────────────────────────────────────────────────────────────────────────────
-# Intent-first scaffold (bilingual, lightweight)
+# DEMO “cheat” schema map (logical → candidate physical names)
+# These are resolved against your provided TableSchema.columns to avoid 42S22.
+# ───────────────────────────────────────────────────────────────────────────────
+SCHEMA_MAP = {
+    "PSNACCOUNT": {
+        "PERSON_ID": ["PERSONID", "PersonID"],
+        "NAME": ["TRUENAME", "CNAME", "NAME", "FULLNAME"],
+        "EMP_NO": ["EMPLOYEEID", "EMPLOYEENO", "WORKNO", "EMPNO", "員工編號", "工號", "員編"],
+        "DEPT_ID": ["BRANCHID", "DEPARTMENTID"],
+        "DEPT_NAME": ["DEPARTMENT_NAME"],  # not in table; resolved via ORG join
+    },
+    "ATDLEAVEDATA": {
+        "PERSON_ID": ["PERSONID", "PersonID"],
+        "WORK_DATE": ["WORKDATE", "LEAVEDATE", "STARTDATE"],
+        "START_DATE": ["STARTDATE"],
+        "END_DATE": ["ENDDATE"],
+        "HOURS": ["HOURS", "LEAVEHOURS"],
+        "DAYS": ["LEAVEDAYS", "DAYS"],
+        "TYPE": ["ATTENDANCETYPE", "LEAVEID", "TIMECLASSID"],
+        "VALIDATED": ["VALIDATED"],
+        "UPDATED_AT": ["LASTUPDATETIME", "UPDATETIME", "LASTEDITTIME"],
+    },
+    "ATDCALCUVACATIONRESULT": {
+        "PERSON_ID": ["PERSONID", "PersonID"],
+        "YEAR": ["VACAYEAR", "YEAR"],
+        "VAC_MONTH": ["VACAMONTH"],
+        "TYPE": ["VACATIONTYPE", "LEAVETYPE", "LEAVETYPEID"],
+        "REMAIN_DAYS": ["REMAINDAYS", "REMAININGDAYS"],
+        "REMAIN_HOURS": ["REMAINHOURS", "REMAININGHOURS"],
+        "VAC_DAYS": ["VACDAYS"],
+        "USE_DAYS": ["USEDAYS"],
+        "CAN_USE_DATE": ["CANUSEDATE"],
+        "DISABLE_DATE": ["DISABLEDDATE"],
+        "UPDATED_AT": ["LASTEDITTIME", "UPDATETIME"],
+        "CREATED_AT": ["CREATIONTIME"],
+    },
+    "ORG": {
+        "UNIT_ID": ["UNITID"],
+        "UNIT_NAME": ["UNITNAME"],
+        "UNIT_DISPLAY": ["UNITDISPLAYNAME"],
+        "UNIT_CODE": ["UNITCODE"],
+    }
+}
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Intent-first scaffold (bilingual, lightweight) — untouched
 # ───────────────────────────────────────────────────────────────────────────────
 INTENT_SKILLS = [
     {
@@ -54,7 +99,7 @@ INTENT_SKILLS = [
         "slots": ["year?", "vacationtype?"],
         "phrases_zh": ["剩餘特休", "剩餘特休假", "年假餘額", "還有年假", "未用年假"],
         "phrases_en": ["remaining annual leave", "unused pto", "annual leave balance"],
-        "template_ref": "remaining_balance_by_person",
+        "template_ref": "annual_balance_by_person",
     },
     {
         "id": "cancellations_detail",
@@ -97,10 +142,7 @@ LEXICON = {
             "zh": ["特休", "年假", "年休", "年假時數", "年假天數"],
             "en": ["annual leave", "pto"],
         },
-        "org_map": {
-            "zh": ["部門", "單位", "分公司"],
-            "en": ["branch", "department", "org"],
-        },
+        "org_map": {"zh": ["部門", "單位", "分公司"], "en": ["branch", "department", "org"]},
     },
     "action": {
         "remaining": {"zh": ["剩餘", "餘額", "未用", "還有", "可用"], "en": ["remaining", "unused", "balance", "available"]},
@@ -129,11 +171,14 @@ def _extract_slots_from_text(q: str, lang_hint: Optional[str] = None) -> Dict[st
     # year
     m = re.search(r"(20\d{2})", q)
     year = int(m.group(1)) if m else None
-    # vacationtype (heuristic): 年假/特休/annual → 1 (can be overridden upstream)
-    vtype = None
-    if any(tok in q for tok in ["特休", "年假", "annual"]):
-        vtype = 1
-    return {"measure": measure, "action": action, "year": year, "vacationtype": vtype}
+    # vacationtype heuristic
+    vtype = 1 if any(tok in q for tok in ["特休", "年假", "annual"]) else None
+    # threshold hours (e.g., 大於200小時 / >200小時)
+    th = None
+    m2 = re.search(r"(?:大於|超過|>|≥|>=)\s*(\d+)\s*小時", q)
+    if m2:
+        th = int(m2.group(1))
+    return {"measure": measure, "action": action, "year": year, "vacationtype": vtype, "threshold_hours": th}
 
 def canonicalize_query_intent(q: str, lang: Optional[str]) -> Dict[str, Optional[Any]]:
     lang_hint = "zh" if (lang and "zh" in lang) else None
@@ -211,7 +256,37 @@ def detect_language(text: str) -> Literal["zh-tw", "en"]:
     return "en"
 
 # ───────────────────────────────────────────────────────────────────────────────
-# Data model meta
+# Date helpers (Asia/Taipei assumed server; if not, still fine for demo)
+# ───────────────────────────────────────────────────────────────────────────────
+def _today_date() -> datetime:
+    return datetime.now()
+
+def _iso(d: datetime) -> str:
+    return d.strftime("%Y-%m-%d")
+
+def _week_window(dt: Optional[datetime] = None) -> Tuple[str, str]:
+    dt = dt or _today_date()
+    # ISO week: Monday start
+    start = dt - timedelta(days=(dt.weekday()))
+    end = start + timedelta(days=6)
+    return _iso(start), _iso(end)
+
+def _parse_mmdd_range(txt: str) -> Optional[Tuple[str, str]]:
+    # Accept: 9/22-9/26 or 09/22 ~ 09/26 or 9/22至9/26
+    m = re.search(r'(\d{1,2})\s*/\s*(\d{1,2})\s*[-~至到]\s*(\d{1,2})\s*/\s*(\d{1,2})', txt)
+    if not m:
+        return None
+    y = _today_date().year
+    m1, d1, m2, d2 = map(int, m.groups())
+    try:
+        start = datetime(y, m1, d1)
+        end = datetime(y, m2, d2)
+    except ValueError:
+        return None
+    return _iso(start), _iso(end)
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Data model meta (unchanged)
 # ───────────────────────────────────────────────────────────────────────────────
 class JoinType(Enum):
     INNER = "INNER"
@@ -330,7 +405,7 @@ class VectorItem:
     def get_text_for_lang(self, lang: Literal["zh-tw", "en"]) -> str:
         return self.text_zh if lang == "zh-tw" else self.text_en
 
-# Column alias heuristics
+# Column alias heuristics (unchanged)
 COLUMN_ALIASES: Dict[str, Set[str]] = {
     "BUSINESSUNITID": {"BUSINESSUINTID"},
     "EFFECTIVEDATE": {"EFFINIENTDATE", "EFFICIENTDATE", "EFFDATE"},
@@ -347,7 +422,6 @@ def _has_col(table: "TableSchema", name: str) -> bool:
             if canonical in cols or any(a.upper() in cols for a in aliases):
                 return True
     return False
-
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Main Vector DB
@@ -387,12 +461,98 @@ class LeaveVectorDB:
         self._build_vector_items()
         self._build_indexes()
 
-    # ---------------- intent routing
+    # ───────────────────────────────────────────────────────────────────────
+    # DEMO-SAFE: public no-op to stop VDB_RECORD_OUTCOME_FAIL warnings
+    # ───────────────────────────────────────────────────────────────────────
+    def record_outcome(self, **kwargs) -> None:
+        # Intentionally a no-op for demo stability
+        try:
+            logger.debug("LeaveVectorDB.record_outcome: %s", {k: v for k, v in kwargs.items() if k in ("query","success","tables")})
+        except Exception:
+            pass
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Internal helpers: schema pickers
+    # ───────────────────────────────────────────────────────────────────────
+    def _pick(self, table_full: str, logical_key: str, default: Optional[str] = None) -> str:
+        """Pick the first existing column mapped for logical_key on table_full."""
+        t = self._by_name.get(table_full.lower())
+        if not t:
+            return default or logical_key
+        # Resolve logical class
+        if table_full.lower().endswith("psnaccount"):
+            pool = SCHEMA_MAP["PSNACCOUNT"].get(logical_key, [])
+        elif table_full.lower().endswith("orgstdstruct") or table_full.lower() == ORG_TABLE.lower():
+            pool = SCHEMA_MAP["ORG"].get(logical_key, [])
+        elif table_full.lower().endswith("atdleavedata"):
+            pool = SCHEMA_MAP["ATDLEAVEDATA"].get(logical_key, [])
+        elif table_full.lower() == VAC_RESULT_TABLE.lower():
+            pool = SCHEMA_MAP["ATDCALCUVACATIONRESULT"].get(logical_key, [])
+        else:
+            pool = []
+        colsU = {c.upper(): c for c in t.columns}
+        for cand in pool:
+            if cand.upper() in colsU:
+                return colsU[cand.upper()]
+        # fallback: first col if we must not fail
+        if default:
+            return default
+        return next(iter(t.columns), logical_key)
+
+    def _emp_no_col(self) -> str:
+        pt = self._by_name.get((self._person_table or "").lower())
+        if not pt:
+            return "EMPLOYEEID"
+        cand = SCHEMA_MAP["PSNACCOUNT"]["EMP_NO"]
+        colsU = {c.upper(): c for c in pt.columns}
+        for c in cand:
+            if c.upper() in colsU:
+                return colsU[c.upper()]
+        return "EMPLOYEEID"
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Intent classification (cheat router)
+    # ───────────────────────────────────────────────────────────────────────
+    def _classify_intent(self, q: str) -> str:
+        t = (q or "").lower()
+        # history with employee number
+        if any(k in t for k in ["歷史", "紀錄", "記錄", "history", "past", "trend"]):
+            if any(k in t for k in ["員工編號", "工號", "員編", "emp", "employee"]):
+                return "PERSON_HISTORY_BY_EMP_NO"
+            return "LEAVE_HISTORY_GENERIC"
+        # remaining balance
+        if any(k in t for k in ["剩餘", "餘額", "余额", "還有", "可用", "balance", "remaining", "available"]) and any(k in t for k in ["特休", "年假", "annual"]):
+            if any(k in t for k in ["大於", ">", "超過", "至少", "more than"]):
+                return "BALANCE_YEAR_THRESHOLD_HOURS"
+            return "BALANCE_YEAR_REMAINING"
+        # explicit ranges
+        if "-" in t or "至" in t or "到" in t:
+            return "RANGE_WHO_ON_LEAVE"
+        # week
+        if any(k in t for k in ["本週", "這週", "this week"]):
+            if any(k in t for k in ["多少人", "人數", "count", "一人", "1人"]):
+                return "WEEKLY_COUNT"
+            return "WEEKLY_WHO_ON_LEAVE"
+        # today / yesterday
+        if any(k in t for k in ["今天", "今日", "today"]):
+            return "TODAY_WHO_ON_LEAVE"
+        if any(k in t for k in ["昨天", "昨日", "yesterday"]):
+            return "YDAY_WHO_ON_LEAVE"
+        # month
+        if any(k in t for k in ["本月", "這個月", "this month"]):
+            if "統計" in t or "總時數" in t:
+                return "MONTH_SUM_HOURS"
+            return "MONTH_WHO_ON_LEAVE"
+        return "GENERIC_LEAVE_LOOKUP"
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Intent routing (kept API, returns template_ref for vector_search_service)
+    # ───────────────────────────────────────────────────────────────────────
     def get_intent_routing(self, query: str) -> Dict[str, Any]:
         lang = detect_language(query)
         q = (query or "").lower()
 
-        plan = {
+        plan: Dict[str, Any] = {
             "intent": "generic",
             "template_ref": None,
             "slots": {},
@@ -400,34 +560,64 @@ class LeaveVectorDB:
             "language": lang,
         }
 
-        m = re.search(r"\b(20\d{2})\b", q)
-        if m:
-            plan["slots"]["year"] = m.group(1)
+        # year + threshold extraction
+        slots = canonicalize_query_intent(query, lang)
+        if slots.get("year"):
+            plan["slots"]["year"] = slots["year"]
+        if slots.get("threshold_hours"):
+            plan["slots"]["threshold_hours"] = slots["threshold_hours"]
 
-        # Prefer the authoritative snapshot for balance questions
-        if any(k in q for k in ["剩餘", "餘額", "余额", "remaining", "balance"]) and any(k in q for k in ["特休", "年假", "annual"]):
-            if self._exists(VAC_RESULT_TABLE):
-                plan.update({
-                    "intent": "remaining_balance_by_person",
-                    "template_ref": "remaining_balance_by_person",
-                    "tables": [VAC_RESULT_TABLE, self._person_table or "dbo.PSNACCOUNT", ORG_TABLE],
-                })
+        # date anchoring
+        rng = _parse_mmdd_range(q)
+        if rng:
+            plan["slots"]["start_date"], plan["slots"]["end_date"] = rng
+        elif any(k in q for k in ["本週", "這週", "this week"]):
+            s, e = _week_window()
+            plan["slots"]["start_date"], plan["slots"]["end_date"] = s, e
+
+        # employee number (keep leading zeros)
+        m_emp = re.search(r"(?:員工編號|工號|員編|employee\s*no\.?|empid|emp\s*no\.?)\s*[:：]?\s*([A-Za-z0-9\-]+)", query)
+        if m_emp:
+            plan["slots"]["emp_no"] = m_emp.group(1).strip()
+
+        # classify
+        label = self._classify_intent(query)
+        plan["intent"] = label
+
+        # table routing + template_ref
+        psn = self._person_table or "dbo.PSNACCOUNT"
+        if label in ("BALANCE_YEAR_REMAINING", "BALANCE_YEAR_THRESHOLD_HOURS"):
+            plan.update({
+                "template_ref": "annual_balance_by_person" if label == "BALANCE_YEAR_REMAINING" else "balance_year_threshold_hours",
+                "tables": [VAC_RESULT_TABLE, psn, ORG_TABLE],
+            })
+        elif label in ("PERSON_HISTORY_BY_EMP_NO", "LEAVE_HISTORY_GENERIC", "RANGE_WHO_ON_LEAVE",
+                       "WEEKLY_WHO_ON_LEAVE", "TODAY_WHO_ON_LEAVE", "YDAY_WHO_ON_LEAVE", "MONTH_WHO_ON_LEAVE"):
+            plan.update({
+                "template_ref": {
+                    "PERSON_HISTORY_BY_EMP_NO": "person_history_by_empno",
+                    "LEAVE_HISTORY_GENERIC": "person_history_generic",
+                    "RANGE_WHO_ON_LEAVE": "range_who_on_leave",
+                    "WEEKLY_WHO_ON_LEAVE": "weekly_who_on_leave",
+                    "TODAY_WHO_ON_LEAVE": "today_who_on_leave",
+                    "YDAY_WHO_ON_LEAVE": "yday_who_on_leave",
+                    "MONTH_WHO_ON_LEAVE": "month_who_on_leave",
+                }[label],
+                "tables": ["dbo.ATDLEAVEDATA", psn, ORG_TABLE],
+            })
+        elif label == "WEEKLY_COUNT":
+            plan.update({
+                "template_ref": "weekly_count_people",
+                "tables": ["dbo.ATDLEAVEDATA", psn],
+            })
+        else:
+            # generic fallback
+            if any(k in q for k in ["balance", "餘額", "年假", "特休"]) and self._exists(VAC_RESULT_TABLE):
+                plan.update({"template_ref": "annual_balance_by_person", "tables": [VAC_RESULT_TABLE, psn, ORG_TABLE]})
             else:
-                plan.update({
-                    "intent": "remaining_balance_by_person",
-                    "template_ref": None,
-                    "unavailable_reason": "No vacation snapshot table in schema.",
-                    "fallback_intent": "leave_usage_by_person",
-                    "tables": ["dbo.ATDLEAVEDATA", self._person_table or "dbo.PSNACCOUNT", ORG_TABLE],
-                })
-            return plan
+                plan.update({"template_ref": "range_who_on_leave", "tables": ["dbo.ATDLEAVEDATA", psn, ORG_TABLE]})
 
-        cands = rank_intent_candidates(query, lang)
-        return {
-            "lang": lang,
-            "candidates": cands,
-            "slots": cands[0]["slots"] if cands else canonicalize_query_intent(query, lang),
-        }
+        return plan
 
     def _resolve_person_table(self) -> Optional[str]:
         for name in ["dbo.PSNACCOUNT", "dbo.PSNACCOUNT_D"]:
@@ -726,6 +916,470 @@ class LeaveVectorDB:
             hints.append("-- Performance: ATD* facts are large; add STARTDATE/ENDDATE (or WORKDATE) range predicates")
         return list(dict.fromkeys(hints))
 
+    # ───────────────────────────────────────────────────────────────────────
+    # Canonical recipes — now include demo cheats for history/range/week
+    # ───────────────────────────────────────────────────────────────────────
+    def _build_recipes(self) -> List[SQLRecipe]:
+        psn = self._person_table or "dbo.PSNACCOUNT"
+
+        # helper lambdas for column picking
+        def P(table: str, key: str, default: Optional[str] = None):
+            return self._pick(table, key, default=default)
+
+        person_id_psn = P(psn, "PERSON_ID", default="PERSONID")
+        name_col = P(psn, "NAME", default="TRUENAME")
+        emp_no_col = self._emp_no_col()
+
+        org_unitdisp = self._pick(ORG_TABLE, "UNIT_DISPLAY", default="UNITDISPLAYNAME")
+        org_unitname = self._pick(ORG_TABLE, "UNIT_NAME", default="UNITNAME")
+        dept_expr = f"COALESCE(org.{org_unitdisp}, org.{org_unitname})"
+
+        # ATDLEAVEDATA picks
+        ld = "dbo.ATDLEAVEDATA"
+        ld_person = P(ld, "PERSON_ID", default="PERSONID")
+        ld_workdate = P(ld, "WORK_DATE", default="WORKDATE")
+        ld_hours = P(ld, "HOURS", default="HOURS")
+        ld_type = P(ld, "TYPE", default="ATTENDANCETYPE")
+        ld_validated = P(ld, "VALIDATED", default="VALIDATED")
+        ld_start = P(ld, "START_DATE", default="STARTDATE")
+        ld_end = P(ld, "END_DATE", default="ENDDATE")
+
+        # VAC RESULT picks
+        vr = VAC_RESULT_TABLE
+        vr_person = self._pick(vr, "PERSON_ID", default="PERSONID")
+        vr_year = self._pick(vr, "YEAR", default="VACAYEAR")
+        vr_type = self._pick(vr, "TYPE", default="VACATIONTYPE")
+        vr_remain_days = self._pick(vr, "REMAIN_DAYS", default="REMAINDAYS")
+        vr_remain_hours = self._pick(vr, "REMAIN_HOURS", default=None)  # may be missing
+        vr_vacdays = self._pick(vr, "VAC_DAYS", default="VACDAYS")
+        vr_usedays = self._pick(vr, "USE_DAYS", default="USEDAYS")
+        vr_canuse = self._pick(vr, "CAN_USE_DATE", default="CANUSEDATE")
+        vr_disable = self._pick(vr, "DISABLE_DATE", default="DISABLEDDATE")
+        vr_updated = self._pick(vr, "UPDATED_AT", default="LASTEDITTIME")
+        vr_created = self._pick(vr, "CREATED_AT", default="CREATIONTIME")
+
+        recipes: List[SQLRecipe] = []
+
+        # 1) Current on leave by department
+        recipes.append(SQLRecipe(
+            recipe_id="current_on_leave_by_dept",
+            title="Current on-leave employees by department",
+            description="Lists employees currently on validated leave grouped by department.",
+            description_zh="按部門列出當前已批准且在休假的員工（含部門＋員編＋姓名）",
+            tables=[ld, psn, ORG_TABLE],
+            expected_columns=["department_name", "employee_id", "person_name", ld_type, ld_start, ld_end],
+            sql_template=(
+                "SELECT "
+                f"  {dept_expr} AS department_name,\n"
+                f"  p.{emp_no_col} AS employee_id,\n"
+                f"  p.{name_col}   AS person_name,\n"
+                f"  fact.{ld_type} AS AttendanceType,\n"
+                f"  CAST(fact.{ld_start} AS date) AS STARTDATE,\n"
+                f"  CAST(fact.{ld_end}   AS date) AS ENDDATE\n"
+                f"FROM {ld} AS fact\n"
+                f"LEFT JOIN {psn} AS p ON p.{person_id_psn} = fact.{ld_person}\n"
+                f"LEFT JOIN {ORG_TABLE} AS org ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.{self._pick(ORG_TABLE,'UNIT_ID','UNITID')} AS NVARCHAR(100))\n"
+                f"WHERE fact.{ld_validated} = 1\n"
+                f"  AND CAST(GETDATE() AS date) BETWEEN CAST(fact.{ld_start} AS date) AND CAST(fact.{ld_end} AS date)\n"
+                "ORDER BY department_name, person_name;"
+            ),
+            caution_notes=["Ensure BRANCHID matches ORG.UNITID via NVARCHAR CAST."],
+            tags=["current","validated","preview"]
+        ))
+
+        # 2) Annual balance by person
+        recipes.append(SQLRecipe(
+            recipe_id="annual_balance_by_person",
+            title="Annual leave balance by person (snapshot table)",
+            description="Latest valid snapshot per person/year/type with entitlement/used/remaining days.",
+            description_zh="每人/年度/類型之最新有效快照（給予/已用/剩餘天數）。",
+            tables=[vr, psn, ORG_TABLE],
+            expected_columns=["department_name", "employee_id", "person_name", vr_year, vr_type, vr_vacdays, vr_usedays, vr_remain_days, vr_canuse, vr_disable],
+            sql_template=(
+                "WITH latest AS (\n"
+                f"  SELECT r.{vr_person}, r.{vr_year}, r.{self._pick(vr,'VAC_MONTH','VACAMONTH')}, r.{vr_type},\n"
+                f"         r.{vr_vacdays}, r.{vr_usedays}, r.{vr_remain_days}, r.{vr_canuse}, r.{vr_disable},\n"
+                f"         r.{vr_updated}, r.{vr_created},\n"
+                "         ROW_NUMBER() OVER (\n"
+                f"           PARTITION BY r.{vr_person}, r.{vr_year}, r.{vr_type}\n"
+                f"           ORDER BY ISNULL(r.{vr_updated}, r.{vr_created}) DESC,\n"
+                f"                    ISNULL(r.{vr_disable}, '9999-12-31') DESC,\n"
+                f"                    r.{self._pick(vr,'VAC_MONTH','VACAMONTH')} DESC\n"
+                "         ) AS rn\n"
+                f"  FROM {vr} AS r\n"
+                "  WHERE (@year IS NULL OR r." + vr_year + " = @year)\n"
+                "    AND (@vacationtype IS NULL OR r." + vr_type + " = @vacationtype)\n"
+                "    AND (r." + vr_canuse + " IS NULL OR CAST(@today AS date) >= CAST(r." + vr_canuse + " AS date))\n"
+                "    AND (r." + vr_disable + " IS NULL OR CAST(@today AS date) <= CAST(r." + vr_disable + " AS date))\n"
+                ")\n"
+                "SELECT " + dept_expr + " AS department_name,\n"
+                f"       p.{emp_no_col} AS employee_id,\n"
+                f"       p.{name_col}   AS person_name,\n"
+                f"       l.{vr_year} AS VACAYEAR, l.{vr_type} AS VACATIONTYPE, l.{vr_vacdays} AS VACDAYS, l.{vr_usedays} AS USEDAYS, l.{vr_remain_days} AS REMAINDAYS,\n"
+                f"       l.{vr_canuse} AS CANUSEDATE, l.{vr_disable} AS DISABLEDDATE\n"
+                "FROM latest AS l\n"
+                f"LEFT JOIN {psn} AS p ON p.{person_id_psn} = l.{vr_person}\n"
+                f"LEFT JOIN {ORG_TABLE} AS org ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.{self._pick(ORG_TABLE,'UNIT_ID','UNITID')} AS NVARCHAR(100))\n"
+                "WHERE l.rn = 1\n"
+                "ORDER BY department_name, person_name;"
+            ),
+            caution_notes=[
+                "Use @year/@vacationtype; respect validity window via @today.",
+                "VACATIONTYPE code for annual leave is system-specific (often 1)."
+            ],
+            tags=["balance","annual","snapshot","days","force-balance"]
+        ))
+
+        # 3) Balance with hours threshold (uses REMAIN_HOURS if available, else days*8)
+        if vr_remain_hours:
+            thr_expr = f"r.{vr_remain_hours}"
+            hours_alias = vr_remain_hours
+        else:
+            thr_expr = f"(r.{vr_remain_days} * 8)"
+            hours_alias = "REMAIN_HOURS_APPROX"
+        recipes.append(SQLRecipe(
+            recipe_id="balance_year_threshold_hours",
+            title="Annual balance over hour threshold",
+            description="Remaining annual leave over threshold (hours); uses hours if available, else days*8.",
+            description_zh="剩餘年假超過門檻（小時）；若無小時欄位，改用天數*8。",
+            tables=[vr, psn],
+            expected_columns=[person_id_psn, "TrueName", "VacYear", hours_alias],
+            sql_template=(
+                "SELECT r." + vr_person + " AS PersonID,\n"
+                f"       p.{name_col} AS TrueName,\n"
+                f"       r.{vr_year} AS VacYear,\n"
+                f"       {thr_expr} AS {hours_alias}\n"
+                f"FROM {vr} r\n"
+                f"LEFT JOIN {psn} p ON p.{person_id_psn} = r.{vr_person}\n"
+                "WHERE r." + vr_year + " = @year\n"
+                "  AND " + thr_expr + " > @threshold_hours\n"
+                "ORDER BY " + hours_alias + " DESC;"
+            ),
+            caution_notes=["If REMAIN_HOURS is missing, conversion assumes 1 day = 8 hours."],
+            tags=["balance","threshold","hours"]
+        ))
+
+        # 4) Range who-on-leave
+        recipes.append(SQLRecipe(
+            recipe_id="range_who_on_leave",
+            title="Employees on leave within date range",
+            description="Distinct people with leave records between @start_date and @end_date.",
+            description_zh="在 @start_date..@end_date 期間有請假的人員（去重）。",
+            tables=[ld, psn],
+            expected_columns=["PersonID", "TrueName", "WorkDate", "LeaveType", "LeaveHours"],
+            sql_template=(
+                "SELECT DISTINCT\n"
+                f"  ld.{ld_person} AS PersonID,\n"
+                f"  p.{name_col}   AS TrueName,\n"
+                f"  CAST(ld.{ld_workdate} AS date) AS WorkDate,\n"
+                f"  ld.{ld_type}   AS LeaveType,\n"
+                f"  COALESCE(ld.{ld_hours}, 0) AS LeaveHours\n"
+                f"FROM {ld} AS ld\n"
+                f"LEFT JOIN {psn} AS p ON p.{person_id_psn} = ld.{ld_person}\n"
+                "WHERE CAST(ld." + ld_workdate + " AS date) BETWEEN CAST(@start_date AS date) AND CAST(@end_date AS date)\n"
+                "ORDER BY WorkDate ASC, TrueName ASC;"
+            ),
+            tags=["range","who","leave"]
+        ))
+
+        # 5) Weekly count
+        recipes.append(SQLRecipe(
+            recipe_id="weekly_count_people",
+            title="Count of people on leave (weekly window)",
+            description="COUNT DISTINCT people with any leave record within @week_start..@week_end.",
+            description_zh="@week_start..@week_end 期間請假之人次（去重）。",
+            tables=[ld],
+            expected_columns=["PeopleOnLeave"],
+            sql_template=(
+                "SELECT COUNT(DISTINCT ld." + ld_person + ") AS PeopleOnLeave\n"
+                f"FROM {ld} AS ld\n"
+                "WHERE CAST(ld." + ld_workdate + " AS date) BETWEEN CAST(@week_start AS date) AND CAST(@week_end AS date);"
+            ),
+            tags=["weekly","count","kpi"]
+        ))
+
+        # 6) Person history by employee number
+        recipes.append(SQLRecipe(
+            recipe_id="person_history_by_empno",
+            title="Leave history by employee number",
+            description="All leave records for a given employee number (string, keep leading zeros).",
+            description_zh="指定員工編號之歷史請假紀錄（字串，比對時保留前導零）。",
+            tables=[ld, psn],
+            expected_columns=["PersonID", "TrueName", "WorkDate", "LeaveType", "LeaveHours"],
+            sql_template=(
+                "SELECT\n"
+                f"  ld.{ld_person} AS PersonID,\n"
+                f"  p.{name_col}   AS TrueName,\n"
+                f"  CAST(ld.{ld_workdate} AS date) AS WorkDate,\n"
+                f"  ld.{ld_type}   AS LeaveType,\n"
+                f"  COALESCE(ld.{ld_hours}, 0) AS LeaveHours\n"
+                f"FROM {ld} AS ld\n"
+                f"LEFT JOIN {psn} AS p ON p.{person_id_psn} = ld.{ld_person}\n"
+                f"WHERE p.{emp_no_col} = @emp_no  -- NVARCHAR, do not cast; keep leading zeros\n"
+                "ORDER BY WorkDate DESC;"
+            ),
+            caution_notes=["Bind @emp_no as NVARCHAR; do not trim/cast."],
+            tags=["person","history"]
+        ))
+
+        # 7) Today / Yesterday / Month who-on-leave (simple variants)
+        recipes.append(SQLRecipe(
+            recipe_id="today_who_on_leave",
+            title="Who is on leave today",
+            description="People on leave for today.",
+            description_zh="今天請假的人員。",
+            tables=[ld, psn],
+            expected_columns=["PersonID", "TrueName", "WorkDate"],
+            sql_template=(
+                "SELECT DISTINCT ld." + ld_person + " AS PersonID, p." + name_col + " AS TrueName,\n"
+                "       CAST(ld." + ld_workdate + " AS date) AS WorkDate\n"
+                f"FROM {ld} ld\n"
+                f"LEFT JOIN {psn} p ON p.{person_id_psn} = ld.{ld_person}\n"
+                "WHERE CAST(ld." + ld_workdate + " AS date) = CAST(@today AS date)\n"
+                "ORDER BY TrueName;"
+            ),
+            tags=["today","who"]
+        ))
+        recipes.append(SQLRecipe(
+            recipe_id="yday_who_on_leave",
+            title="Who was on leave yesterday",
+            description="People on leave for yesterday.",
+            description_zh="昨天請假的人員。",
+            tables=[ld, psn],
+            expected_columns=["PersonID", "TrueName", "WorkDate"],
+            sql_template=(
+                "SELECT DISTINCT ld." + ld_person + " AS PersonID, p." + name_col + " AS TrueName,\n"
+                "       CAST(ld." + ld_workdate + " AS date) AS WorkDate\n"
+                f"FROM {ld} ld\n"
+                f"LEFT JOIN {psn} p ON p.{person_id_psn} = ld.{ld_person}\n"
+                "WHERE CAST(ld." + ld_workdate + " AS date) = CAST(@yesterday AS date)\n"
+                "ORDER BY TrueName;"
+            ),
+            tags=["yesterday","who"]
+        ))
+        recipes.append(SQLRecipe(
+            recipe_id="month_who_on_leave",
+            title="Who is on leave this month",
+            description="People with leave in current month.",
+            description_zh="本月請假的人員。",
+            tables=[ld, psn],
+            expected_columns=["PersonID", "TrueName", "WorkDate"],
+            sql_template=(
+                "SELECT DISTINCT ld." + ld_person + " AS PersonID, p." + name_col + " AS TrueName,\n"
+                "       CAST(ld." + ld_workdate + " AS date) AS WorkDate\n"
+                f"FROM {ld} ld\n"
+                f"LEFT JOIN {psn} p ON p.{person_id_psn} = ld.{ld_person}\n"
+                "WHERE FORMAT(CAST(ld." + ld_workdate + " AS date), 'yyyy-MM') = FORMAT(CAST(@today AS date), 'yyyy-MM')\n"
+                "ORDER BY TrueName;"
+            ),
+            tags=["month","who"]
+        ))
+
+        return recipes
+
+    # ---------------- readiness, health, persistence
+    def is_ready(self) -> bool:
+        return bool(self.tables) and (self.embeddings_en is not None or self.embeddings_zh is not None)
+
+    def health_check(self) -> Dict[str, object]:
+        faiss_used = bool(faiss is not None and self.index_en is not None and self.index_zh is not None)
+        return {
+            "ready": self.is_ready(),
+            "tables_indexed": len(self.tables),
+            "vector_items": len(self._vector_items),
+            "join_relationships": len(self._joins),
+            "query_patterns": len(self._query_patterns),
+            "kpis": len(self._kpis),
+            "recipes": len(self._recipes),
+            "person_table": self._person_table,
+            "model_loaded": self.model is not None,
+            "faiss_used": faiss_used,
+            "embeddings_en_shape": tuple(self.embeddings_en.shape) if self.embeddings_en is not None else None,
+            "embeddings_zh_shape": tuple(self.embeddings_zh.shape) if self.embeddings_zh is not None else None,
+            "model_name": self.model_name,
+            "db_path": self.db_path,
+            "language_detection_available": _langdetect_detect is not None
+        }
+
+    def save_to_disk(self) -> None:
+        data = {
+            "schemas": [asdict(s) for s in self.tables],
+            "joins": [asdict(j) for j in self._joins],
+            "patterns": [asdict(p) for p in self._query_patterns],
+            "kpis": [asdict(k) for k in self._kpis],
+            "recipes": [asdict(r) for r in self._recipes],
+            "model_name": self.model_name,
+            "created_at": datetime.now().isoformat(),
+            "version": "6.0",  # bumped for demo cheat router + recipes
+        }
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.db_path, "wb") as f:
+            pickle.dump(data, f)
+        logger.info("Language-aware Vector DB saved to %s", self.db_path)
+
+    @classmethod
+    def load_from_disk(cls, db_path: str = "leave_schema_vectors.db") -> "LeaveVectorDB":
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"No vector DB at {db_path}")
+        with open(db_path, "rb") as f:
+            data = pickle.load(f)
+        tables = [TableSchema(**d) for d in data.get("schemas", [])]
+        joins = [TableJoin(**d) for d in data.get("joins", [])]
+        patterns = [QueryPattern(**d) for d in data.get("patterns", [])]
+        kpis = [KPIDef(**d) for d in data.get("kpis", [])]
+        recipes = [SQLRecipe(**d) for d in data.get("recipes", [])]
+        inst = cls(
+            tables=tables,
+            db_path=db_path,
+            model_name=data.get("model_name", "sentence-transformers/all-MiniLM-L6-v2"),
+            joins=joins,
+            patterns=patterns,
+            kpis=kpis,
+            recipes=recipes,
+        )
+        return inst
+
+    # ---------------- convenience
+    def get_query_pattern(self, query: str) -> Optional[QueryPattern]:
+        q = (query or "").lower()
+        if any(x in q for x in ["當前", "今天", "現在", "今日", "目前"]) or ("leave" in q and any(x in q for x in ["current", "today", "now"])):
+            return next((p for p in self._query_patterns if p.pattern == "current_leave_status"), None)
+        if any(x in q for x in ["取消", "已取消"]) or any(x in q for x in ["cancel", "cancelled", "cancellation"]):
+            return next((p for p in self._query_patterns if p.pattern == "leave_cancellations"), None)
+        if (
+            any(x in q for x in ["餘額", "余额", "剩餘", "剩下", "可用"]) and
+            any(x in q for x in ["年假", "特休", "annual"])
+        ) or any(x in q for x in ["annual leave balance", "remaining annual", "vacation balance"]):
+            return next((p for p in self._query_patterns if p.pattern == "annual_balance_snapshot"), None)
+        return None
+
+    def relationships_sanity_check(self) -> Dict[str, List[str]]:
+        errors, warnings = [], []
+        for j in self._joins:
+            lt = self._by_name.get(j.left_table.lower())
+            rt = self._by_name.get(j.right_table.lower())
+            if not lt or not rt:
+                warnings.append(f"Table absent: {j.left_table} or {j.right_table}")
+                continue
+            if not _has_col(lt, j.left_column):
+                errors.append(f"Missing column {j.left_table}.{j.left_column}")
+            if not _has_col(rt, j.right_column):
+                errors.append(f"Missing column {j.right_table}.{j.right_column}")
+            if j.condition and ("{left}" not in j.condition or "{right}" not in j.condition):
+                warnings.append(f"Condition placeholders missing in join {j.left_table} → {j.right_table}")
+        return {"errors": errors, "warnings": warnings}
+
+    def debug_intent_block(self, query: str) -> str:
+        routing = self.get_intent_routing(query)
+        lines = [f"lang={routing.get('lang') or routing.get('language')}",
+                 f"intent={routing.get('intent')}", f"template_ref={routing.get('template_ref')}"]
+        slots = routing.get("slots") or {}
+        if slots:
+            lines.append(f"slots={json.dumps(slots, ensure_ascii=False)}")
+        for i, c in enumerate(routing.get("candidates", []), 1):
+            lines.append(f"[{i}] {c['skill_id']} score={c['score']} slots={json.dumps(c['slots'], ensure_ascii=False)} tables={','.join(c['tables'])}")
+        return "\n".join(lines)
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Schema context + DEMO CHEAT: inject the selected canonical recipe
+    # ───────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def preview_projection_sql(lang: Literal["zh-tw","en"] = "en") -> str:
+        dept_expr = "COALESCE(org.UNITDISPLAYNAME, org.UNITNAME)"
+        if lang == "zh-tw":
+            return f"{dept_expr} AS 部門, p.EMPLOYEEID AS 員編, p.TRUENAME AS 姓名"
+        else:
+            return f"{dept_expr} AS department_name, p.EMPLOYEEID AS employee_id, p.TRUENAME AS person_name"
+
+    def get_business_prompt(self, query: str) -> str:
+        lang = detect_language(query)
+        routing = self.get_intent_routing(query)
+        context = self.get_schema_context(query, include_examples=True)
+        pv = self.preview_projection_sql("zh-tw" if lang == "zh-tw" else "en")
+
+        # DEMO: inject the exact canonical recipe matching template_ref
+        selected_recipe_sql = None
+        tr = routing.get("template_ref")
+        if tr:
+            for r in self._recipes:
+                if r.recipe_id == tr:
+                    selected_recipe_sql = r.sql_template
+                    break
+
+        intent_lines = []
+        top_intent = routing.get("intent")
+        if top_intent:
+            intent_lines.append(f"intent={top_intent}")
+            intent_lines.append(f"template_ref={tr}")
+            intent_lines.append(f"slots={json.dumps(routing.get('slots', {}), ensure_ascii=False)}")
+            intent_lines.append(f"tables_hint={','.join(routing.get('tables', []))}")
+        intent_block = ("\n".join(intent_lines)) if intent_lines else "(no strong intent match)"
+
+        # Build prompt
+        if lang == "zh-tw":
+            prompt = f"""
+您是一位請假/考勤領域的專業分析工程師。請提供可執行且正確的 SQL 與推理（以業務可讀輸出為目標）。
+
+使用者查詢：
+{query}
+
+[意圖與路由]
+{intent_block}
+
+{context}
+
+=== DEMO CANONICAL SQL（請嚴格遵循此模板，僅替換變數）===
+{(selected_recipe_sql or '-- (未匹配到模板；請參考上方上下文)')}
+
+必須遵守（SQL SAFETY）：
+1) 別名需先宣告；避免引用未宣告的別名。
+2) 盡量使用完整表名與欄位限定（table.column）。
+3) 餘額/給予以 {VAC_RESULT_TABLE} 為權威；於有效期內（CANUSEDATE..DISABLEDDATE）加入 @today 條件。
+4) 大表 ATD* 務必加日期過濾；核准請假含 VALIDATED = 1。
+5) 人員/部門 JOIN 僅在需要時；BRANCHID 與 ORG.UNITID 以 NVARCHAR CAST 對齊。
+
+預覽欄位（若需顯示人員/部門）：
+{pv}
+
+回傳格式：
+- 簡短推理要點
+- SQL
+- 預期欄位與資料粒度
+- 後續驗證建議（可選）
+""".strip()
+        else:
+            prompt = f"""
+You are an expert analytics engineer for the leave/attendance domain. Provide executable, correct SQL with reasoning.
+
+USER QUERY:
+{query}
+
+[INTENT & ROUTING]
+{intent_block}
+
+{context}
+
+=== DEMO CANONICAL SQL (FOLLOW THIS TEMPLATE; ONLY SUBSTITUTE VARIABLES) ===
+{(selected_recipe_sql or '-- (no matched template; rely on context above)')}
+
+SQL SAFETY:
+1) Declare aliases before use; never reference undeclared aliases.
+2) Prefer fully-qualified tables and qualified columns.
+3) For balances/entitlement, prefer {VAC_RESULT_TABLE}; respect @today in CANUSEDATE..DISABLEDDATE.
+4) For large ATD* facts, always add date filters; use VALIDATED = 1 for approved.
+5) Join person/department only when needed; align BRANCHID↔ORG.UNITID via NVARCHAR casts.
+
+Preview fields (if showing person/department):
+{pv}
+
+Return:
+- Short reasoning bullets
+- SQL
+- Expected columns and grain
+- Optional follow-up checks
+""".strip()
+        return prompt
+
     def get_schema_context(self, query: str, include_examples: bool = True) -> str:
         lang = detect_language(query)
         ranked = self.search(query, top_k=10)
@@ -828,98 +1482,18 @@ class LeaveVectorDB:
         if lang == "zh-tw":
             lines.extend([
                 "=== 查詢建構建議 ===",
-                "• 餘額/給予：以 ATDCALCUVACATIONRESULT 為權威；需套用 @today 在可用區間（CANUSEDATE ≤ @today ≤ DISABLEDDATE）。",
+                f"• 餘額/給予：以 {VAC_RESULT_TABLE} 為權威；需套用 @today 在可用區間（CANUSEDATE ≤ @today ≤ DISABLEDDATE）。",
                 "• 使用明細/取消：以 ATDLEAVEDATA / ATDLEAVECANCELDATA。",
                 "• 歷史大表務必加日期範圍過濾；核准資料包含 VALIDATED = 1。",
             ])
         else:
             lines.extend([
                 "=== Query Construction Tips ===",
-                "• Balances/entitlement: authoritative via ATDCALCUVACATIONRESULT; respect @today within CANUSEDATE..DISABLEDDATE.",
+                f"• Balances/entitlement: authoritative via {VAC_RESULT_TABLE}; respect @today within CANUSEDATE..DISABLEDDATE.",
                 "• Usage/cancellation detail: ATDLEAVEDATA / ATDLEAVECANCELDATA.",
                 "• Filter large facts by date; include VALIDATED = 1 for approved records.",
             ])
         return "\n".join(lines)
-
-    @staticmethod
-    def preview_projection_sql(lang: Literal["zh-tw","en"] = "en") -> str:
-        dept_expr = "COALESCE(org.UNITDISPLAYNAME, org.UNITNAME)"
-        if lang == "zh-tw":
-            return f"{dept_expr} AS 部門, p.EMPLOYEEID AS 員編, p.TRUENAME AS 姓名"
-        else:
-            return f"{dept_expr} AS department_name, p.EMPLOYEEID AS employee_id, p.TRUENAME AS person_name"
-
-    def get_business_prompt(self, query: str) -> str:
-        lang = detect_language(query)
-        routing = self.get_intent_routing(query)
-        context = self.get_schema_context(query, include_examples=True)
-        pv = self.preview_projection_sql("zh-tw" if lang == "zh-tw" else "en")
-
-        top_intent = routing["candidates"][0] if routing.get("candidates") else None
-        intent_lines = []
-        if top_intent:
-            intent_lines.append(f"id={top_intent['skill_id']}, title={top_intent['title']}, score={top_intent['score']}")
-            intent_lines.append(f"slots={json.dumps(top_intent['slots'], ensure_ascii=False)}")
-            intent_lines.append(f"tables_hint={','.join(top_intent['tables'])}")
-        intent_block = ("\n".join(intent_lines)) if intent_lines else "(no strong intent match)"
-
-        if lang == "zh-tw":
-            prompt = f"""
-您是一位請假/考勤領域的專業分析工程師。請提供可執行且正確的 SQL 與推理（以業務可讀輸出為目標）。
-
-使用者查詢：
-{query}
-
-[意圖（候選）]
-{intent_block}
-
-{context}
-
-必須遵守（SQL SAFETY）：
-1) 若使用別名，先在 FROM/JOIN 宣告；不得引用未宣告的別名。
-2) 優先完整表名與限定欄位（table.column）。
-3) 餘額/給予請以 {VAC_RESULT_TABLE} 為主；於有效期內（CANUSEDATE..DISABLEDDATE）加入 @today 條件。
-4) 統計核准請假含 VALIDATED = 1；ATD* 大表請加日期過濾（WORKDATE 或 STARTDATE/ENDDATE）。
-5) 僅在需要時 JOIN 人員/部門；BRANCHID 與 ORG.UNITID 請以 NVARCHAR 對齊。
-
-預覽欄位（若需顯示人員/部門）：
-{pv}
-
-回傳格式：
-- 簡短推理要點
-- SQL
-- 預期欄位與資料粒度
-- 後續驗證建議（可選）
-""".strip()
-        else:
-            prompt = f"""
-You are an expert analytics engineer for the leave/attendance domain. Provide executable, correct SQL with reasoning.
-
-USER QUERY:
-{query}
-
-[INTENT (candidates)]
-{intent_block}
-
-{context}
-
-SQL SAFETY:
-1) Declare aliases before use; never reference undeclared aliases.
-2) Prefer fully-qualified tables and qualified columns.
-3) For balances/entitlement, prefer {VAC_RESULT_TABLE}; respect @today in CANUSEDATE..DISABLEDDATE.
-4) Use VALIDATED = 1 for approved leave; filter ATD* facts by date (WORKDATE or STARTDATE/ENDDATE).
-5) Join person/department only when needed; align BRANCHID↔ORG.UNITID via NVARCHAR casts.
-
-Preview fields (if showing person/department):
-{pv}
-
-Return:
-- Short reasoning bullets
-- SQL
-- Expected columns and grain
-- Optional follow-up checks
-""".strip()
-        return prompt
 
     # ---------------- metadata builders
     def _build_comprehensive_joins(self) -> List[TableJoin]:
@@ -949,8 +1523,6 @@ Return:
                 tags=["department","org","branch","unit"]
             ))
         return joins
-
-
 
     def _build_query_patterns(self) -> List[QueryPattern]:
         return [
@@ -989,7 +1561,7 @@ Return:
                 description="Annual leave balance (days) from authoritative snapshot with validity window",
                 description_zh="從權威快照表取年度年假餘額（天），包含有效期過濾",
                 primary_tables=[VAC_RESULT_TABLE],
-                suggested_joins=["PERSONID"],  # guarantees PSNACCOUNT/ORG are reachable
+                suggested_joins=["PERSONID"],
                 required_filters=["VACAYEAR=@year", "CANUSEDATE..DISABLEDDATE contains @today"],
                 performance_notes=["Pick latest row per PERSONID/YEAR/TYPE"],
                 examples=["Annual remaining days by person and department"],
@@ -997,7 +1569,6 @@ Return:
                 tags=["balance","annual","snapshot","force-balance"]
             ),
         ]
-
 
     def _build_kpis(self) -> List[KPIDef]:
         return [
@@ -1021,183 +1592,6 @@ Return:
                 tags=["balance","days","force-balance"]
             ),
         ]
-
-
-    def _build_recipes(self) -> List[SQLRecipe]:
-        return [
-            SQLRecipe(
-                recipe_id="current_on_leave_by_dept",
-                title="Current on-leave employees by department",
-                description="Lists employees currently on validated leave grouped by department.",
-                description_zh="按部門列出當前已批准且在休假的員工（含部門＋員編＋姓名）",
-                tables=["dbo.ATDLEAVEDATA","dbo.PSNACCOUNT", ORG_TABLE],
-                expected_columns=["department_name","employee_id","person_name","ATTENDANCETYPE","STARTDATE","ENDDATE"],
-                sql_template=(
-                    "SELECT "
-                    "  COALESCE(org.UNITDISPLAYNAME, org.UNITNAME) AS department_name,\n"
-                    "  p.EMPLOYEEID AS employee_id,\n"
-                    "  p.TRUENAME   AS person_name,\n"
-                    "  fact.ATTENDANCETYPE,\n"
-                    "  CAST(fact.STARTDATE AS date) AS STARTDATE,\n"
-                    "  CAST(fact.ENDDATE   AS date) AS ENDDATE\n"
-                    "FROM dbo.ATDLEAVEDATA AS fact\n"
-                    "LEFT JOIN dbo.PSNACCOUNT AS p\n"
-                    "  ON p.PERSONID = fact.PERSONID\n"
-                    f"LEFT JOIN {ORG_TABLE} AS org\n"
-                    "  ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))\n"
-                    "WHERE fact.VALIDATED = 1\n"
-                    "  AND CAST(GETDATE() AS date) BETWEEN CAST(fact.STARTDATE AS date) AND CAST(fact.ENDDATE AS date)\n"
-                    "ORDER BY department_name, person_name;"
-                ),
-                caution_notes=["Ensure BRANCHID data type matches ORG.UNITID; CAST to NVARCHAR when needed."],
-                tags=["current","validated","preview"]
-            ),
-            SQLRecipe(
-                recipe_id="annual_balance_by_person",
-                title="Annual leave balance by person (snapshot table)",
-                description="Latest valid snapshot per person/year/type with entitlement/used/remaining days.",
-                description_zh="每人/年度/類型之最新有效快照（給予/已用/剩餘天數）。",
-                tables=[VAC_RESULT_TABLE, "dbo.PSNACCOUNT", ORG_TABLE],
-                expected_columns=["department_name","employee_id","person_name",
-                                "VACAYEAR","VACATIONTYPE","VACDAYS","USEDAYS","REMAINDAYS",
-                                "CANUSEDATE","DISABLEDDATE"],
-                sql_template=(
-                    "WITH latest AS (\n"
-                    f"  SELECT r.PERSONID, r.VACAYEAR, r.VACAMONTH, r.VACATIONTYPE,\n"
-                    "         r.VACDAYS, r.USEDAYS, r.REMAINDAYS, r.CANUSEDATE, r.DISABLEDDATE,\n"
-                    "         r.LASTEDITTIME, r.CREATIONTIME,\n"
-                    "         ROW_NUMBER() OVER (\n"
-                    "           PARTITION BY r.PERSONID, r.VACAYEAR, r.VACATIONTYPE\n"
-                    "           ORDER BY ISNULL(r.LASTEDITTIME, r.CREATIONTIME) DESC,\n"
-                    "                    ISNULL(r.DISABLEDDATE, '9999-12-31') DESC,\n"
-                    "                    r.VACAMONTH DESC\n"
-                    "         ) AS rn\n"
-                    f"  FROM {VAC_RESULT_TABLE} AS r\n"
-                    "  WHERE (@year IS NULL OR r.VACAYEAR = @year)\n"
-                    "    AND (@vacationtype IS NULL OR r.VACATIONTYPE = @vacationtype)\n"
-                    "    AND (r.CANUSEDATE IS NULL OR CAST(@today AS date) >= CAST(r.CANUSEDATE AS date))\n"
-                    "    AND (r.DISABLEDDATE IS NULL OR CAST(@today AS date) <= CAST(r.DISABLEDDATE AS date))\n"
-                    ")\n"
-                    "SELECT COALESCE(org.UNITDISPLAYNAME, org.UNITNAME) AS department_name,\n"
-                    "       p.EMPLOYEEID AS employee_id,\n"
-                    "       p.TRUENAME   AS person_name,\n"
-                    "       l.VACAYEAR, l.VACATIONTYPE, l.VACDAYS, l.USEDAYS, l.REMAINDAYS,\n"
-                    "       l.CANUSEDATE, l.DISABLEDDATE\n"
-                    "FROM latest AS l\n"
-                    "LEFT JOIN dbo.PSNACCOUNT AS p ON p.PERSONID = l.PERSONID\n"
-                    f"LEFT JOIN {ORG_TABLE} AS org ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(org.UNITID AS NVARCHAR(100))\n"
-                    "WHERE l.rn = 1\n"
-                    "ORDER BY department_name, person_name;"
-                ),
-                caution_notes=[
-                    "Use @year/@vacationtype; respect validity window via @today.",
-                    "VACATIONTYPE code for annual leave is system-specific (often 1)."
-                ],
-                tags=["balance","annual","snapshot","days","force-balance"]
-            ),
-        ]
-
-
-    # ---------------- readiness, health, persistence
-    def is_ready(self) -> bool:
-        return bool(self.tables) and (self.embeddings_en is not None or self.embeddings_zh is not None)
-
-    def health_check(self) -> Dict[str, object]:
-        faiss_used = bool(faiss is not None and self.index_en is not None and self.index_zh is not None)
-        return {
-            "ready": self.is_ready(),
-            "tables_indexed": len(self.tables),
-            "vector_items": len(self._vector_items),
-            "join_relationships": len(self._joins),
-            "query_patterns": len(self._query_patterns),
-            "kpis": len(self._kpis),
-            "recipes": len(self._recipes),
-            "person_table": self._person_table,
-            "model_loaded": self.model is not None,
-            "faiss_used": faiss_used,
-            "embeddings_en_shape": tuple(self.embeddings_en.shape) if self.embeddings_en is not None else None,
-            "embeddings_zh_shape": tuple(self.embeddings_zh.shape) if self.embeddings_zh is not None else None,
-            "model_name": self.model_name,
-            "db_path": self.db_path,
-            "language_detection_available": _langdetect_detect is not None
-        }
-
-    def save_to_disk(self) -> None:
-        data = {
-            "schemas": [asdict(s) for s in self.tables],
-            "joins": [asdict(j) for j in self._joins],
-            "patterns": [asdict(p) for p in self._query_patterns],
-            "kpis": [asdict(k) for k in self._kpis],
-            "recipes": [asdict(r) for r in self._recipes],
-            "model_name": self.model_name,
-            "created_at": datetime.now().isoformat(),
-            "version": "5.0",  # bumped because of snapshot-table support
-        }
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(self.db_path, "wb") as f:
-            pickle.dump(data, f)
-        logger.info("Language-aware Vector DB saved to %s", self.db_path)
-
-    @classmethod
-    def load_from_disk(cls, db_path: str = "leave_schema_vectors.db") -> "LeaveVectorDB":
-        if not os.path.exists(db_path):
-            raise FileNotFoundError(f"No vector DB at {db_path}")
-        with open(db_path, "rb") as f:
-            data = pickle.load(f)
-        tables = [TableSchema(**d) for d in data.get("schemas", [])]
-        joins = [TableJoin(**d) for d in data.get("joins", [])]
-        patterns = [QueryPattern(**d) for d in data.get("patterns", [])]
-        kpis = [KPIDef(**d) for d in data.get("kpis", [])]
-        recipes = [SQLRecipe(**d) for d in data.get("recipes", [])]
-        inst = cls(
-            tables=tables,
-            db_path=db_path,
-            model_name=data.get("model_name", "sentence-transformers/all-MiniLM-L6-v2"),
-            joins=joins,
-            patterns=patterns,
-            kpis=kpis,
-            recipes=recipes,
-        )
-        return inst
-
-    # ---------------- convenience
-    # --- optional but helpful: broaden quick intent recognizer to catch balance phrasing ---
-    def get_query_pattern(self, query: str) -> Optional[QueryPattern]:
-        q = (query or "").lower()
-        if any(x in q for x in ["當前", "今天", "現在", "今日", "今日", "目前"]) or ("leave" in q and any(x in q for x in ["current", "today", "now"])):
-            return next((p for p in self._query_patterns if p.pattern == "current_leave_status"), None)
-        if any(x in q for x in ["取消", "已取消"]) or any(x in q for x in ["cancel", "cancelled", "cancellation"]):
-            return next((p for p in self._query_patterns if p.pattern == "leave_cancellations"), None)
-        if (
-            any(x in q for x in ["餘額", "余额", "剩餘", "剩下", "可用"]) and
-            any(x in q for x in ["年假", "特休", "annual"])
-        ) or any(x in q for x in ["annual leave balance", "remaining annual", "vacation balance"]):
-            return next((p for p in self._query_patterns if p.pattern == "annual_balance_snapshot"), None)
-        return None
-
-
-    def relationships_sanity_check(self) -> Dict[str, List[str]]:
-        errors, warnings = [], []
-        for j in self._joins:
-            lt = self._by_name.get(j.left_table.lower())
-            rt = self._by_name.get(j.right_table.lower())
-            if not lt or not rt:
-                warnings.append(f"Table absent: {j.left_table} or {j.right_table}")
-                continue
-            if not _has_col(lt, j.left_column):
-                errors.append(f"Missing column {j.left_table}.{j.left_column}")
-            if not _has_col(rt, j.right_column):
-                errors.append(f"Missing column {j.right_table}.{j.right_column}")
-            if j.condition and ("{left}" not in j.condition or "{right}" not in j.condition):
-                warnings.append(f"Condition placeholders missing in join {j.left_table} → {j.right_table}")
-        return {"errors": errors, "warnings": warnings}
-
-    def debug_intent_block(self, query: str) -> str:
-        routing = self.get_intent_routing(query)
-        lines = [f"lang={routing.get('lang')}"]
-        for i, c in enumerate(routing.get("candidates", []), 1):
-            lines.append(f"[{i}] {c['skill_id']} score={c['score']} slots={json.dumps(c['slots'], ensure_ascii=False)} tables={','.join(c['tables'])}")
-        return "\n".join(lines)
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Builder

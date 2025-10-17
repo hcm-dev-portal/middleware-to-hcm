@@ -1,746 +1,602 @@
 # backend/app/reports/service.py
-import os
-import re
+"""
+Report service with:
+- Ask-then-refine state machine support for the frontend
+- Dynamic section builder (user chooses what to include)
+- Chart/visualization configuration
+- Statistical aggregations
+- Real data integration via SQL queries (sync DB executed safely from async endpoints)
+"""
+
 import uuid
-import json
-import math
-import random
 import logging
-import tempfile
 from enum import Enum
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field, asdict
+from typing import Dict, Any, List, Optional, Iterable, Tuple
+from datetime import datetime
 
 from fastapi import HTTPException, Request
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.style import WD_STYLE_TYPE
-
-# Import the enhanced LLM client
-from app.reports.llm_client import LLMClient, Intent, Narrative
-from app.services.llm.openai_service import OpenAIService
-from app.services.aws.translation_service import AWSTranslationService
+from anyio import to_thread
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# Pydantic models (shared with API signatures)
+# Models & Enums
 # ============================================
 
-class ReportAnalysisRequest(BaseModel):
+class ChartType(str, Enum):
+    BAR = "bar"
+    PIE = "pie"
+    LINE = "line"
+    TABLE = "table"
+    HEATMAP = "heatmap"
+    GAUGE = "gauge"
+
+class SectionType(str, Enum):
+    EXECUTIVE_SUMMARY   = "executive_summary"
+    LEAVE_BY_DEPARTMENT = "leave_by_department"
+    LEAVE_BY_TYPE       = "leave_by_type"
+    LEAVE_TRENDS        = "leave_trends"
+    TOP_EMPLOYEES       = "top_employees_by_leave"
+    ATTENDANCE_RATE     = "attendance_rate"
+    SICK_LEAVE_ANALYSIS = "sick_leave_analysis"
+    BALANCE_SNAPSHOT    = "balance_snapshot"
+    EXPIRING_SOON       = "expiring_soon"
+    OVERTIME_SUMMARY    = "overtime_summary"
+    DEPARTMENT_COMPARISON = "department_comparison"
+    RISK_ASSESSMENT     = "risk_assessment"
+    RECOMMENDATIONS     = "recommendations"
+    DATA_QUALITY        = "data_quality"
+
+@dataclass
+class ChartConfig:
+    chart_type: ChartType
+    title: str
+    description: str = ""
+    x_axis: str = ""
+    y_axis: str = ""
+    data_source: str = ""  # key in data_bucket
+    filters: Dict[str, Any] = field(default_factory=dict)
+    include_legend: bool = True
+    include_labels: bool = True
+    sort_by: Optional[str] = None
+    limit: Optional[int] = None
+
+@dataclass
+class SectionConfig:
+    section_type: SectionType
+    title: str
+    description: str = ""
+    include: bool = True
+    charts: List[ChartConfig] = field(default_factory=list)
+    statistics: List[str] = field(default_factory=list)
+    depth: str = "standard"  # "high_level", "standard", "detailed"
+    include_table: bool = False
+    table_rows: int = 50
+
+@dataclass
+class ReportConfigSchema:
+    sections: List[SectionConfig] = field(default_factory=list)
+    include_appendix: bool = True
+    include_risks: bool = True
+    include_recommendations: bool = True
+    export_format: str = "docx"
+    color_scheme: str = "professional"
+    language: str = "en-US"
+
+# ============================================
+# Request payloads (used by routes)
+# ============================================
+
+class ConfigureReportRequest(BaseModel):
+    """Frontend calls this first to get available sections + clarifying questions."""
     query: str
-    language: str = "en-US"
+    analysis: Dict[str, Any] = Field(default_factory=dict)
 
-class ReportGenerationRequest(BaseModel):
-    query: str = Field(..., description="Original user query")
-    analysis: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Intent summary from /analyze; optional — will be derived if missing",
-    )
-    format: str = "docx"
-    language: str = "en-US"
-    clarifications: Optional[List[Dict[str, Any]]] = None  # be permissive
-    request_id: Optional[str] = None
-
-# In-memory session store (swap for DB/redis in prod)
-report_sessions: Dict[str, Dict] = {}
-
-# =============================
-# Initialize LLM Client
-# =============================
-def get_llm_client() -> LLMClient:
-    """Factory function to create LLM client with proper services."""
-    try:
-        openai_service = OpenAIService(model_name="gpt-4.1", temperature=0.2)
-        translation_service = AWSTranslationService()
-        return LLMClient(llm=openai_service, translator=translation_service)
-    except Exception as e:
-        logger.warning(f"Failed to initialize full LLM client: {e}. Using fallback.")
-        # Return basic LLM client that will use fallback methods
-        return LLMClient()
-
-# Global LLM client instance
-llm_client = get_llm_client()
-
-# =====================
-# State machine / plan
-# =====================
-class ReportType(str, Enum):
-    LEAVE = "leave_analysis"
-    OVERTIME = "overtime_analysis"
-    ATTENDANCE = "attendance_analysis"
-    BALANCE = "balance_report"
-    UNKNOWN = "unknown"
-
-class Phase(str, Enum):
-    COLLECT = "collect_requirements"
-    PLAN = "plan"
-    GATHER = "gather_data"
-    WRITE = "write"
-    COMPLETE = "complete"
-
-@dataclass
-class PlanStep:
-    name: str
-    fn: str
-    args: Dict[str, Any] = field(default_factory=dict)
-    output_key: str = ""
-
-@dataclass
-class ExecutionPlan:
-    phase: Phase
-    steps: List[PlanStep] = field(default_factory=list)
-    assumptions: List[str] = field(default_factory=list)
-
-# -----------------------
-# Tool/Function registry
-# -----------------------
-def tool_get_leave_metrics(start: Optional[datetime], end: Optional[datetime], departments: List[str]) -> Dict[str, Any]:
-    """Generate realistic leave metrics with some variation."""
-    rng = (start.strftime("%b %d") + " – " + end.strftime("%b %d, %Y")) if (start and end) else "Selected period"
-    depts = (departments if departments and departments != ["all"] else ["HR", "Engineering", "Sales", "Marketing", "Finance", "Operations"])
-    base_leave = 40
-    dept_data = {}
-    for d in depts:
-        multiplier = {"HR": 1.2, "Engineering": 0.9, "Sales": 1.3, "Marketing": 1.0, "Finance": 0.8, "Operations": 1.1}.get(d.title(), 1.0)
-        dept_data[d.title()] = int(base_leave * multiplier * random.uniform(0.8, 1.5))
-    total_leave = sum(dept_data.values())
-    employee_count = len(depts) * 25  # Assume 25 employees per department
-    return {
-        "range": rng,
-        "by_type": {
-            "Vacation": int(total_leave * 0.55),
-            "Sick": int(total_leave * 0.30),
-            "Personal": int(total_leave * 0.10),
-            "Bereavement": int(total_leave * 0.05)
-        },
-        "by_department": dept_data,
-        "totals": {
-            "leave_days": total_leave,
-            "avg_days_per_employee": round(total_leave / employee_count, 1),
-            "employee_count": employee_count
-        },
-        "trends": {
-            "vs_last_period": random.choice(["+12%", "-5%", "+3%", "-8%"]),
-            "projected_next": random.choice(["Stable", "Slight increase expected", "Seasonal decrease expected"])
-        }
-    }
-
-def tool_get_overtime_metrics(start: Optional[datetime], end: Optional[datetime], departments: List[str]):
-    """Generate realistic overtime metrics."""
-    depts = (departments if departments and departments != ["all"] else ["HR", "Engineering", "Sales", "Marketing", "Finance", "Operations"])
-    dept_hours = {}
-    for d in depts:
-        base = {"Engineering": 400, "Operations": 350, "Sales": 200, "HR": 100, "Marketing": 150, "Finance": 180}.get(d.title(), 200)
-        dept_hours[d.title()] = int(base * random.uniform(0.7, 1.3))
-    total_hours = sum(dept_hours.values())
-    employee_count = len(depts) * 25
-    hourly_rate = 45  # Average OT rate
-    return {
-        "range": "Selected period" if not start else f"{start:%b %d} – {end:%b %d, %Y}",
-        "total_hours": total_hours,
-        "avg_per_employee": round(total_hours / employee_count, 1),
-        "by_department": dept_hours,
-        "est_cost": int(total_hours * hourly_rate * 1.5),  # 1.5x for OT rate
-        "peak_day": random.choice(["Friday", "Thursday", "Wednesday"]),
-        "compliance": {
-            "exceeding_limit": random.randint(3, 12),
-            "risk_level": random.choice(["Low", "Moderate", "Elevated"])
-        }
-    }
-
-def tool_get_attendance_metrics(start: Optional[datetime], end: Optional[datetime], departments: List[str]):
-    """Generate realistic attendance metrics."""
-    attendance_rate = round(random.uniform(92, 97), 1)
-    employee_count = len(departments) * 25 if departments else 150
-    return {
-        "range": "Selected period" if not start else f"{start:%b %d} – {end:%b %d, %Y}",
-        "attendance_rate": attendance_rate,
-        "unplanned_absences": random.randint(100, 200),
-        "perfect_attendance": random.randint(50, 80),
-        "avg_sick_days": round(random.uniform(2.5, 4.5), 1),
-        "patterns": {
-            "monday_absence_rate": round(random.uniform(5, 8), 1),
-            "friday_absence_rate": round(random.uniform(6, 9), 1),
-            "mid_week_rate": round(random.uniform(3, 5), 1)
-        },
-        "employee_count": employee_count
-    }
-
-def tool_get_balance_metrics(start: Optional[datetime], end: Optional[datetime], departments: List[str]):
-    """Generate realistic balance metrics."""
-    employee_count = len(departments) * 25 if departments else 150
-    return {
-        "range": "As of " + datetime.now().strftime("%B %d, %Y"),
-        "low_balance_count": random.randint(15, 35),
-        "total_accrual_vacation_days": employee_count * random.randint(15, 25),
-        "total_accrual_sick_days": employee_count * random.randint(8, 12),
-        "avg_vacation_balance": round(random.uniform(12, 22), 1),
-        "avg_sick_balance": round(random.uniform(5, 10), 1),
-        "expiring_soon": {
-            "30_days": random.randint(5, 15),
-            "60_days": random.randint(10, 25),
-            "90_days": random.randint(15, 40)
-        },
-        "liability": {
-            "total_days": employee_count * 18,
-            "estimated_value": f"${employee_count * 18 * 280:,}"  # Assuming $280/day
-        }
-    }
-
-TOOLS = {
-    "get_leave_metrics": tool_get_leave_metrics,
-    "get_overtime_metrics": tool_get_overtime_metrics,
-    "get_attendance_metrics": tool_get_attendance_metrics,
-    "get_balance_metrics": tool_get_balance_metrics
-}
-
-def _parse_iso_range(r: Optional[Tuple[Optional[str], Optional[str]]]) -> Tuple[Optional[datetime], Optional[datetime]]:
-    """Best-effort parse of ISO timestamps (None-safe)."""
-    if not r or not isinstance(r, (list, tuple)) or len(r) != 2:
-        return None, None
-    def _p(x: Optional[str]) -> Optional[datetime]:
-        if not x:
-            return None
-        try:
-            return datetime.fromisoformat(x)
-        except Exception:
-            return None
-    return _p(r[0]), _p(r[1])
-
-def build_plan(intent: Intent) -> ExecutionPlan:
-    """Build execution plan from Intent object."""
-    rt = intent.report_type
-    start, end = _parse_iso_range(intent.time_range)
-
-    departments = intent.departments or []
-    steps: List[PlanStep] = []
-    assumptions: List[str] = []
-
-    if rt == "leave_analysis":
-        steps.append(PlanStep("Leave Metrics", "get_leave_metrics",
-                             {"start": start, "end": end, "departments": departments}, "leave_metrics"))
-        assumptions.append("Company holidays and weekends excluded from leave calculations.")
-        assumptions.append("Pending leave requests not included in totals.")
-    elif rt == "overtime_analysis":
-        steps.append(PlanStep("Overtime Metrics", "get_overtime_metrics",
-                             {"start": start, "end": end, "departments": departments}, "ot_metrics"))
-        assumptions.append("Overtime rate calculated at 1.5x standard hourly rate.")
-        assumptions.append("Exempt employees excluded from overtime calculations.")
-    elif rt == "attendance_analysis":
-        steps.append(PlanStep("Attendance Metrics", "get_attendance_metrics",
-                             {"start": start, "end": end, "departments": departments}, "att_metrics"))
-        assumptions.append("Weekends and holidays excluded from attendance calculations.")
-        assumptions.append("Remote work days counted as present.")
-    elif rt == "balance_report":
-        steps.append(PlanStep("Balance Metrics", "get_balance_metrics",
-                             {"start": start, "end": end, "departments": departments}, "bal_metrics"))
-        assumptions.append("Balances include approved but not yet taken leave.")
-        assumptions.append("Accrual rates based on current policy as of report date.")
-    else:
-        # Default to comprehensive report
-        steps.extend([
-            PlanStep("Leave Metrics", "get_leave_metrics",
-                     {"start": start, "end": end, "departments": departments}, "leave_metrics"),
-            PlanStep("Attendance Metrics", "get_attendance_metrics",
-                     {"start": start, "end": end, "departments": departments}, "att_metrics")
-        ])
-        assumptions.append("Comprehensive overview requested; showing multiple metric categories.")
-
-    return ExecutionPlan(phase=Phase.PLAN, steps=steps, assumptions=assumptions)
-
-# ============================
-# Public service entry points
-# ============================
-async def analyze_report(payload: ReportAnalysisRequest, request: Request):
-    """Analyze user query using LLM to extract intent."""
-    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    q = (payload.query or "").strip()
-    language = payload.language or "en-US"
-
-    logger.info(f"rid={rid} reports.analyze start query='{payload.query}' lang={language}")
-
-    # Use LLM client to analyze intent
-    intent = llm_client.analyze_intent(q, preferred_lang=language)
-
-    # Build execution plan from intent
-    plan = build_plan(intent)
-
-    # Convert Intent to dict for API response
-    analysis: Dict[str, Any] = {
-        "report_type": intent.report_type,
-        "time_period": intent.time_period,
-        "departments": intent.departments,
-        "metrics": intent.metrics,
-        "confidence": intent.confidence,
-        "language": language
-    }
-
-    if intent.time_range:
-        analysis["time_range"] = {
-            "start": intent.time_range[0],
-            "end": intent.time_range[1]
-        }
-
-    # Derive "data_sources" from plan steps for the UI (demo-connected)
-    data_sources = [{"name": s.name, "fn": s.fn, "connected": True} for s in plan.steps]
-    analysis["data_sources"] = data_sources
-
-    analysis["proposed_plan"] = {
-        "phase": plan.phase.value,
-        "steps": [
-            {
-                "name": s.name,
-                "fn": s.fn,
-                "args": {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in s.args.items()}
-            } for s in plan.steps
-        ],
-        "assumptions": plan.assumptions
-    }
-
-    result = {
-        "request_id": rid,  # NEW: propagate request id for tracing/idempotency
-        "needs_clarification": intent.needs_clarification,
-        "analysis": analysis
-    }
-
-    if intent.needs_clarification:
-        result["clarification_questions"] = intent.clarification_questions
-
-    logger.info(
-        f"rid={rid} reports.analyze complete type={analysis['report_type']} "
-        f"confidence={intent.confidence:.2f} clarification={intent.needs_clarification}"
-    )
-
-    return result
-
-
-
-
-
-
-async def generate_report(payload: ReportGenerationRequest, request: Request):
-    rid = payload.request_id or request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    report_id = uuid.uuid4().hex
-    language = payload.language or "en-US"
-
-    # If analysis is missing/None, derive it server-side to avoid 422s from the client
-    analysis = payload.analysis or {}
-    if not analysis:
-        # derive intent from the query as a fallback
-        fallback_intent = llm_client.analyze_intent(payload.query, preferred_lang=language)
-        analysis = {
-            "report_type": fallback_intent.report_type,
-            "time_period": fallback_intent.time_period,
-            "time_range": (
-                {"start": fallback_intent.time_range[0], "end": fallback_intent.time_range[1]}
-                if fallback_intent.time_range else None
-            ),
-            "departments": fallback_intent.departments,
-            "metrics": fallback_intent.metrics,
-            "confidence": fallback_intent.confidence,
-            "language": language,
-        }
-
-    # Reconstruct Intent from analysis
-    intent = Intent(
-        report_type=analysis.get("report_type", "unknown"),
-        time_period=analysis.get("time_period", "monthly"),
-        time_range=(analysis.get("time_range", {}).get("start"),
-                    analysis.get("time_range", {}).get("end")) if analysis.get("time_range") else None,
-        departments=analysis.get("departments", []),
-        metrics=analysis.get("metrics", []),
-        confidence=analysis.get("confidence", 0.75)
-    )
-
-    # Generate title based on intent
-    type_titles = {
-        "leave_analysis": f"{(intent.time_period or 'period').title()} Leave Analysis Report",
-        "overtime_analysis": f"{(intent.time_period or 'period').title()} Overtime Summary Report",
-        "attendance_analysis": f"{(intent.time_period or 'period').title()} Attendance Analysis Report",
-        "balance_report": "Employee Balance Summary Report",
-        "unknown": "Custom HR Analytics Report"
-    }
-    title = type_titles.get(intent.report_type, "HR Report").strip()
-
-    # Execute plan to gather data
-    plan = build_plan(intent)
-    data_bucket: Dict[str, Any] = {}
-
-    for step in plan.steps:
-        fn = TOOLS[step.fn]
-        out = fn(**step.args)
-        key = step.output_key or step.fn
-        data_bucket[key] = out
-
-    # Generate AI narrative
-    narrative = llm_client.build_narrative(
-        query=payload.query,
-        intent=intent,
-        data_bucket=data_bucket,
-        title=title,
-        target_language=language,
-        # Supply clarifications to narrative builder if useful
-        # Removed clarifications argument as it is not a valid parameter
-    )
-
-    try:
-        # Generate the enhanced DOCX report
-        doc_path = await _generate_enhanced_docx_report(
-            report_id=report_id,
-            title=narrative.title,
-            query=payload.query,
-            intent=intent,
-            plan=plan,
-            data_bucket=data_bucket,
-            narrative=narrative,
-            language=language
-        )
-
-        filename = f"{narrative.title.replace(' ', '_')}.docx"
-
-        # Store session
-        report_sessions[report_id] = {
-            "request_id": rid,
-            "title": narrative.title,
-            "file_path": doc_path,
-            "created_at": datetime.now(),
-            "query": payload.query,
-            "analysis": analysis,
-            "language": language,
-            "clarifications": payload.clarifications or [],
-            "plan": {
-                "phase": plan.phase.value,
-                "steps": [{"name": s.name, "fn": s.fn} for s in plan.steps],
-                "assumptions": plan.assumptions
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "Comprehensive leave analysis with department breakdown and charts",
+                "analysis": {"report_type": "leave_analysis", "time_period": "2025-Q1"}
             }
         }
 
-        logger.info(f"rid={rid} reports.generate complete report_id={report_id} title='{narrative.title}'")
+class SectionSelectionRequest(BaseModel):
+    """Frontend calls this with user selection."""
+    request_id: str
+    selected_sections: List[SectionType]            # Pydantic will coerce string -> enum
+    chart_preferences: Dict[str, List[str]] = Field(default_factory=dict)  # will normalize
+    depth_level: str = "standard"                   # "high_level" | "standard" | "detailed"
+    language: str = "en-US"
 
+# ============================================
+# SQL builders
+# ============================================
+
+class DataQueryBuilder:
+    @staticmethod
+    def query_leave_by_department(limit: int = 100) -> str:
+        return f"""
+SELECT TOP ({limit})
+    d.dept_display_name AS department,
+    d.dept_code,
+    COUNT(DISTINCT lf.PERSONID) AS num_employees,
+    COUNT(*) AS total_leaves,
+    SUM(CAST(lf.total_hours AS FLOAT)) AS total_hours,
+    AVG(CAST(lf.total_hours AS FLOAT)) AS avg_hours_per_leave,
+    SUM(CAST(lf.calculated_days AS FLOAT)) AS total_days,
+    AVG(CAST(lf.calculated_days AS FLOAT)) AS avg_days_per_employee,
+    SUM(CASE WHEN lf.VALIDATED = 1 THEN 1 ELSE 0 END) AS approved_count,
+    SUM(CASE WHEN lf.VALIDATED = 0 THEN 1 ELSE 0 END) AS pending_count
+FROM [eHRAntung_DB].[dbo].[ATDLEAVEDATA] lf
+LEFT JOIN [eHRAntung_DB].[dbo].[PSNACCOUNT] p ON lf.PERSONID = p.PERSONID
+LEFT JOIN [eHRAntung_DB].[dbo].[ORGStdStruct] d 
+    ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(d.UNITID AS NVARCHAR(100))
+WHERE lf.VALIDATED = 1
+  AND YEAR(lf.WORKDATE) = YEAR(GETDATE())
+GROUP BY d.dept_display_name, d.dept_code, d.UNITID
+ORDER BY total_hours DESC;
+        """
+
+    @staticmethod
+    def query_leave_by_type(limit: int = 100) -> str:
+        return f"""
+SELECT TOP ({limit})
+    lt.leave_type_name,
+    lt.CLASSCODE,
+    COUNT(*) AS count,
+    SUM(CAST(lf.total_hours AS FLOAT)) AS total_hours,
+    AVG(CAST(lf.total_hours AS FLOAT)) AS avg_hours,
+    COUNT(DISTINCT lf.PERSONID) AS unique_employees,
+    SUM(CASE WHEN lf.VALIDATED = 1 THEN 1 ELSE 0 END) AS approved,
+    SUM(CASE WHEN lf.VALIDATED = 0 THEN 1 ELSE 0 END) AS pending
+FROM [eHRAntung_DB].[dbo].[ATDLEAVEDATA] lf
+LEFT JOIN [eHRAntung_DB].[dbo].[ATDATTENDANCECLASS] lt 
+    ON CAST(lf.LEAVEID AS NVARCHAR(100)) = CAST(lt.ID AS NVARCHAR(100))
+WHERE YEAR(lf.WORKDATE) = YEAR(GETDATE())
+GROUP BY lt.leave_type_name, lt.CLASSCODE, lt.ID
+ORDER BY total_hours DESC;
+        """
+
+    @staticmethod
+    def query_top_employees_by_leave(limit: int = 50) -> str:
+        return f"""
+SELECT TOP ({limit})
+    p.EMPLOYEEID,
+    p.person_name,
+    d.dept_display_name,
+    COUNT(*) AS leave_count,
+    SUM(CAST(lf.total_hours AS FLOAT)) AS total_hours,
+    SUM(CAST(lf.calculated_days AS FLOAT)) AS total_days,
+    AVG(CAST(lf.total_hours AS FLOAT)) AS avg_per_leave
+FROM [eHRAntung_DB].[dbo].[ATDLEAVEDATA] lf
+LEFT JOIN [eHRAntung_DB].[dbo].[PSNACCOUNT] p ON lf.PERSONID = p.PERSONID
+LEFT JOIN [eHRAntung_DB].[dbo].[ORGStdStruct] d 
+    ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(d.UNITID AS NVARCHAR(100))
+WHERE lf.VALIDATED = 1
+  AND YEAR(lf.WORKDATE) = YEAR(GETDATE())
+GROUP BY p.EMPLOYEEID, p.person_name, d.dept_display_name, p.PERSONID
+ORDER BY total_hours DESC;
+        """
+
+    @staticmethod
+    def query_balance_snapshot(limit: int = 100) -> str:
+        return f"""
+SELECT TOP ({limit})
+    p.EMPLOYEEID,
+    p.person_name,
+    d.dept_display_name,
+    r.VACAYEAR,
+    lt.leave_type_name,
+    r.VACDAYS AS entitlement_days,
+    r.USEDAYS AS used_days,
+    r.REMAINDAYS AS remaining_days,
+    CAST(r.CANUSEDATE AS DATE) AS available_from,
+    CAST(r.DISABLEDDATE AS DATE) AS expires_on,
+    CASE 
+        WHEN r.REMAINDAYS <= 2 THEN 'Critical'
+        WHEN r.REMAINDAYS <= 5 THEN 'Low'
+        WHEN DATEDIFF(DAY, GETDATE(), r.DISABLEDDATE) <= 30 THEN 'Expiring Soon'
+        ELSE 'Healthy'
+    END AS balance_status
+FROM [eHRAntung_DB].[dbo].[ATDCALCUVACATIONRESULT] r
+LEFT JOIN [eHRAntung_DB].[dbo].[PSNACCOUNT] p ON r.PERSONID = p.PERSONID
+LEFT JOIN [eHRAntung_DB].[dbo].[ORGStdStruct] d 
+    ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(d.UNITID AS NVARCHAR(100))
+LEFT JOIN [eHRAntung_DB].[dbo].[ATDATTENDANCECLASS] lt 
+    ON CAST(r.VACATIONTYPE AS NVARCHAR(100)) = CAST(lt.ID AS NVARCHAR(100))
+WHERE r.VACAYEAR = YEAR(GETDATE())
+ORDER BY r.REMAINDAYS ASC;
+        """
+
+    @staticmethod
+    def query_expiring_soon(days_threshold: int = 30, limit: int = 50) -> str:
+        return f"""
+SELECT TOP ({limit})
+    p.EMPLOYEEID,
+    p.person_name,
+    d.dept_display_name,
+    r.REMAINDAYS,
+    CAST(r.DISABLEDDATE AS DATE) AS expires_on,
+    DATEDIFF(DAY, GETDATE(), r.DISABLEDDATE) AS days_until_expiry,
+    lt.leave_type_name
+FROM [eHRAntung_DB].[dbo].[ATDCALCUVACATIONRESULT] r
+LEFT JOIN [eHRAntung_DB].[dbo].[PSNACCOUNT] p ON r.PERSONID = p.PERSONID
+LEFT JOIN [eHRAntung_DB].[dbo].[ORGStdStruct] d 
+    ON CAST(p.BRANCHID AS NVARCHAR(100)) = CAST(d.UNITID AS NVARCHAR(100))
+LEFT JOIN [eHRAntung_DB].[dbo].[ATDATTENDANCECLASS] lt 
+    ON CAST(r.VACATIONTYPE AS NVARCHAR(100)) = CAST(lt.ID AS NVARCHAR(100))
+WHERE r.VACAYEAR = YEAR(GETDATE())
+  AND DATEDIFF(DAY, GETDATE(), r.DISABLEDDATE) BETWEEN 0 AND {days_threshold}
+  AND r.REMAINDAYS > 0
+ORDER BY r.DISABLEDDATE ASC;
+        """
+
+# ============================================
+# Section builders (lightweight examples)
+# ============================================
+
+class SectionBuilder:
+    @staticmethod
+    def build_leave_by_department_section(config: SectionConfig, data: Dict[str, Any]) -> Dict[str, Any]:
+        rows = data.get("leave_by_department", [])
         return {
-            "report_id": report_id,
-            "title": narrative.title,
-            "filename": filename,               # NEW: helps the frontend set a nice download name
-            "download_url": f"/api/reports/download/{report_id}",
-            "created_at": datetime.now().isoformat(),
-            "language": language
+            "title": config.title,
+            "description": config.description,
+            "depth": config.depth,
+            "charts": [{
+                "type": "bar", "title": "Leave Hours by Department",
+                "data_key": "leave_by_department", "x_axis": "department", "y_axis": "total_hours"
+            }] if any(c.chart_type == ChartType.BAR for c in config.charts) else [],
+            "tables": [{
+                "title": "Department Summary",
+                "columns": ["department", "num_employees", "total_leaves", "total_hours", "avg_hours_per_leave"],
+            }] if config.include_table else [],
+            "statistics": {
+                "total_departments": len(rows),
+                "total_hours": sum((r.get("total_hours") or 0) for r in rows),
+            }
         }
 
-    except Exception as e:
-        logger.exception(f"rid={rid} reports.generate error: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+    @staticmethod
+    def build_leave_by_type_section(config: SectionConfig, data: Dict[str, Any]) -> Dict[str, Any]:
+        rows = data.get("leave_by_type", [])
+        return {
+            "title": config.title,
+            "description": config.description,
+            "depth": config.depth,
+            "charts": [
+                {"type": "pie", "title": "Leave Distribution by Type", "data_key": "leave_by_type"},
+                {"type": "bar", "title": "Leave Type Details", "data_key": "leave_by_type"},
+            ],
+            "statistics": {"total_types": len(rows)}
+        }
 
-def download_report_response(report_id: str, request: Request):
-    """Download generated report."""
-    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    logger.info(f"rid={rid} reports.download start report_id={report_id}")
+    @staticmethod
+    def build_balance_snapshot_section(config: SectionConfig, data: Dict[str, Any]) -> Dict[str, Any]:
+        rows = data.get("balance_snapshot", [])
+        return {
+            "title": config.title,
+            "description": config.description,
+            "charts": [{"type": "gauge", "title": "Organizational Leave Health", "data_key": "balance_snapshot_gauge"}],
+            "tables": [{
+                "title": "Balance Status by Employee",
+                "columns": ["EMPLOYEEID", "person_name", "remaining_days", "expires_on", "balance_status"]
+            }] if config.include_table else [],
+            "statistics": {
+                "healthy": sum(1 for r in rows if r.get("balance_status") == "Healthy"),
+                "low":     sum(1 for r in rows if r.get("balance_status") == "Low"),
+                "critical":sum(1 for r in rows if r.get("balance_status") == "Critical"),
+            }
+        }
 
-    if report_id not in report_sessions:
-        logger.warning(f"rid={rid} reports.download report not found report_id={report_id}")
-        raise HTTPException(status_code=404, detail="Report not found")
+# ============================================
+# Helpers: DB execution & normalization
+# ============================================
 
-    session = report_sessions[report_id]
-    file_path = session["file_path"]
+def _lang_hint_from(payload_lang: str) -> str:
+    lang = (payload_lang or "").lower()
+    return "zh-tw" if lang.startswith("zh") else "en"
 
-    if not os.path.exists(file_path):
-        logger.error(f"rid={rid} reports.download file not found path={file_path}")
-        raise HTTPException(status_code=404, detail="Report file not found")
+def _rows_to_dicts(rows: Iterable[tuple], columns: Iterable[str]) -> List[Dict[str, Any]]:
+    cols = list(columns or [])
+    out: List[Dict[str, Any]] = []
+    for tup in rows or []:
+        out.append({cols[i]: tup[i] for i in range(min(len(cols), len(tup)))})
+    return out
 
-    # Prefer stored filename shape
-    filename = f"{session['title'].replace(' ', '_')}.docx"
-    logger.info(f"rid={rid} reports.download serving file={filename}")
+async def _db_fetch_all(
+    request: Request,
+    sql: str,
+    *,
+    params: Optional[tuple] = None,
+    max_rows: int = 1000,
+    language_hint: str = "en",
+) -> List[Dict[str, Any]]:
+    """
+    Execute a SELECT via sync DB service in a worker thread.
+    Expects request.app.state.db to be LanguageAwareSQLServerDatabaseService.
+    """
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database unavailable")
 
-    return FileResponse(
-        path=file_path,
-        filename=filename,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    def _run() -> List[Dict[str, Any]]:
+        rows, columns = db.run_select(
+            sql,
+            params=params,
+            max_rows=max_rows,
+            query_timeout=None,
+            language_hint=language_hint,
+            enable_query_hints=True,
+        )
+        return _rows_to_dicts(rows, columns)
 
-# ===========================
-# Enhanced DOCX builder
-# ===========================
-async def _generate_enhanced_docx_report(
-    report_id: str,
-    title: str,
-    query: str,
-    intent: Intent,
-    plan: ExecutionPlan,
-    data_bucket: Dict[str, Any],
-    narrative: Narrative,
-    language: str
-) -> str:
-    """Generate a professional, AI-enhanced DOCX report."""
-    temp_dir = tempfile.gettempdir()
-    file_path = os.path.join(temp_dir, f"report_{report_id}.docx")
-    doc = Document()
-
-    # Configure document styles
-    _setup_document_styles(doc)
-
-    # Title Page
-    _add_title_page(doc, narrative.title, report_id)
-
-    # Executive Summary
-    _add_executive_summary(doc, narrative)
-
-    # Methodology Section
-    _add_methodology_section(doc, narrative, plan)
-
-    # Key Insights
-    _add_key_insights_section(doc, narrative)
-
-    # Data Analysis Sections
-    rt = intent.report_type
-    if rt == "leave_analysis":
-        _add_leave_analysis_section(doc, data_bucket.get("leave_metrics", {}))
-    elif rt == "overtime_analysis":
-        _add_overtime_analysis_section(doc, data_bucket.get("ot_metrics", {}))
-    elif rt == "attendance_analysis":
-        _add_attendance_analysis_section(doc, data_bucket.get("att_metrics", {}))
-    elif rt == "balance_report":
-        _add_balance_report_section(doc, data_bucket.get("bal_metrics", {}))
-    else:
-        if "leave_metrics" in data_bucket:
-            _add_leave_analysis_section(doc, data_bucket["leave_metrics"])
-        if "att_metrics" in data_bucket:
-            _add_attendance_analysis_section(doc, data_bucket["att_metrics"])
-
-    # Risks & Mitigation
-    _add_risks_section(doc, narrative)
-
-    # Recommendations
-    _add_recommendations_section(doc, narrative)
-
-    # Appendix
-    _add_appendix(doc, narrative, intent, query)
-
-    doc.save(file_path)
-    return file_path
-
-def _setup_document_styles(doc: Document):  # type: ignore
-    """Configure professional document styles."""
-    styles = doc.styles
-    for i in range(1, 4):
-        heading_style = styles[f'Heading {i}']
-        heading_style.font.name = 'Calibri'
-        heading_style.font.color.rgb = RGBColor(0x1F, 0x49, 0x7D) if i == 1 else RGBColor(0x2E, 0x74, 0xB5)
-        heading_style.font.size = Pt([24, 18, 14][i-1])
-        heading_style.font.bold = True
-    normal_style = styles['Normal']
-    normal_style.font.name = 'Calibri'
-    normal_style.font.size = Pt(11)
-    normal_style.paragraph_format.space_after = Pt(6)
-
-def _add_title_page(doc: Document, title: str, report_id: str):  # type: ignore
-    """Add professional title page."""
-    doc.add_paragraph(); doc.add_paragraph()
-    title_para = doc.add_heading(title, 0)
-    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph(); doc.add_paragraph()
-    meta_para = doc.add_paragraph()
-    meta_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    meta_para.add_run(f"Report ID: {report_id}\n").bold = False
-    meta_para.add_run(f"Generated: {datetime.now().strftime('%B %d, %Y')}\n")
-    meta_para.add_run("HR Analytics Department")
-    doc.add_page_break()
-
-def _add_executive_summary(doc: Document, narrative: Narrative):  # type: ignore
-    doc.add_heading('Executive Summary', level=1)
-    doc.add_paragraph(narrative.executive_summary)
-    doc.add_paragraph()
-
-def _add_methodology_section(doc: Document, narrative: Narrative, plan: ExecutionPlan):  # type: ignore
-    doc.add_heading('Methodology', level=1)
-    doc.add_paragraph(narrative.methodology)
-    if plan.assumptions:
-        doc.add_heading('Key Assumptions', level=2)
-        for assumption in plan.assumptions:
-            p = doc.add_paragraph(style='List Bullet')
-            p.add_run(assumption)
-    doc.add_paragraph()
-
-def _add_key_insights_section(doc: Document, narrative: Narrative):  # type: ignore
-    doc.add_heading('Key Insights', level=1)
-    for i, insight in enumerate(narrative.key_insights, 1):
-        p = doc.add_paragraph()
-        p.add_run(f"{i}. ").bold = True
-        p.add_run(insight)
-    doc.add_paragraph()
-
-def _add_leave_analysis_section(doc: Document, data: Dict[str, Any]):  # type: ignore
-    doc.add_heading('Leave Analysis Details', level=1)
-    doc.add_paragraph(f"Reporting Period: {data.get('range', 'Selected period')}")
-    doc.add_heading('Summary Metrics', level=2)
-    table = doc.add_table(rows=1, cols=2)
-    table.style = 'Light Grid Accent 1'
-    hdr = table.rows[0].cells
-    hdr[0].text = 'Metric'; hdr[1].text = 'Value'
-    totals = data.get("totals", {})
-    metrics = [
-        ("Total Leave Days", str(totals.get("leave_days", "—"))),
-        ("Average per Employee", f"{totals.get('avg_days_per_employee', '—')} days"),
-        ("Total Employees", str(totals.get("employee_count", "—"))),
-        ("Trend vs Last Period", data.get("trends", {}).get("vs_last_period", "—")),
-    ]
-    for metric, value in metrics:
-        row = table.add_row().cells
-        row[0].text = metric; row[1].text = value
-    doc.add_paragraph()
-    doc.add_heading('Leave Distribution by Type', level=2)
-    _add_dict_table(doc, "Leave Type", "Days", data.get("by_type", {}))
-    doc.add_paragraph()
-    doc.add_heading('Department Analysis', level=2)
-    _add_dict_table(doc, "Department", "Leave Days", data.get("by_department", {}))
-
-def _add_overtime_analysis_section(doc: Document, data: Dict[str, Any]):  # type: ignore
-    doc.add_heading('Overtime Analysis Details', level=1)
-    doc.add_paragraph(f"Reporting Period: {data.get('range', 'Selected period')}")
-    doc.add_heading('Overtime Metrics', level=2)
-    table = doc.add_table(rows=1, cols=2)
-    table.style = 'Light Grid Accent 1'
-    hdr = table.rows[0].cells
-    hdr[0].text = 'Metric'; hdr[1].text = 'Value'
-    metrics = [
-        ("Total Overtime Hours", f"{data.get('total_hours', '—'):,}"),
-        ("Average per Employee", f"{data.get('avg_per_employee', '—')} hours"),
-        ("Estimated Cost", f"${data.get('est_cost', 0):,}"),
-        ("Peak Overtime Day", data.get("peak_day", "—")),
-        ("Compliance Risk Level", data.get("compliance", {}).get("risk_level", "—")),
-        ("Employees Exceeding Limits", str(data.get("compliance", {}).get("exceeding_limit", "—"))),
-    ]
-    for metric, value in metrics:
-        row = table.add_row().cells
-        row[0].text = metric; row[1].text = value
-    doc.add_paragraph()
-    doc.add_heading('Overtime by Department', level=2)
-    _add_dict_table(doc, "Department", "Hours", data.get("by_department", {}))
-
-def _add_attendance_analysis_section(doc: Document, data: Dict[str, Any]):  # type: ignore
-    doc.add_heading('Attendance Analysis Details', level=1)
-    doc.add_paragraph(f"Reporting Period: {data.get('range', 'Selected period')}")
-    doc.add_heading('Attendance Metrics', level=2)
-    table = doc.add_table(rows=1, cols=2)
-    table.style = 'Light Grid Accent 1'
-    hdr = table.rows[0].cells
-    hdr[0].text = 'Metric'; hdr[1].text = 'Value'
-    metrics = [
-        ("Overall Attendance Rate", f"{data.get('attendance_rate', '—')}%"),
-        ("Unplanned Absences", str(data.get("unplanned_absences", "—"))),
-        ("Perfect Attendance Count", str(data.get("perfect_attendance", "—"))),
-        ("Average Sick Days", f"{data.get('avg_sick_days', '—')} days"),
-        ("Total Employees", str(data.get("employee_count", "—"))),
-    ]
-    for metric, value in metrics:
-        row = table.add_row().cells
-        row[0].text = metric; row[1].text = value
-    doc.add_paragraph()
-    patterns = data.get("patterns", {})
-    if patterns:
-        doc.add_heading('Absence Patterns', level=2)
-        doc.add_paragraph(f"Monday Absence Rate: {patterns.get('monday_absence_rate', '—')}%")
-        doc.add_paragraph(f"Friday Absence Rate: {patterns.get('friday_absence_rate', '—')}%")
-        doc.add_paragraph(f"Mid-Week Rate: {patterns.get('mid_week_rate', '—')}%")
-
-def _add_balance_report_section(doc: Document, data: Dict[str, Any]):  # type: ignore
-    doc.add_heading('Leave Balance Analysis', level=1)
-    doc.add_paragraph(data.get('range', 'As of today'))
-    doc.add_heading('Balance Summary', level=2)
-    table = doc.add_table(rows=1, cols=2)
-    table.style = 'Light Grid Accent 1'
-    hdr = table.rows[0].cells
-    hdr[0].text = 'Metric'; hdr[1].text = 'Value'
-    metrics = [
-        ("Low Balance Employees (<5 days)", str(data.get("low_balance_count", "—"))),
-        ("Average Vacation Balance", f"{data.get('avg_vacation_balance', '—')} days"),
-        ("Average Sick Leave Balance", f"{data.get('avg_sick_balance', '—')} days"),
-        ("Total Vacation Accrual", f"{data.get('total_accrual_vacation_days', '—'):,} days"),
-        ("Total Sick Leave Accrual", f"{data.get('total_accrual_sick_days', '—'):,} days"),
-    ]
-    for metric, value in metrics:
-        row = table.add_row().cells
-        row[0].text = metric; row[1].text = value
-    doc.add_paragraph()
-    expiring = data.get("expiring_soon", {})
-    if expiring:
-        doc.add_heading('Expiration Alerts', level=2)
-        doc.add_paragraph(f"Expiring in 30 days: {expiring.get('30_days', '—')} employees")
-        doc.add_paragraph(f"Expiring in 60 days: {expiring.get('60_days', '—')} employees")
-        doc.add_paragraph(f"Expiring in 90 days: {expiring.get('90_days', '—')} employees")
-    liability = data.get("liability", {})
-    if liability:
-        doc.add_paragraph()
-        doc.add_heading('Financial Liability', level=2)
-        doc.add_paragraph(f"Total Accrued Days: {liability.get('total_days', '—'):,}")
-        doc.add_paragraph(f"Estimated Value: {liability.get('estimated_value', '—')}")
-
-def _add_risks_section(doc: Document, narrative: Narrative):  # type: ignore
-    if narrative.risks:
-        doc.add_heading('Risk Assessment', level=1)
-        for i, risk in enumerate(narrative.risks, 1):
-            p = doc.add_paragraph()
-            p.add_run(f"Risk {i}: ").bold = True
-            p.add_run(risk)
-        doc.add_paragraph()
-
-def _add_recommendations_section(doc: Document, narrative: Narrative):  # type: ignore
-    if narrative.recommendations:
-        doc.add_heading('Recommendations', level=1)
-        for i, rec in enumerate(narrative.recommendations, 1):
-            p = doc.add_paragraph()
-            p.add_run("✓ ").font.color.rgb = RGBColor(0x00, 0x70, 0x00)
-            p.add_run(f"{rec}")
-        doc.add_paragraph()
-
-def _add_appendix(doc: Document, narrative: Narrative, intent: Intent, query: str):  # type: ignore
-    doc.add_page_break()
-    doc.add_heading('Appendix', level=1)
-    doc.add_heading('Original Request', level=2)
-    doc.add_paragraph(f'"{query}"')
-    doc.add_paragraph()
-    doc.add_heading('Technical Details', level=2)
-    doc.add_paragraph(f"Report Type: {intent.report_type.replace('_', ' ').title()}")
-    doc.add_paragraph(f"Time Period: {intent.time_period.title() if intent.time_period else '—'}")
-    doc.add_paragraph(f"Departments: {', '.join(intent.departments) if intent.departments else 'All'}")
     try:
-        doc.add_paragraph(f"Confidence Score: {intent.confidence:.0%}")
-    except Exception:
-        doc.add_paragraph(f"Confidence Score: {intent.confidence}")
-    doc.add_paragraph()
-    if narrative.appendix_notes:
-        doc.add_heading('Additional Notes', level=2)
-        for note in narrative.appendix_notes:
-            doc.add_paragraph(f"• {note}", style='List Bullet')
-    doc.add_paragraph(); doc.add_paragraph()
-    footer = doc.add_paragraph()
-    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer.add_run("Generated by HCM AI Analytics Platform").italic = True
-    footer.add_run(f"\n{datetime.now().strftime('%B %d, %Y at %I:%M %p')}")
+        return await to_thread.run_sync(_run)
+    except Exception as e:
+        logger.exception("SQL execution failed")
+        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
 
-def _add_dict_table(doc: Document, key_header: str, value_header: str, data: Dict[str, Any]):  # type: ignore
-    if not data:
-        doc.add_paragraph("No data available for this period.")
-        return
-    table = doc.add_table(rows=1, cols=2)
-    table.style = 'Light List Accent 1'
-    hdr = table.rows[0].cells
-    hdr[0].text = key_header
-    hdr[1].text = value_header
-    sorted_items = sorted(
-        data.items(),
-        key=lambda x: (x[1] if isinstance(x[1], (int, float)) else 0),
-        reverse=True
+def _normalize_chart_prefs(raw: Dict[str, List[str]]) -> Dict[SectionType, List[ChartType]]:
+    """
+    Frontend sends { "leave_by_type": ["pie","bar"], ... }.
+    Convert to { SectionType.LEAVE_BY_TYPE: [ChartType.PIE, ChartType.BAR], ... }
+    """
+    out: Dict[SectionType, List[ChartType]] = {}
+    for k, v in (raw or {}).items():
+        try:
+            sec = SectionType(k) if not isinstance(k, SectionType) else k
+        except Exception:
+            continue
+        pref: List[ChartType] = []
+        for c in v or []:
+            try:
+                pref.append(ChartType(c) if not isinstance(c, ChartType) else c)
+            except Exception:
+                pass
+        out[sec] = pref or [ChartType.BAR]
+    return out
+
+# ============================================
+# Public service functions (used by routes)
+# ============================================
+
+async def get_report_options(payload: ConfigureReportRequest, request: Request) -> Dict[str, Any]:
+    """
+    Step 1 in the frontend state machine:
+    - Analyze intent (basic heuristics here)
+    - Return available sections, depth options, chart types
+    - Optionally return clarifying questions (frontend will ask user)
+    """
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    report_type = payload.analysis.get("report_type", "leave_analysis")
+    available_sections = _get_available_sections_for_type(report_type)
+
+    # Example: add a clarifying question if user mentioned expiring/expiry anywhere
+    clarifying_questions: List[Dict[str, Any]] = []
+    q_lower = (payload.query or "").lower()
+    if ("expire" in q_lower or "expiring" in q_lower) and SectionType.EXPIRING_SOON not in available_sections:
+        clarifying_questions.append({
+            "id": "include_expiring",
+            "prompt": "Include a section for leave expiring soon?",
+            "options": [{"label": "Yes", "value": True}, {"label": "No", "value": False}]
+        })
+
+    logger.info("rid=%s get_report_options type=%s sections=%d", rid, report_type, len(available_sections))
+
+    return {
+        "request_id": rid,
+        "analysis": {
+            "report_type": report_type,
+            "received_at": datetime.utcnow().isoformat() + "Z",
+        },
+        "available_sections": [
+            {
+                "id": s.value,
+                "name": s.value.replace("_", " ").title(),
+                "description": _get_section_description(s),
+                "chart_options": [c.value for c in ChartType],
+                "include_table": True,
+                "can_customize": True,
+            }
+            for s in available_sections
+        ],
+        "depth_options": ["high_level", "standard", "detailed"],
+        "chart_types": [c.value for c in ChartType],
+        "clarifying_questions": clarifying_questions,
+        "defaults": {
+            "depth_level": "standard",
+            "preselected_sections": [SectionType.EXECUTIVE_SUMMARY.value],
+            "chart_preferences": {}
+        }
+    }
+
+# Optional back-compat for old frontend that calls /analyze
+async def analyze(payload: ConfigureReportRequest, request: Request) -> Dict[str, Any]:
+    return await get_report_options(payload, request)
+
+async def execute_report_with_config(payload: SectionSelectionRequest, request: Request) -> Dict[str, Any]:
+    """
+    Step 3 in the frontend state machine:
+    - Execute the SQL for each selected section
+    - Build section payloads (titles/charts/statistics)
+    - Return a report_id and filename so the frontend can download
+    """
+    rid = payload.request_id or uuid.uuid4().hex
+    logger.info("rid=%s execute_report sections=%d depth=%s", rid, len(payload.selected_sections), payload.depth_level)
+
+    # Normalize chart preferences
+    chart_prefs = _normalize_chart_prefs(payload.chart_preferences)
+
+    # Build internal config
+    config = ReportConfigSchema(
+        sections=[
+            SectionConfig(
+                section_type=sec,
+                title=sec.value.replace("_", " ").title(),
+                depth=payload.depth_level,
+                charts=[
+                    ChartConfig(
+                        chart_type=ct,
+                        title=f"{sec.value} - {ct.value}",
+                        data_source=sec.value,
+                    ) for ct in (chart_prefs.get(sec) or [ChartType.BAR])
+                ],
+                include_table=True,
+                table_rows=50
+            )
+            for sec in payload.selected_sections
+        ],
+        language=payload.language
     )
-    for key, value in sorted_items:
-        row = table.add_row().cells
-        row[0].text = str(key)
-        if isinstance(value, int):
-            row[1].text = f"{value:,}"
-        elif isinstance(value, float):
-            row[1].text = f"{value:,.1f}"
-        else:
-            row[1].text = str(value)
+
+    # Execute SQL per section
+    data_bucket: Dict[str, Any] = {}
+    db_lang = _lang_hint_from(payload.language)
+
+    try:
+        for section_cfg in config.sections:
+            sec = section_cfg.section_type
+
+            if sec == SectionType.LEAVE_BY_DEPARTMENT:
+                sql = DataQueryBuilder.query_leave_by_department(limit=200)
+                data_bucket["leave_by_department"] = await _db_fetch_all(
+                    request, sql, max_rows=200, language_hint=db_lang
+                )
+
+            elif sec == SectionType.LEAVE_BY_TYPE:
+                sql = DataQueryBuilder.query_leave_by_type(limit=200)
+                data_bucket["leave_by_type"] = await _db_fetch_all(
+                    request, sql, max_rows=200, language_hint=db_lang
+                )
+
+            elif sec == SectionType.TOP_EMPLOYEES:
+                sql = DataQueryBuilder.query_top_employees_by_leave(limit=100)
+                data_bucket["top_employees_by_leave"] = await _db_fetch_all(
+                    request, sql, max_rows=100, language_hint=db_lang
+                )
+
+            elif sec == SectionType.BALANCE_SNAPSHOT:
+                sql = DataQueryBuilder.query_balance_snapshot(limit=300)
+                rows = await _db_fetch_all(request, sql, max_rows=300, language_hint=db_lang)
+                data_bucket["balance_snapshot"] = rows
+                # derive a simple gauge score
+                total = len(rows) or 1
+                healthy = sum(1 for r in rows if r.get("balance_status") == "Healthy")
+                data_bucket["balance_snapshot_gauge"] = {"score": round(100 * healthy / total, 1)}
+
+            elif sec == SectionType.EXPIRING_SOON:
+                sql = DataQueryBuilder.query_expiring_soon(days_threshold=30, limit=200)
+                data_bucket["expiring_soon"] = await _db_fetch_all(
+                    request, sql, max_rows=200, language_hint=db_lang
+                )
+
+            # Extend with more sections as needed...
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("rid=%s SQL execution failed", rid)
+        raise HTTPException(status_code=500, detail=f"Failed to execute SQL: {e}")
+
+    # Build section payloads
+    built_sections: List[Dict[str, Any]] = []
+    for section_cfg in config.sections:
+        sec = section_cfg.section_type
+        try:
+            if sec == SectionType.LEAVE_BY_DEPARTMENT:
+                built_sections.append(SectionBuilder.build_leave_by_department_section(section_cfg, data_bucket))
+            elif sec == SectionType.LEAVE_BY_TYPE:
+                built_sections.append(SectionBuilder.build_leave_by_type_section(section_cfg, data_bucket))
+            elif sec == SectionType.BALANCE_SNAPSHOT:
+                built_sections.append(SectionBuilder.build_balance_snapshot_section(section_cfg, data_bucket))
+            else:
+                built_sections.append({
+                    "title": section_cfg.title,
+                    "description": section_cfg.description,
+                    "depth": section_cfg.depth,
+                    "charts": [asdict(c) for c in section_cfg.charts],
+                    "tables": [],
+                    "statistics": {}
+                })
+        except Exception as e:
+            logger.exception("rid=%s section build error for %s", rid, sec.value)
+            built_sections.append({
+                "title": section_cfg.title,
+                "error": f"Failed to build section: {e}"
+            })
+
+    # Produce a report artifact identity (your /download/{report_id} route should use it)
+    report_id = uuid.uuid4().hex
+    filename = f"leave-report-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.docx"
+
+    result = {
+        "status": "report_ready",
+        "request_id": rid,
+        "report_id": report_id,
+        "filename": filename,
+        "analysis": {"report_type": "leave_analysis"},
+        "configuration": asdict(config),
+        "data_bucket": data_bucket,
+        "sections_built": built_sections
+    }
+
+    logger.info("rid=%s execute_report done sections=%d report_id=%s", rid, len(config.sections), report_id)
+    return result
+
+# ============================================
+# Internal helpers
+# ============================================
+
+def _get_available_sections_for_type(report_type: str) -> List[SectionType]:
+    type_sections = {
+        "leave_analysis": [
+            SectionType.EXECUTIVE_SUMMARY,
+            SectionType.LEAVE_BY_DEPARTMENT,
+            SectionType.LEAVE_BY_TYPE,
+            SectionType.TOP_EMPLOYEES,
+            SectionType.BALANCE_SNAPSHOT,
+            SectionType.EXPIRING_SOON,
+            SectionType.RISK_ASSESSMENT,
+            SectionType.RECOMMENDATIONS,
+        ],
+        "overtime_analysis": [
+            SectionType.EXECUTIVE_SUMMARY,
+            SectionType.OVERTIME_SUMMARY,
+            SectionType.DEPARTMENT_COMPARISON,
+            SectionType.RISK_ASSESSMENT,
+        ],
+        "attendance_analysis": [
+            SectionType.EXECUTIVE_SUMMARY,
+            SectionType.ATTENDANCE_RATE,
+            SectionType.SICK_LEAVE_ANALYSIS,
+            SectionType.DEPARTMENT_COMPARISON,
+        ],
+        "balance_report": [
+            SectionType.EXECUTIVE_SUMMARY,
+            SectionType.BALANCE_SNAPSHOT,
+            SectionType.EXPIRING_SOON,
+            SectionType.RISK_ASSESSMENT,
+        ],
+    }
+    return type_sections.get(report_type, [SectionType.EXECUTIVE_SUMMARY, SectionType.DATA_QUALITY])
+
+def _get_section_description(section: SectionType) -> str:
+    descriptions = {
+        SectionType.EXECUTIVE_SUMMARY: "High-level overview and key takeaways",
+        SectionType.LEAVE_BY_DEPARTMENT: "Leave analysis by department with comparisons",
+        SectionType.LEAVE_BY_TYPE: "Distribution of leave types",
+        SectionType.LEAVE_TRENDS: "Historical trends and forecasting",
+        SectionType.TOP_EMPLOYEES: "Top leave takers",
+        SectionType.ATTENDANCE_RATE: "Attendance metrics and patterns",
+        SectionType.SICK_LEAVE_ANALYSIS: "Sick leave usage patterns",
+        SectionType.BALANCE_SNAPSHOT: "Current leave balance status",
+        SectionType.EXPIRING_SOON: "Leave expiring in the near term",
+        SectionType.OVERTIME_SUMMARY: "Overtime hours and cost analysis",
+        SectionType.DEPARTMENT_COMPARISON: "Comparative analysis between departments",
+        SectionType.RISK_ASSESSMENT: "Identified risks and compliance issues",
+        SectionType.RECOMMENDATIONS: "Actionable recommendations",
+        SectionType.DATA_QUALITY: "Data integrity and completeness assessment",
+    }
+    return descriptions.get(section, "Report section")

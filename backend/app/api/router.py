@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 # Third-Party
 # =========================
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -33,15 +33,15 @@ from app.services.helpers.data_utils import _apply_resolved, _collect_ids_from_r
 from app.services.factory import create_enhanced_nlp_service
 
 # Reports service
+from fastapi import APIRouter, Request
 from app.reports.service import (
-    ReportAnalysisRequest,
-    ReportGenerationRequest,
-    analyze_report,
-    download_report_response,
-    generate_report,
+    get_report_options,
+    execute_report_with_config,
+    analyze,  # optional alias (maps to get_report_options)
+    ConfigureReportRequest,
+    SectionSelectionRequest,
 )
 
-# Leave service (new service-code-first + legacy helpers)
 from app.leave.service import (
     HCMServiceCallRequest,
     LeaveBalanceRequest,
@@ -60,8 +60,13 @@ logger = logging.getLogger(__name__)
 _type_analyzer = DataAnalyzer()
 
 # Routers
-router_main = APIRouter()
+# ---------- Routers ----------
+router_main = APIRouter()                                   # no prefix
 router_leave = APIRouter(prefix="/api/leave", tags=["leave"])
+reports_router = APIRouter(prefix="/api/reports", tags=["reports"])
+static_router = APIRouter(tags=["static"])  
+
+
 
 # =========================
 # Models (local)
@@ -327,31 +332,40 @@ async def serve_translations():
     return PlainTextResponse("// translations.js not found", media_type="application/javascript")
 
 
-@router_main.get("/generate_report.html", include_in_schema=False, tags=["static"])
-async def serve_generate_report():
-    _, _, frontend_dir, _ = _frontend_paths()
-    generate_report_file = frontend_dir / "generate_report.html"
-    if generate_report_file.exists():
-        return FileResponse(str(generate_report_file))
-    return RedirectResponse("/docs")
-
 
 # =========================
 # Reports API (tags: reports)
 # =========================
-@router_main.post("/api/reports/analyze", tags=["reports"])
-async def api_reports_analyze(req: ReportAnalysisRequest):
-    return await analyze_report(req)
+
+@reports_router.post("/configure")
+async def configure_report(payload: ConfigureReportRequest, request: Request):
+    """Return available sections and chart options for user selection."""
+    return await get_report_options(payload, request)
+
+@reports_router.post("/analyze")  # optional back-compat for old frontend
+async def analyze_report(payload: ConfigureReportRequest, request: Request):
+    return await analyze(payload, request)
+
+@reports_router.post("/generate-with-config")
+async def generate_with_config(payload: SectionSelectionRequest, request: Request):
+    """Generate report with user-selected sections and configurations."""
+    return await execute_report_with_config(payload, request)
 
 
-@router_main.post("/api/reports/generate", tags=["reports"])
-async def api_reports_generate(req: ReportGenerationRequest):
-    return await generate_report(req)
+# =========================
+# Static file for the report UI
+# =========================
+FRONTEND_ROOT = Path(
+    os.getenv("FRONTEND_DIR", r"C:\Users\aiuser\Documents\chiuzu-dev\hcm-ai-portal-v2\frontend")
+).resolve()
 
-
-@router_main.get("/api/reports/download/{report_id}", tags=["reports"])
-async def api_reports_download(report_id: str):
-    return await download_report_response(report_id)
+@static_router.get("/generate_report.html", include_in_schema=False, response_class=HTMLResponse)
+async def serve_generate_report():
+    path = (FRONTEND_ROOT / "generate_report.html").resolve()
+    logger.info("Serving generate_report.html from: %s (exists=%s)", path, path.is_file())
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Not found: {path}")
+    return FileResponse(str(path), media_type="text/html; charset=utf-8")
 
 
 # =========================
@@ -800,8 +814,10 @@ def leave_join_hints(request: Request, tables: List[str] = Query(..., alias="tab
 
 
 # =========================
-# Export combined router
+# Export combined router (IMPORTANT)
 # =========================
 router = APIRouter()
 router.include_router(router_main)
 router.include_router(router_leave)
+router.include_router(reports_router)   # <-- include the reports endpoints
+router.include_router(static_router)    # <-- include the static page route

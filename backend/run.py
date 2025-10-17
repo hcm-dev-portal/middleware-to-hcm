@@ -1,3 +1,5 @@
+# run.py  (only the changed/added lines are marked with <<< >>>)
+
 import os
 import logging
 import time
@@ -13,17 +15,22 @@ from fastapi.responses import FileResponse, Response
 from app.api.speech_routes import speech_router
 from app.api.router import router as api_router
 
-# ✅ Use the enhanced, Unicode-ready DB service
+# ✅ DB + NLP
 from app.services.db_service import SQLServerDatabaseService, set_request_id
-
-# ✅ Use your optimized NLP v2
 from app.services.nlp_service_2 import LanguageNativeNLPService
 
-# Optional: vector bootstrapper for warming up vector indexes at startup
+# ✅ ADD: reports routers (API + static)
+# <<< add
+from app.api.router import (
+    router as reports_router,
+    static_router as reports_static_router,
+)
+# >>>
+
 try:
     from app.vector_bootstrap import VectorBootstrapper
 except Exception:
-    VectorBootstrapper = None  # Guarded by checks
+    VectorBootstrapper = None
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -39,41 +46,29 @@ ASSETS_DIR   = FRONTEND_DIR / "assets"
 LANG_DIR     = FRONTEND_DIR / "lang"
 INDEX_HTML   = FRONTEND_DIR / "index.html"
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Startup:
-      - Initialize DB (Unicode-enabled)
-      - Initialize LanguageNativeNLPService (v2) as primary NLP
-      - Warm vector DBs/indexes so health is green on first load
-    """
     t0 = time.perf_counter()
     try:
-        # DB service
         db = SQLServerDatabaseService()
         app.state.db = db
 
-        # ✅ Primary NLP = v2 only
         nlp = LanguageNativeNLPService(db_service=db)
         app.state.nlp = nlp
 
-        # --- Vector warmup ---
         warm_timeout_s = int(os.getenv("VECTOR_WARMUP_TIMEOUT_S", "20"))
         warm_block = os.getenv("VECTOR_WARMUP_BLOCKING", "true").lower() == "true"
 
         if VectorBootstrapper:
-            app.state.vector_bootstrap = VectorBootstrapper({
-                "primary": getattr(app.state, "nlp", None),
-            })
+            app.state.vector_bootstrap = VectorBootstrapper({"primary": getattr(app.state, "nlp", None)})
             try:
                 if warm_block:
                     logger.info("Vector warmup (blocking, timeout=%ss) starting ...", warm_timeout_s)
                     result = await app.state.vector_bootstrap.start()
                     logger.info("Vector warmup completed: %s", result)
                 else:
-                    logger.info("Vector warmup (background) scheduled.")
                     import asyncio
+                    logger.info("Vector warmup (background) scheduled.")
                     asyncio.create_task(app.state.vector_bootstrap.start(timeout_s=warm_timeout_s))
             except Exception as e:
                 logger.exception("Vector warmup error: %s", e)
@@ -170,9 +165,15 @@ def create_app() -> FastAPI:
     else:
         logger.warning("Frontend dir not found at %s", FRONTEND_DIR)
 
-    # API routes
+    # ✅ API routes
     app.include_router(api_router)
     app.include_router(speech_router)
+
+    # ✅ ADD: include reports API and its static route
+    # <<< add
+    app.include_router(reports_router)          # /api/reports/...
+    app.include_router(reports_static_router)   # /generate_report.html (static page)
+    # >>>
 
     return app
 

@@ -21,12 +21,47 @@ DEFAULT_REGION   = os.getenv("AWS_REGION", "ap-southeast-2")
 # Optional AI (for recommendations only). We keep this tiny & safe.
 try:
     from langchain_openai import ChatOpenAI
-    from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+    from langchain.prompts import (
+        ChatPromptTemplate,
+        SystemMessagePromptTemplate,
+        HumanMessagePromptTemplate,
+    )
     OPENAI_KEY = os.getenv("OPENAI_API_KEY")
     _OPENAI_OK = bool(OPENAI_KEY)
 except Exception:
     _OPENAI_OK = False
 
+
+# ---------------------------
+# Utility
+# ---------------------------
+
+def _coerce_dtypes_for_viz(df: pd.DataFrame) -> pd.DataFrame:
+    """Lightweight dtype coercion helpful for charts (dates, numeric)."""
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+    # Dates
+    for c in df.columns:
+        lc = str(c).lower()
+        if any(k in lc for k in ["date", "day", "time", "workdate", "startdate", "enddate", "canusedate", "disableddate"]):
+            try:
+                df[c] = pd.to_datetime(df[c], errors="coerce")
+            except Exception:
+                pass
+    # Numeric strings with commas
+    for c in df.columns:
+        if df[c].dtype == object:
+            try:
+                df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", ""), errors="ignore")
+            except Exception:
+                pass
+    return df
+
+
+# -------------------------------------------------------------------
+# Visualization Service
+# -------------------------------------------------------------------
 
 class VisualizationService:
     """
@@ -82,20 +117,39 @@ class VisualizationService:
     ) -> Dict[str, Any]:
         """
         Decide chart -> build chart -> save image -> return 'visualization' dict for the API response.
+
+        Notes:
+        - Honors explicit chart keywords in user_query (EN + ZH) if present.
+        - If force_chart_type is provided, it overrides both query intent and AI recommendation.
         """
         try:
+            if df is None:
+                raise ValueError("DataFrame is None")
+            df = _coerce_dtypes_for_viz(df)
+
             analysis = self._analyze(df)
+
+            # 1) Explicit chart intent from user query (if any)
+            user_chart = self._extract_chart_intent(user_query)
+
+            # 2) Determine chart type: forced > explicit > AI > fallback
             if force_chart_type:
                 chart_type = force_chart_type
-                reasoning = f"Forced chart type '{force_chart_type}'"
-                alts = []
+                reasoning = f"Forced chart type '{force_chart_type}'."
+                alts: List[str] = []
                 insights_hint: List[str] = []
             else:
-                reco = self._recommend_chart(df, user_query, analysis)
-                chart_type = reco["recommended_chart"]
-                reasoning = reco.get("reasoning") or "Recommended by system"
-                alts = reco.get("alternative_charts", [])
-                insights_hint = reco.get("insights_to_highlight", [])
+                if user_chart:
+                    chart_type = user_chart
+                    reasoning = f"User requested chart type '{user_chart}'."
+                    alts = []
+                    insights_hint = []
+                else:
+                    reco = self._recommend_chart(df, user_query, analysis)
+                    chart_type = reco["recommended_chart"]
+                    reasoning = reco.get("reasoning") or "Recommended by system"
+                    alts = reco.get("alternative_charts", [])
+                    insights_hint = reco.get("insights_to_highlight", [])
 
             if not title:
                 title = self._default_title(chart_type, user_query, df)
@@ -201,9 +255,8 @@ class VisualizationService:
         cat = len(a["categorical_cols"])
         dt  = len(a["datetime_cols"])
 
-        # Soft intent cues
         q = (query or "").lower()
-        if "trend" in q or "over time" in q or dt >= 1:
+        if any(k in q for k in ["trend", "over time", "time series", "timeseries"]) or dt >= 1:
             return {"recommended_chart": "line_chart", "reasoning": "Time trend", "alternative_charts": ["bar_chart"], "insights_to_highlight": []}
         if "distribution" in q or "histogram" in q:
             return {"recommended_chart": "histogram", "reasoning": "Distribution requested", "alternative_charts": ["box_plot"], "insights_to_highlight": []}
@@ -217,6 +270,67 @@ class VisualizationService:
             return {"recommended_chart": "histogram", "reasoning": "Single numeric distribution", "alternative_charts": ["box_plot"], "insights_to_highlight": []}
         return {"recommended_chart": "table", "reasoning": "Fallback to table", "alternative_charts": [], "insights_to_highlight": []}
 
+    # ---------- Query intent parsing (explicit user request) ----------
+
+    def _extract_chart_intent(self, query: str) -> Optional[str]:
+        """
+        Map common EN + ZH chart keywords to our internal chart types.
+        Returns one of:
+            line_chart, bar_chart, pie_chart, scatter_plot, histogram, heatmap, box_plot, table, area_chart
+        """
+        if not query:
+            return None
+        q = query.strip().lower()
+
+        # English
+        mapping = {
+            "line": "line_chart",
+            "line chart": "line_chart",
+            "timeseries": "line_chart",
+            "time series": "line_chart",
+            "trend": "line_chart",
+            "bar": "bar_chart",
+            "bar chart": "bar_chart",
+            "column": "bar_chart",
+            "pie": "pie_chart",
+            "donut": "pie_chart",
+            "scatter": "scatter_plot",
+            "scatterplot": "scatter_plot",
+            "hist": "histogram",
+            "histogram": "histogram",
+            "heatmap": "heatmap",
+            "corr": "heatmap",
+            "box": "box_plot",
+            "boxplot": "box_plot",
+            "table": "table",
+            "grid": "table",
+            "area": "area_chart",
+            "area chart": "area_chart",
+        }
+
+        # Chinese (Traditional)
+        zh_map = {
+            "折線": "line_chart",
+            "趨勢": "line_chart",
+            "長條": "bar_chart",
+            "柱狀": "bar_chart",
+            "圓餅": "pie_chart",
+            "散點": "scatter_plot",
+            "直方": "histogram",
+            "熱圖": "heatmap",
+            "箱型": "box_plot",
+            "表格": "table",
+            "面積": "area_chart",
+        }
+
+        for k, v in mapping.items():
+            if k in q:
+                return v
+        for k, v in zh_map.items():
+            if k in q:
+                return v
+        return None
+
     def _default_title(self, chart_type: str, query: str, df: pd.DataFrame) -> str:
         if query:
             return query[:120]
@@ -225,7 +339,6 @@ class VisualizationService:
     # ---------- Chart Builders (deterministic) ----------
 
     def _build_chart(self, df: pd.DataFrame, chart_type: str, title: str) -> go.Figure:
-        # Normalize
         chart_type = (chart_type or "").lower()
 
         if df is None or df.empty:
@@ -234,36 +347,22 @@ class VisualizationService:
             fig.update_layout(template=self.theme, width=800, height=500, title="No Data")
             return fig
 
-        # Light automatic dtype fixes
-        df = df.copy()
-        for c in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df[c]):
-                continue
-            # try to parse dates if column name hints
-            if any(k in str(c).lower() for k in ["date", "time", "day"]):
-                with pd.option_context("mode.chained_assignment", None):
-                    try:
-                        df[c] = pd.to_datetime(df[c], errors="ignore")
-                    except Exception:
-                        pass
-
         # Auto-pick axes
         cols = list(df.columns)
         numeric = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
         datetime_cols = [c for c in cols if pd.api.types.is_datetime64_any_dtype(df[c])]
         categorical = [c for c in cols if c not in numeric and c not in datetime_cols]
 
-        # Prefer (x, y) = (time/category, numeric)
         x = datetime_cols[0] if datetime_cols else (categorical[0] if categorical else (cols[0] if cols else None))
         y = (numeric[0] if numeric else (cols[1] if len(cols) > 1 else None))
 
-        # Builders
-        if chart_type == "line_chart" and x is not None and y is not None:
+        if chart_type == "area_chart" and x is not None and y is not None:
+            fig = px.area(df, x=x, y=y, title=title, template=self.theme)
+        elif chart_type == "line_chart" and x is not None and y is not None:
             fig = px.line(df, x=x, y=y, title=title, template=self.theme)
         elif chart_type == "bar_chart" and x is not None:
-            # If y is None, do frequency
             if y is None or not pd.api.types.is_numeric_dtype(df[y]):
-                counts = df[x].value_counts().reset_index()
+                counts = df[x].value_counts(dropna=False).reset_index()
                 counts.columns = [str(x), "Count"]
                 fig = px.bar(counts, x=str(x), y="Count", title=title, template=self.theme)
             else:
@@ -272,8 +371,7 @@ class VisualizationService:
             if x is None:
                 x = cols[0]
             if y is None or not pd.api.types.is_numeric_dtype(df[y]):
-                # try to compute frequency
-                vc = df[x].value_counts().reset_index()
+                vc = df[x].value_counts(dropna=False).reset_index()
                 vc.columns = [str(x), "Count"]
                 fig = px.pie(vc, names=str(x), values="Count", title=title)
             else:
@@ -322,8 +420,7 @@ class VisualizationService:
         try:
             fig.write_image(str(fpath), width=800, height=500)  # needs kaleido
         except Exception as e:
-            logger.warning("Static export failed (%s). Falling back to HTML image via to_image()", e)
-            # Fallback: use plotly to_image (still kaleido under the hood)
+            logger.warning("Static export failed (%s). Retrying write_image()", e)
             fig.write_image(str(fpath), width=800, height=500)
 
         # Your web server should map LOCAL_SAVE_DIR -> /static/images (nginx, uvicorn StaticFiles, etc.)
@@ -345,7 +442,6 @@ class VisualizationService:
         rows, cols = analysis.get("shape", (len(df), len(df.columns)))
         insights.append(f"Dataset has {rows} rows and {cols} columns.")
 
-        # Very light heuristics
         if chart_type == "line_chart":
             insights.append("Line chart highlights trends across the x-axis progression.")
         elif chart_type == "bar_chart":
@@ -360,11 +456,12 @@ class VisualizationService:
             insights.append("Heatmap visualizes relationships in a matrix (e.g., correlations).")
         elif chart_type == "box_plot":
             insights.append("Box plot summarizes distribution and outliers.")
+        elif chart_type == "area_chart":
+            insights.append("Area chart emphasizes cumulative totals over time.")
 
         if hints:
-            insights.extend(hints[:3])
+            insights.extend([h for h in hints if isinstance(h, str)][:3])
 
-        # Nulls
         nulls = df.isnull().sum()
         if (nulls > 0).any():
             cols_with_nulls = [c for c, v in nulls.items() if v > 0]

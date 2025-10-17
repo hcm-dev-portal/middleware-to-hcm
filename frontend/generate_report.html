@@ -9,26 +9,24 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  
-  <!-- Load translations after other scripts -->
+
+  <!-- Optional i18n (if you have it) -->
   <script src="./translations.js"></script>
 
   <style>
     body { font-family: 'Inter', sans-serif; }
-    .research-step { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-    .thinking-animation { animation: thinking 2s infinite; }
-    @keyframes thinking { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.5; } }
-    .progress-shimmer { background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 50%, #3b82f6 100%); background-size: 200% 100%; animation: shimmer 2s infinite; }
-    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-    .fade-in { animation: fadeIn 0.5s ease-in; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    .pulse-dot { animation: pulse 2s infinite; }
-    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); } 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); } }
+    .research-step { transition: all 0.3s cubic-bezier(0.4,0,0.2,1); }
+    .thinking-animation { animation: thinking 1.6s infinite; }
+    @keyframes thinking { 0%,50% { opacity: 1; } 51%,100% { opacity: .5; } }
+    .fade-in { animation: fadeIn .25s ease-in; }
+    @keyframes fadeIn { from { opacity:0; transform: translateY(6px);} to { opacity:1; transform:none; } }
+    .section-card { transition: .15s; }
+    .section-card.selected { border-color:#3b82f6; background:#eff6ff; }
+    .chart-option { transition: .15s; cursor:pointer; }
+    .chart-option.selected { border-color:#3b82f6; background:#dbeafe; }
     .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-    .research-bubble { max-width: 85%; word-wrap: break-word; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background:#94a3b8; }
   </style>
 </head>
 <body class="bg-gradient-to-br from-slate-50 to-blue-50 min-h-screen">
@@ -38,28 +36,26 @@
     <div class="max-w-6xl mx-auto px-4 py-4">
       <div class="flex items-center justify-between">
         <div class="flex items-center space-x-4">
-          <button onclick="window.location.href='/'" class="p-2 rounded-lg hover:bg-gray-100 transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="m15 18-6-6 6-6"/>
-            </svg>
+          <button onclick="window.location.href='/'" class="p-2 rounded-lg hover:bg-gray-100 transition-colors" aria-label="Back">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
           </button>
           <div class="flex items-center space-x-3">
-            <div class="w-10 h-10 bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl flex items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-white">
-                <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
+            <div class="w-10 h-10 bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl grid place-items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="none" stroke="#fff" stroke-width="2">
+                <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z"/>
               </svg>
             </div>
             <div>
-              <h1 class="text-xl font-bold text-gray-900" data-i18n="report.title">AI Report Generator</h1>
-              <p class="text-sm text-gray-500" data-i18n="report.subtitle">Research Mode - Advanced Analysis & Reporting</p>
+              <h1 class="text-xl font-bold text-gray-900">AI Report Generator</h1>
+              <p class="text-sm text-gray-500">Research Mode — Ask → Refine → Configure → Generate → Download</p>
             </div>
           </div>
         </div>
-        
+
         <div class="flex items-center space-x-3">
           <div id="research-status" class="flex items-center space-x-2 px-3 py-1.5 bg-gray-100 rounded-full">
-            <div class="w-2 h-2 bg-green-500 rounded-full pulse-dot"></div>
-            <span class="text-sm text-gray-700" data-i18n="report.status_ready">Ready</span>
+            <span class="inline-block w-2 h-2 rounded-full bg-green-500"></span>
+            <span class="text-sm text-gray-700">Ready</span>
           </div>
           <select id="language-selector" class="text-sm p-2 rounded-md bg-white border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:outline-none">
             <option value="en-US">English (US)</option>
@@ -70,65 +66,48 @@
     </div>
   </header>
 
-  <!-- Main Content -->
+  <!-- Main -->
   <main class="max-w-6xl mx-auto px-4 py-8">
-    
-    <!-- Initial Query Section -->
+    <!-- Query -->
     <section id="query-section" class="mb-8">
       <div class="bg-white rounded-2xl shadow-lg border border-gray-200 p-8">
         <div class="text-center mb-8">
-          <div class="w-16 h-16 bg-gradient-to-br from-purple-600 to-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-white">
+          <div class="w-16 h-16 bg-gradient-to-br from-purple-600 to-blue-600 rounded-2xl grid place-items-center mx-auto mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" fill="none" stroke="#fff" stroke-width="2">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
               <polyline points="14,2 14,8 20,8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-              <polyline points="10,9 9,9 8,9"/>
             </svg>
           </div>
-          <h2 class="text-3xl font-bold text-gray-900 mb-2" data-i18n="report.main_title">What report would you like to generate?</h2>
-          <p class="text-gray-600 max-w-2xl mx-auto" data-i18n="report.main_description">Describe your research needs and I'll conduct a comprehensive analysis, gathering data from multiple sources to create a detailed report.</p>
+          <h2 class="text-3xl font-bold text-gray-900 mb-2">What report would you like to generate?</h2>
+          <p class="text-gray-600 max-w-2xl mx-auto">Describe your needs. We’ll analyze it, ask any missing details, then build the report.</p>
         </div>
 
         <div class="max-w-4xl mx-auto">
           <div class="relative">
-            <textarea
-              id="main-query"
-              rows="4"
-              class="w-full p-4 pr-16 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-lg"
-              data-i18n="report.input_placeholder" 
-              data-i18n-type="placeholder"
-              placeholder="Example: Generate a comprehensive quarterly leave analysis for the HR team, including trends, department comparisons, and policy recommendations..."
-            ></textarea>
-            <button
-              id="start-research"
-              class="absolute bottom-4 right-4 p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="m9 18 6-6-6-6"/>
-              </svg>
+            <textarea id="main-query" rows="4" class="w-full p-4 pr-16 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-lg" placeholder="Example: Quarterly leave analysis with department trends, comparisons, and policy recommendations..."></textarea>
+            <button id="start-research" class="absolute bottom-4 right-4 p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors" aria-label="Start">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" stroke="#fff" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
             </button>
           </div>
 
-          <!-- Example Prompts -->
           <div class="mt-6">
-            <p class="text-sm text-gray-500 mb-3" data-i18n="report.examples_label">Quick examples:</p>
+            <p class="text-sm text-gray-500 mb-3">Quick examples:</p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors">
-                <div class="font-medium text-gray-900" data-i18n="report.example_1_title">Monthly Department Analysis</div>
-                <div class="text-sm text-gray-600" data-i18n="report.example_1_desc">Leave patterns, overtime trends, and productivity metrics by department</div>
+              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200">
+                <div class="font-medium text-gray-900">Monthly Department Analysis</div>
+                <div class="text-sm text-gray-600">Leave patterns, overtime trends, and productivity metrics</div>
               </button>
-              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors">
-                <div class="font-medium text-gray-900" data-i18n="report.example_2_title">Executive Summary Report</div>
-                <div class="text-sm text-gray-600" data-i18n="report.example_2_desc">High-level workforce analytics with key insights and recommendations</div>
+              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200">
+                <div class="font-medium text-gray-900">Executive Summary Report</div>
+                <div class="text-sm text-gray-600">High-level workforce analytics and key recommendations</div>
               </button>
-              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors">
-                <div class="font-medium text-gray-900" data-i18n="report.example_3_title">Compliance Audit Report</div>
-                <div class="text-sm text-gray-600" data-i18n="report.example_3_desc">Leave policy compliance, attendance tracking, and regulatory alignment</div>
+              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200">
+                <div class="font-medium text-gray-900">Compliance Audit Report</div>
+                <div class="text-sm text-gray-600">Policy compliance, attendance tracking, regulatory alignment</div>
               </button>
-              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors">
-                <div class="font-medium text-gray-900" data-i18n="report.example_4_title">Predictive Analytics</div>
-                <div class="text-sm text-gray-600" data-i18n="report.example_4_desc">Forecast future leave trends and resource planning recommendations</div>
+              <button class="example-prompt text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200">
+                <div class="font-medium text-gray-900">Predictive Analytics</div>
+                <div class="text-sm text-gray-600">Forecast leave trends and resource planning</div>
               </button>
             </div>
           </div>
@@ -136,113 +115,102 @@
       </div>
     </section>
 
-    <!-- Research Process Section -->
+    <!-- Configuration -->
+    <section id="configuration-section" class="hidden mb-8">
+      <div class="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+        <div class="mb-6">
+          <h3 class="text-xl font-bold text-gray-900 mb-2">Configure Your Report</h3>
+          <p class="text-gray-600">Select sections and visualizations for your report</p>
+        </div>
+
+        <div class="mb-6 p-4 bg-gray-50 rounded-lg">
+          <label class="block text-sm font-semibold text-gray-900 mb-3">Report Depth</label>
+          <div class="flex gap-3">
+            <button class="depth-option px-4 py-2 rounded-lg border-2 border-gray-300 hover:border-blue-500" data-depth="high_level">
+              <div class="font-medium">High Level</div><div class="text-xs text-gray-600">Executive overview</div>
+            </button>
+            <button class="depth-option px-4 py-2 rounded-lg border-2 border-blue-500 bg-blue-50" data-depth="standard">
+              <div class="font-medium">Standard</div><div class="text-xs text-gray-600">Balanced detail</div>
+            </button>
+            <button class="depth-option px-4 py-2 rounded-lg border-2 border-gray-300 hover:border-blue-500" data-depth="detailed">
+              <div class="font-medium">Detailed</div><div class="text-xs text-gray-600">Comprehensive analysis</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <label class="block text-sm font-semibold text-gray-900">Select Report Sections</label>
+            <div class="text-sm text-gray-600"><span id="section-count">0</span> selected</div>
+          </div>
+          <div id="sections-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+        </div>
+
+        <div class="flex justify-between items-center pt-4 border-t border-gray-200">
+          <button id="back-to-query" class="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">← Back</button>
+          <button id="generate-report-btn" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+            Generate Report
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Research / Progress -->
     <section id="research-section" class="hidden">
-      
-      <!-- Research Timeline -->
       <div class="bg-white rounded-2xl shadow-lg border border-gray-200 p-6 mb-6">
-        <h3 class="text-lg font-semibold text-gray-900 mb-4" data-i18n="report.progress_title">Research Progress</h3>
+        <h3 class="text-lg font-semibold text-gray-900 mb-4">Research Progress</h3>
         <div class="flex items-center justify-between">
           <div id="step-1" class="research-step flex flex-col items-center">
-            <div class="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center mb-2">
-              <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-              </svg>
-            </div>
-            <span class="text-sm font-medium text-gray-700" data-i18n="report.step_analyze">Analyze Request</span>
+            <div class="w-10 h-10 rounded-full bg-gray-300 grid place-items-center mb-2"><div class="w-3 h-3 rounded-full bg-white"></div></div>
+            <span class="text-sm text-gray-400">Analyze</span>
           </div>
-          <div class="flex-1 h-1 bg-gray-200 mx-4">
-            <div id="progress-bar-1" class="h-full bg-blue-600 transition-all duration-500" style="width: 100%"></div>
-          </div>
-          
+          <div class="flex-1 h-1 bg-gray-200 mx-4"><div id="progress-bar-1" class="h-full bg-blue-600" style="width:0%"></div></div>
+
           <div id="step-2" class="research-step flex flex-col items-center">
-            <div class="w-10 h-10 rounded-full border-2 border-gray-300 flex items-center justify-center mb-2">
-              <div class="w-3 h-3 rounded-full bg-gray-300"></div>
-            </div>
-            <span class="text-sm text-gray-400" data-i18n="report.step_gather">Gather Data</span>
+            <div class="w-10 h-10 rounded-full border-2 border-gray-300 grid place-items-center mb-2"><div class="w-3 h-3 rounded-full bg-gray-300"></div></div>
+            <span class="text-sm text-gray-400">Configure</span>
           </div>
-          <div class="flex-1 h-1 bg-gray-200 mx-4">
-            <div id="progress-bar-2" class="h-full bg-blue-600 transition-all duration-500" style="width: 0%"></div>
-          </div>
-          
+          <div class="flex-1 h-1 bg-gray-200 mx-4"><div id="progress-bar-2" class="h-full bg-blue-600" style="width:0%"></div></div>
+
           <div id="step-3" class="research-step flex flex-col items-center">
-            <div class="w-10 h-10 rounded-full border-2 border-gray-300 flex items-center justify-center mb-2">
-              <div class="w-3 h-3 rounded-full bg-gray-300"></div>
-            </div>
-            <span class="text-sm text-gray-400" data-i18n="report.step_research">Research & Analysis</span>
+            <div class="w-10 h-10 rounded-full border-2 border-gray-300 grid place-items-center mb-2"><div class="w-3 h-3 rounded-full bg-gray-300"></div></div>
+            <span class="text-sm text-gray-400">Generate</span>
           </div>
-          <div class="flex-1 h-1 bg-gray-200 mx-4">
-            <div id="progress-bar-3" class="h-full bg-blue-600 transition-all duration-500" style="width: 0%"></div>
-          </div>
-          
+          <div class="flex-1 h-1 bg-gray-200 mx-4"><div id="progress-bar-3" class="h-full bg-blue-600" style="width:0%"></div></div>
+
           <div id="step-4" class="research-step flex flex-col items-center">
-            <div class="w-10 h-10 rounded-full border-2 border-gray-300 flex items-center justify-center mb-2">
-              <div class="w-3 h-3 rounded-full bg-gray-300"></div>
-            </div>
-            <span class="text-sm text-gray-400" data-i18n="report.step_generate">Generate Report</span>
+            <div class="w-10 h-10 rounded-full border-2 border-gray-300 grid place-items-center mb-2"><div class="w-3 h-3 rounded-full bg-gray-300"></div></div>
+            <span class="text-sm text-gray-400">Download</span>
           </div>
         </div>
       </div>
 
-      <!-- Research Conversation -->
       <div class="bg-white rounded-2xl shadow-lg border border-gray-200">
         <div class="p-6 border-b border-gray-200">
-          <h3 class="text-lg font-semibold text-gray-900" data-i18n="report.process_title">Research Process</h3>
-          <p class="text-sm text-gray-600" data-i18n="report.process_desc">Follow along as I conduct comprehensive research for your report</p>
-        </div>
-        
-        <div id="research-conversation" class="p-6 max-h-96 overflow-y-auto custom-scrollbar space-y-4">
-          <!-- Research steps will be dynamically added here -->
+          <h3 class="text-lg font-semibold text-gray-900">Research Process</h3>
+          <p class="text-sm text-gray-600">I’ll ask clarifying questions if needed, then prepare your configuration.</p>
         </div>
 
-        <!-- Clarification Section -->
-        <div id="clarification-section" class="hidden p-6 border-t border-gray-200 bg-blue-50">
-          <div class="flex items-start space-x-4">
-            <div class="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-white">
-                <circle cx="12" cy="12" r="10"/>
-                <path d="M9,9h6a3,3,0,0,1,3,3v0a3,3,0,0,1-3,3h-3"/>
-                <path d="M9 15h6"/>
-              </svg>
-            </div>
-            <div class="flex-1">
-              <h4 class="font-semibold text-gray-900 mb-2" data-i18n="report.clarification_title">I need some clarification to provide the best analysis</h4>
-              <div id="clarification-content"></div>
-            </div>
-          </div>
-        </div>
+        <div id="research-conversation" class="p-6 max-h-96 overflow-y-auto custom-scrollbar space-y-4"></div>
 
-        <!-- Final Results Section -->
         <div id="results-section" class="hidden p-6 border-t border-gray-200">
           <div class="flex items-center justify-between mb-4">
-            <h3 class="text-lg font-semibold text-gray-900" data-i18n="report.complete_title">Research Complete</h3>
+            <h3 class="text-lg font-semibold text-gray-900">Research Complete</h3>
             <div class="flex items-center space-x-2 text-green-600">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-              </svg>
-              <span class="text-sm font-medium" data-i18n="report.analysis_finished">Analysis finished</span>
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span class="text-sm font-medium">Analysis finished</span>
             </div>
-          </div>
-          
-          <div id="research-summary" class="bg-gray-50 rounded-lg p-4 mb-4">
-            <!-- Summary will be populated here -->
           </div>
 
+          <div id="research-summary" class="bg-gray-50 rounded-lg p-4 mb-4"></div>
+
           <div class="flex items-center justify-between">
-            <div class="text-sm text-gray-600" data-i18n="report.ready_download">
-              Your comprehensive report is ready for download
-            </div>
+            <div class="text-sm text-gray-600">Your report is ready for download</div>
             <div class="flex space-x-3">
-              <button id="start-new-research" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors" data-i18n="report.new_research">
-                New Research
-              </button>
-              <button id="download-final-report" class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center space-x-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="7,10 12,15 17,10"/>
-                  <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                <span data-i18n="report.download_report">Download Report</span>
+              <button id="start-new-research" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">New Research</button>
+              <button id="download-final-report" class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center space-x-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <span>Download Report</span>
               </button>
             </div>
           </div>
@@ -252,45 +220,50 @@
   </main>
 
 <script>
-// Global state management
-const ResearchState = {
-  IDLE: 'idle',
-  ANALYZING: 'analyzing',
-  CLARIFYING: 'clarifying',
-  RESEARCHING: 'researching',
-  GENERATING: 'generating',
-  COMPLETE: 'complete'
-};
+/* ================================
+   State + Globals
+================================= */
+const AppState = { IDLE:'idle', ANALYZING:'analyzing', CONFIGURING:'configuring', GENERATING:'generating', COMPLETE:'complete' };
 
-let currentState = ResearchState.IDLE;
+let currentState = AppState.IDLE;
 let currentQuery = '';
-let clarifications = [];
-let researchData = null;
-let i18n = null; // Translation manager
+let analysisData = null;
+let configurationData = null;
+let selectedSections = new Set();
+let chartPreferences = {};
+let selectedDepth = 'standard';
+let i18n = null;
+const API_BASE = window.API_BASE || window.location.origin;
 
-// API Configuration
-const API_BASE = window.location.origin; // Use same origin as the current page
-
-// DOM Elements
+/* ================================
+   DOM
+================================= */
 const querySection = document.getElementById('query-section');
+const configurationSection = document.getElementById('configuration-section');
 const researchSection = document.getElementById('research-section');
+
 const mainQuery = document.getElementById('main-query');
 const startResearchBtn = document.getElementById('start-research');
+
 const researchConversation = document.getElementById('research-conversation');
-const clarificationSection = document.getElementById('clarification-section');
-const clarificationContent = document.getElementById('clarification-content');
 const resultsSection = document.getElementById('results-section');
 const researchSummary = document.getElementById('research-summary');
 const downloadBtn = document.getElementById('download-final-report');
 const newResearchBtn = document.getElementById('start-new-research');
 const researchStatus = document.getElementById('research-status');
 
-// Initialize i18n and DOM when page loads
+const sectionsGrid = document.getElementById('sections-grid');
+const generateReportBtn = document.getElementById('generate-report-btn');
+const backToQueryBtn = document.getElementById('back-to-query');
+const sectionCount = document.getElementById('section-count');
+
+/* ================================
+   Init
+================================= */
 document.addEventListener('DOMContentLoaded', async () => {
   if (window.TranslationManager) {
     i18n = new window.TranslationManager();
     await i18n.init('en-US');
-    
     const langSelector = document.getElementById('language-selector');
     if (langSelector) {
       langSelector.value = i18n.getCurrentLanguage();
@@ -299,52 +272,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         applyTranslations();
       });
     }
-
     applyTranslations();
   }
-  
-  // Initialize other event listeners
   initializeEventListeners();
 });
 
-// Translations
 function applyTranslations() {
   if (!i18n) return;
-  i18n.scanAndRegisterElements();
-  i18n.applyTranslations();
-  updateDynamicTranslations();
+  i18n.scanAndRegisterElements?.();
+  i18n.applyTranslations?.();
 }
 
-function updateDynamicTranslations() {
-  if (!i18n) return;
-  const statusSpan = document.querySelector('#research-status span');
-  if (statusSpan && currentState === ResearchState.IDLE) {
-    statusSpan.textContent = i18n.t('report.status_ready') || 'Ready';
-  }
-}
+function t(key, fallback='') { return i18n ? (i18n.t(key)||fallback) : fallback; }
 
-function t(key, fallback = '') {
-  return i18n ? i18n.t(key) : fallback;
-}
-
-// Event listeners
+/* ================================
+   Event Listeners
+================================= */
 function initializeEventListeners() {
   document.querySelectorAll('.example-prompt').forEach(btn => {
     btn.addEventListener('click', () => {
-      const title = btn.querySelector('.font-medium').textContent;
-      const description = btn.querySelector('.text-sm').textContent;
+      const title = btn.querySelector('.font-medium')?.textContent?.trim() || '';
+      const description = btn.querySelector('.text-sm')?.textContent?.trim() || '';
       mainQuery.value = `${title}: ${description}`;
       mainQuery.focus();
     });
   });
 
-  startResearchBtn.addEventListener('click', startResearch);
-
+  startResearchBtn.addEventListener('click', startAnalysis);
   mainQuery.addEventListener('keypress', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      startResearch();
-    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') startAnalysis();
   });
+
+  generateReportBtn.addEventListener('click', generateReport);
+  backToQueryBtn.addEventListener('click', () => transitionTo(AppState.IDLE));
 
   downloadBtn.addEventListener('click', downloadReport);
   newResearchBtn.addEventListener('click', resetResearch);
@@ -352,494 +312,517 @@ function initializeEventListeners() {
   mainQuery.focus();
 }
 
-// Utilities
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
+/* ================================
+   State Machine
+================================= */
+function transitionTo(newState) {
+  currentState = newState;
 
-function updateResearchStatus(statusKey, color = 'green') {
-  const statusEl = researchStatus.querySelector('span');
-  const dotEl = researchStatus.querySelector('.pulse-dot');
-
-  const statusText = t(`report.status_${statusKey.toLowerCase().replace(/\s+/g, '_')}`, statusKey);
-  statusEl.textContent = statusText;
-
-  // Tailwind-safe color mapping (avoid dynamic classes in prod)
-  const colorMap = {
-    green: 'bg-green-500',
-    blue: 'bg-blue-500',
-    yellow: 'bg-yellow-500',
-    orange: 'bg-orange-500',
-    purple: 'bg-purple-500',
-    red: 'bg-red-500',
-    gray: 'bg-gray-500'
+  const setStatus = (text, cls='bg-green-500') => {
+    const span = researchStatus.querySelector('span:last-child');
+    const dot = researchStatus.querySelector('span:first-child');
+    if (span) span.textContent = text;
+    if (dot) dot.className = `inline-block w-2 h-2 rounded-full ${cls}`;
   };
-  const cls = colorMap[color] || colorMap.green;
-  dotEl.className = `w-2 h-2 rounded-full pulse-dot ${cls}`;
-}
 
-function updateStep(stepNumber, active = false, completed = false) {
-  const step = document.getElementById(`step-${stepNumber}`);
-  const circle = step.querySelector('div');
-  const text = step.querySelector('span');
-  const progressBar = document.getElementById(`progress-bar-${stepNumber}`);
+  // helpers for step UI
+  const stepState = (n, {active=false, done=false}) => {
+    const step = document.getElementById(`step-${n}`);
+    const circle = step?.querySelector('div');
+    const text = step?.querySelector('span');
+    const bar = document.getElementById(`progress-bar-${n}`);
+    if (!step || !circle || !text) return;
 
-  if (completed) {
-    circle.className = 'w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center mb-2';
-    circle.innerHTML = '<svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
-    text.className = 'text-sm font-medium text-gray-700';
-    if (progressBar) progressBar.style.width = '100%';
-  } else if (active) {
-    circle.className = 'w-10 h-10 rounded-full border-2 border-blue-600 bg-blue-50 flex items-center justify-center mb-2';
-    circle.innerHTML = '<div class="w-3 h-3 rounded-full bg-blue-600 thinking-animation"></div>';
-    text.className = 'text-sm font-medium text-blue-600';
-  } else {
-    circle.className = 'w-10 h-10 rounded-full border-2 border-gray-300 flex items-center justify-center mb-2';
-    circle.innerHTML = '<div class="w-3 h-3 rounded-full bg-gray-300"></div>';
-    text.className = 'text-sm text-gray-400';
+    if (done) {
+      circle.className = 'w-10 h-10 rounded-full bg-blue-600 grid place-items-center mb-2';
+      circle.innerHTML = '<svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
+      text.className = 'text-sm font-medium text-gray-700';
+      if (bar) bar.style.width = '100%';
+    } else if (active) {
+      circle.className = 'w-10 h-10 rounded-full border-2 border-blue-600 bg-blue-50 grid place-items-center mb-2';
+      circle.innerHTML = '<div class="w-3 h-3 rounded-full bg-blue-600 thinking-animation"></div>';
+      text.className = 'text-sm font-medium text-blue-600';
+      if (bar) bar.style.width = '50%';
+    } else {
+      circle.className = 'w-10 h-10 rounded-full border-2 border-gray-300 grid place-items-center mb-2';
+      circle.innerHTML = '<div class="w-3 h-3 rounded-full bg-gray-300"></div>';
+      text.className = 'text-sm text-gray-400';
+      if (bar) bar.style.width = '0%';
+    }
+  };
+
+  switch (newState) {
+    case AppState.IDLE:
+      querySection.classList.remove('hidden');
+      configurationSection.classList.add('hidden');
+      researchSection.classList.add('hidden');
+      setStatus('Ready', 'bg-green-500');
+      [1,2,3,4].forEach(i => stepState(i, {active:false, done:false}));
+      break;
+    case AppState.ANALYZING:
+      querySection.classList.add('hidden');
+      configurationSection.classList.add('hidden');
+      researchSection.classList.remove('hidden');
+      resultsSection.classList.add('hidden');
+      setStatus('Analyzing', 'bg-blue-500');
+      stepState(1, {active:true, done:false});
+      break;
+    case AppState.CONFIGURING:
+      querySection.classList.add('hidden');
+      configurationSection.classList.remove('hidden');
+      researchSection.classList.add('hidden');
+      setStatus('Configuring', 'bg-purple-500');
+      stepState(1, {active:false, done:true});
+      stepState(2, {active:true, done:false});
+      break;
+    case AppState.GENERATING:
+      querySection.classList.add('hidden');
+      configurationSection.classList.add('hidden');
+      researchSection.classList.remove('hidden');
+      setStatus('Generating', 'bg-orange-500');
+      stepState(2, {active:false, done:true});
+      stepState(3, {active:true, done:false});
+      break;
+    case AppState.COMPLETE:
+      setStatus('Complete', 'bg-green-500');
+      stepState(3, {active:false, done:true});
+      stepState(4, {active:false, done:true});
+      resultsSection.classList.remove('hidden');
+      break;
   }
 }
 
-// Conversation bubble
-function addResearchMessage(type, titleKey, contentKey, isThinking = false) {
-  const messageDiv = document.createElement('div');
-  messageDiv.className = 'fade-in';
-  
-  const iconColors = {
-    ai: 'bg-blue-600',
-    research: 'bg-purple-600',
-    data: 'bg-green-600',
-    analysis: 'bg-orange-600',
-    clarification: 'bg-yellow-600'
-  };
+/* ================================
+   Flow: Analyze → Clarify? → Configure
+================================= */
+async function startAnalysis() {
+  currentQuery = (mainQuery.value || '').trim();
+  if (!currentQuery) { mainQuery.focus(); return; }
 
-  const icons = {
-    ai: '<path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>',
-    research: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
-    data: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>',
-    analysis: '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>',
-    clarification: '<circle cx="12" cy="12" r="10"/><path d="M9,9h6a3,3,0,0,1,3,3v0a3,3,0,0,1-3,3h-3"/>'
-  };
+  transitionTo(AppState.ANALYZING);
+  addResearchMessage('ai', 'Starting Analysis', 'Analyzing your request...', true);
+  startResearchBtn.disabled = true;
 
-  const thinkingClass = isThinking ? 'thinking-animation' : '';
-  
-  const title = typeof titleKey === 'string' && titleKey.startsWith('report.') ? t(titleKey, titleKey) : titleKey;
-  const content = typeof contentKey === 'string' && contentKey.startsWith('report.') ? t(contentKey, contentKey) : contentKey;
+  try {
+    const res = await fetch(`${API_BASE}/api/reports/configure`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ query: currentQuery, language: getCurrentLanguage(), mode: 'interactive' })
+    });
 
-  messageDiv.innerHTML = `
-    <div class="flex items-start space-x-4">
-      <div class="w-10 h-10 ${iconColors[type]} rounded-full flex items-center justify-center flex-shrink-0 ${thinkingClass}">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-white">
-          ${icons[type]}
-        </svg>
-      </div>
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center space-x-2 mb-1">
-          <h4 class="font-semibold text-gray-900">${escapeHtml(title)}</h4>
-          ${isThinking ? '<div class="flex space-x-1"><div class="w-2 h-2 bg-blue-600 rounded-full animate-pulse"></div><div class="w-2 h-2 bg-blue-600 rounded-full animate-pulse" style="animation-delay: 0.2s;"></div><div class="w-2 h-2 bg-blue-600 rounded-full animate-pulse" style="animation-delay: 0.4s;"></div></div>' : ''}
-        </div>
-        <div class="text-gray-700 text-sm leading-relaxed">${content}</div>
-      </div>
-    </div>
-  `;
+    if (!res.ok) {
+      let msg = `Analysis failed: ${res.status}`;
+      try { const j = await res.json(); if (j?.detail) msg += ` — ${j.detail}`; } catch {}
+      throw new Error(msg);
+    }
 
-  researchConversation.appendChild(messageDiv);
-  researchConversation.scrollTop = researchConversation.scrollHeight;
-  return messageDiv;
+    configurationData = await res.json();
+    analysisData = configurationData.analysis || {};
+
+    removeThinkingAnimation();
+    addResearchMessage('ai', 'Analysis Complete', `Report type: <strong>${escapeHtml(analysisData.report_type || 'Custom Analysis')}</strong>`);
+
+    // Clarifying questions loop (state-machine)
+    if (Array.isArray(configurationData.clarifying_questions) && configurationData.clarifying_questions.length > 0) {
+      await handleClarifications(configurationData.clarifying_questions);
+      return;
+    }
+
+    // Go straight to config UI
+    renderConfigurationUIFromConfig(configurationData);
+    transitionTo(AppState.CONFIGURING);
+
+  } catch (err) {
+    console.error(err);
+    removeThinkingAnimation();
+    addResearchMessage('ai', 'Error', `Analysis failed: ${escapeHtml(err.message)}`);
+    updateStatusError();
+  } finally {
+    startResearchBtn.disabled = false;
+  }
 }
 
-// Clarification prompt & flow
-function showClarificationPrompt(question, suggestions = []) {
-  const continueText = t('report.continue', 'Continue');
-  const answerPlaceholder = t('report.clarification_placeholder', 'Type your answer...');
-  const quickOptionsText = t('report.quick_options', 'Quick options:');
-  
-  clarificationContent.innerHTML = `
-    <div class="mb-4">
-      <p class="text-gray-800 mb-3">${escapeHtml(question)}</p>
-      ${suggestions.length > 0 ? `
-        <div class="mb-3">
-          <p class="text-sm text-gray-600 mb-2">${quickOptionsText}</p>
-          <div class="flex flex-wrap gap-2">
-            ${suggestions.map(suggestion => `
-              <button class="suggestion-btn px-3 py-1.5 text-sm bg-white border border-blue-300 text-blue-700 rounded-full hover:bg-blue-50 transition-colors">
-                ${escapeHtml(suggestion)}
-              </button>
-            `).join('')}
-          </div>
-        </div>
-      ` : ''}
-      <div class="flex space-x-3">
-        <input type="text" id="clarification-input" class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="${answerPlaceholder}">
-        <button id="submit-clarification" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-          ${continueText}
-        </button>
-      </div>
-    </div>
-  `;
+async function handleClarifications(questions) {
+  configurationData.user_choices = configurationData.user_choices || {};
 
-  clarificationContent.querySelectorAll('.suggestion-btn').forEach(btn => {
+  for (const q of questions) {
+    const answer = await askClarifyingQuestion(q); // waits user input
+    configurationData.user_choices[q.id] = answer;
+
+    // send incremental refinement
+    addResearchMessage('ai', 'Processing Answer', 'Updating configuration...', true);
+    const res = await fetch(`${API_BASE}/api/reports/configure`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        query: currentQuery,
+        language: getCurrentLanguage(),
+        previous_analysis: analysisData,
+        user_choices: configurationData.user_choices
+      })
+    });
+    removeThinkingAnimation();
+
+    if (!res.ok) throw new Error(`Clarify step failed: ${res.status}`);
+    const updated = await res.json();
+    configurationData = updated;
+    analysisData = updated.analysis || analysisData;
+
+    addResearchMessage('ai', 'Preference Saved',
+      `Captured: <strong>${escapeHtml(q.label || q.id)}</strong> → <em>${escapeHtml(String(answer))}</em>`);
+  }
+
+  // If more clarifying questions remain, recurse
+  if (Array.isArray(configurationData.clarifying_questions) && configurationData.clarifying_questions.length > 0) {
+    return handleClarifications(configurationData.clarifying_questions);
+  }
+
+  // Proceed to config UI
+  renderConfigurationUIFromConfig(configurationData);
+  transitionTo(AppState.CONFIGURING);
+}
+
+function askClarifyingQuestion(q) {
+  return new Promise((resolve) => {
+    const container = addResearchMessage('ai', 'I need a bit more info', `
+      <div class="mt-2">
+        <div class="font-medium mb-2">${escapeHtml(q.prompt || q.label || 'Please choose')}</div>
+        <div id="clarify-area"></div>
+      </div>
+    `);
+
+    const area = container.querySelector('#clarify-area');
+    if (Array.isArray(q.options) && q.options.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'flex flex-wrap gap-2 mt-1';
+      q.options.forEach(o => {
+        const b = document.createElement('button');
+        b.className = 'px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50';
+        b.textContent = o.label || o.value || String(o);
+        b.addEventListener('click', () => { container.remove(); resolve(o.value ?? o); });
+        wrap.appendChild(b);
+      });
+      area.appendChild(wrap);
+    } else {
+      const input = document.createElement('input');
+      input.className = 'border rounded px-2 py-1 w-full mb-2';
+      input.placeholder = 'Type your answer...';
+      const go = document.createElement('button');
+      go.className = 'ml-0 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700';
+      go.textContent = 'OK';
+      go.addEventListener('click', () => { const val = (input.value || '').trim(); container.remove(); resolve(val); });
+      area.appendChild(input); area.appendChild(go);
+      input.focus();
+    }
+  });
+}
+
+/* ================================
+   Configuration UI
+================================= */
+function renderConfigurationUIFromConfig(cfg) {
+  configurationData = cfg;
+
+  removeThinkingAnimation();
+  addResearchMessage('research', 'Configuration Ready',
+    `Found ${cfg.available_sections?.length || 0} available sections.`);
+
+  // reset
+  sectionsGrid.innerHTML = '';
+  selectedSections.clear();
+  chartPreferences = {};
+  selectedDepth = cfg?.defaults?.depth_level || 'standard';
+
+  const pre = new Set(cfg?.defaults?.preselected_sections || []);
+
+  (cfg.available_sections || []).forEach(section => {
+    const card = document.createElement('div');
+    card.className = 'section-card p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-blue-300';
+    card.dataset.sectionId = section.id;
+
+    card.innerHTML = `
+      <div class="flex items-start justify-between mb-2">
+        <div class="flex-1">
+          <h4 class="font-semibold text-gray-900">${escapeHtml(section.name)}</h4>
+          <p class="text-sm text-gray-600 mt-1">${escapeHtml(section.description || '')}</p>
+        </div>
+        <div class="ml-3"><input type="checkbox" class="section-checkbox w-5 h-5 text-blue-600 rounded" /></div>
+      </div>
+      <div class="chart-options hidden mt-3 pt-3 border-t border-gray-200">
+        <p class="text-xs font-medium text-gray-700 mb-2">Chart Types:</p>
+        <div class="flex flex-wrap gap-2">
+          ${(section.chart_options || []).map(ct =>
+            `<button class="chart-option px-2 py-1 text-xs border border-gray-300 rounded hover:border-blue-400" data-chart="${ct}">
+              ${String(ct).toUpperCase()}
+            </button>`
+          ).join('')}
+        </div>
+      </div>
+    `;
+
+    const checkbox = card.querySelector('.section-checkbox');
+    const chartOpts = card.querySelector('.chart-options');
+
+    // Preselect
+    if (pre.has(section.id)) {
+      checkbox.checked = true;
+      selectedSections.add(section.id);
+      card.classList.add('selected');
+      chartOpts.classList.remove('hidden');
+      if (section.chart_options?.length) {
+        const first = chartOpts.querySelector(`.chart-option[data-chart="${(cfg?.defaults?.chart_preferences?.[section.id]?.[0]) || section.chart_options[0]}"]`);
+        if (first) {
+          first.classList.add('selected');
+          chartPreferences[section.id] = [first.dataset.chart];
+        }
+      }
+    }
+
+    // Toggle via card click
+    card.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+      checkbox.checked = !checkbox.checked;
+      checkbox.dispatchEvent(new Event('change'));
+    });
+
+    // Checkbox change
+    checkbox.addEventListener('change', (e) => {
+      if (e.target.checked) {
+        selectedSections.add(section.id);
+        card.classList.add('selected');
+        chartOpts.classList.remove('hidden');
+        if (section.chart_options?.length) {
+          const btn = chartOpts.querySelector(`.chart-option[data-chart="${section.chart_options[0]}"]`);
+          if (btn) { btn.classList.add('selected'); chartPreferences[section.id] = [btn.dataset.chart]; }
+        }
+      } else {
+        selectedSections.delete(section.id);
+        card.classList.remove('selected');
+        chartOpts.classList.add('hidden');
+        delete chartPreferences[section.id];
+      }
+      updateSectionCount(); updateGenerateButton();
+    });
+
+    // Chart selection
+    chartOpts.querySelectorAll('.chart-option').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ct = btn.dataset.chart;
+        chartPreferences[section.id] = chartPreferences[section.id] || [];
+        if (btn.classList.contains('selected')) {
+          btn.classList.remove('selected');
+          chartPreferences[section.id] = chartPreferences[section.id].filter(x => x !== ct);
+        } else {
+          btn.classList.add('selected');
+          if (!chartPreferences[section.id].includes(ct)) chartPreferences[section.id].push(ct);
+        }
+      });
+    });
+
+    sectionsGrid.appendChild(card);
+  });
+
+  // Depth selection
+  document.querySelectorAll('.depth-option').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.getElementById('clarification-input').value = btn.textContent.trim();
+      document.querySelectorAll('.depth-option').forEach(b => b.classList.remove('border-blue-500','bg-blue-50'));
+      btn.classList.add('border-blue-500','bg-blue-50');
+      selectedDepth = btn.dataset.depth;
     });
   });
 
-  document.getElementById('submit-clarification').addEventListener('click', () => {
-    const input = document.getElementById('clarification-input');
-    const answer = input.value.trim();
-    if (answer) submitClarification(question, answer);
-  });
-
-  document.getElementById('clarification-input').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      const answer = e.target.value.trim();
-      if (answer) submitClarification(question, answer);
-    }
-  });
-
-  clarificationSection.classList.remove('hidden');
-  document.getElementById('clarification-input').focus();
+  updateSectionCount(); updateGenerateButton();
 }
 
-function submitClarification(question, answer) {
-  clarifications.push({ question, answer });
-  addResearchMessage('ai', 'Clarification Received', `Q: ${question}<br><strong>A: ${answer}</strong>`);
-  clarificationSection.classList.add('hidden');
-  setTimeout(() => continueResearch(), 500);
-}
+function updateSectionCount(){ sectionCount.textContent = selectedSections.size; }
+function updateGenerateButton(){ generateReportBtn.disabled = selectedSections.size === 0; }
 
-// Main Research Process
-async function startResearch() {
-  currentQuery = mainQuery.value.trim();
-  if (!currentQuery) {
-    mainQuery.focus();
-    return;
-  }
+/* ================================
+   Generate → Download
+================================= */
+async function generateReport() {
+  transitionTo(AppState.GENERATING);
+  addResearchMessage('data', 'Gathering Data', 'Collecting data for selected sections...', true);
 
-  querySection.classList.add('hidden');
-  researchSection.classList.remove('hidden');
-  
-  currentState = ResearchState.ANALYZING;
-  updateResearchStatus('Analyzing request', 'blue');
-  updateStep(1, true);
-
-  const analysisMsg = addResearchMessage('ai', 'Starting Analysis', 'I\'m analyzing your request to understand the scope and requirements...', true);
-  
   try {
-    const analyzeResponse = await fetch(`${API_BASE}/api/reports/analyze`, {
+    const requestId = configurationData.request_id || configurationData.id || analysisData?.request_id;
+    if (!requestId) throw new Error('Missing request_id from configuration.');
+
+    const res = await fetch(`${API_BASE}/api/reports/generate-with-config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        query: currentQuery,
+        request_id: requestId,
+        selected_sections: Array.from(selectedSections),
+        chart_preferences: chartPreferences,
+        depth_level: selectedDepth,
         language: getCurrentLanguage()
       })
     });
 
-    if (!analyzeResponse.ok) throw new Error(`Analysis failed: ${analyzeResponse.status}`);
-
-    const analysisData = await analyzeResponse.json();
-    const requestId = analysisData.request_id;
-    researchData = analysisData; // you already do this
-    researchData.request_id = requestId;
-    
-    analysisMsg.querySelector('.thinking-animation')?.classList.remove('thinking-animation');
-    analysisMsg.querySelector('.flex.space-x-1')?.remove();
-    
-    const analysisContent = analysisData.analysis ? 
-      `Request analyzed successfully. Report type: <strong>${analysisData.analysis.report_type || 'Custom Analysis'}</strong><br>
-       Scope: ${analysisData.analysis.scope || currentQuery}` :
-      `Request analyzed successfully. I'll be researching: <strong>${currentQuery}</strong>`;
-    
-    analysisMsg.querySelector('.text-gray-700').innerHTML = analysisContent;
-    
-    updateStep(1, false, true);
-    updateStep(2, true);
-    updateResearchStatus('Gathering data', 'orange');
-
-    addResearchMessage('data', 'Data Collection', 'Connecting to HR databases and gathering relevant metrics...', true);
-    await simulateDelay(1500);
-    
-    addResearchMessage('data', 'Data Sources Found', 'Successfully connected to your HR systems:<br>• Employee database<br>• Leave management system<br>• Overtime tracking<br>• Department structures');
-    
-    updateStep(2, false, true);
-    
-    if (analysisData.needs_clarification) {
-      currentState = ResearchState.CLARIFYING;
-      updateResearchStatus('Needs clarification', 'yellow');
-      
-      addResearchMessage('clarification', 'Need More Details', 'To provide the most accurate analysis, I need some additional information.');
-      
-      const questions = analysisData.clarification_questions || 
-                       (analysisData.clarification_question ? [analysisData.clarification_question] : 
-                        [getRandomClarificationQuestion()]);
-      
-      const firstQuestion = questions[0];
-      const suggestions = getSuggestionsForQuery(firstQuestion);
-      showClarificationPrompt(firstQuestion, suggestions);
-      return;
-    }
-    
-    researchData = analysisData;
-    continueResearch();
-    
-  } catch (error) {
-    console.error('Research error:', error);
-    analysisMsg.querySelector('.thinking-animation')?.classList.remove('thinking-animation');
-    analysisMsg.querySelector('.flex.space-x-1')?.remove();
-    analysisMsg.querySelector('.text-gray-700').innerHTML = `Analysis failed: ${error.message}`;
-    addResearchMessage('ai', 'Error', 'An error occurred during analysis. Please try again or contact support.');
-    updateResearchStatus('Error', 'red');
-  }
-}
-
-async function continueResearch() {
-  updateStep(3, true);
-  updateResearchStatus('Conducting research', 'blue');
-  currentState = ResearchState.RESEARCHING;
-
-  addResearchMessage('research', 'Deep Analysis', 'Performing comprehensive analysis across multiple data points...', true);
-  await simulateDelay(2000);
-
-  const insights = researchData?.analysis?.key_insights || [
-    'Analyzing leave request patterns',
-    'Evaluating department-specific trends',
-    'Calculating approval rates and processing times',
-    'Identifying peak periods and resource needs'
-  ];
-
-  const insightText = insights.map(insight => `• ${insight}`).join('<br>');
-  addResearchMessage('analysis', 'Key Research Areas', insightText);
-
-  updateStep(3, false, true);
-  updateStep(4, true);
-  updateResearchStatus('Generating report', 'purple');
-
-  try {
-    addResearchMessage('ai', 'Report Generation', 'Compiling comprehensive report with visualizations and recommendations...', true);
-
-    // --- SAFETY: never send undefined/nullable analysis or clarifications ---
-    const safeAnalysis = researchData?.analysis ?? {};
-    const safeClarifications = Array.isArray(clarifications) ? clarifications : [];
-
-    // Thread request_id from /analyze if the backend returns it
-    const requestId = researchData?.request_id || null;
-
-    const reqBody = {
-      query: currentQuery,
-      analysis: safeAnalysis,             // <-- guarantees non-null object
-      clarifications: safeClarifications, // <-- always an array
-      format: 'docx',
-      language: getCurrentLanguage(),
-      ...(requestId ? { request_id: requestId } : {})
-    };
-
-    const generateResponse = await fetch(`${API_BASE}/api/reports/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(reqBody)
-    });
-
-    if (!generateResponse.ok) {
-      // Try to read structured validation details (helps debug 422)
-      let msg = `Generation failed: ${generateResponse.status}`;
-      try {
-        const err = await generateResponse.json();
-        if (err?.detail) msg += ` — ${JSON.stringify(err.detail)}`;
-      } catch (_) { /* ignore parse errors */ }
+    if (!res.ok) {
+      let msg = `Generation failed: ${res.status}`;
+      try { const j = await res.json(); if (j?.detail) msg += ` — ${JSON.stringify(j.detail)}`; } catch {}
       throw new Error(msg);
     }
 
-    const generateData = await generateResponse.json();
-    // Preserve previous researchData and merge server output (report_id, filename, etc.)
-    researchData = { ...researchData, ...generateData };
+    const generateData = await res.json();
+    analysisData = { ...(analysisData||{}), ...(generateData||{}) };
 
-    updateStep(4, false, true);
-    currentState = ResearchState.COMPLETE;
-    updateResearchStatus('Complete', 'green');
+    removeThinkingAnimation();
+    addResearchMessage('analysis', 'Report Generated',
+      `Report created with ${selectedSections.size} section(s) and chosen visualizations.`);
 
     showFinalResults();
+    transitionTo(AppState.COMPLETE);
 
-  } catch (error) {
-    console.error('Generation error:', error);
-    addResearchMessage('ai', 'Generation Error', `Report generation failed: ${error.message}`);
-    updateResearchStatus('Error', 'red');
+  } catch (err) {
+    console.error(err);
+    removeThinkingAnimation();
+    addResearchMessage('ai', 'Generation Error', `Report generation failed: ${escapeHtml(err.message)}`);
+    updateStatusError();
   }
 }
 
-
 function showFinalResults() {
-  const completeMsg = t('report.research_complete', 'I\'ve completed a comprehensive analysis and generated your report. The document includes detailed findings, data visualizations, and actionable recommendations.');
-  addResearchMessage('ai', t('report.complete_title', 'Research Complete'), completeMsg);
-  
-  const analysis = researchData?.analysis || {};
-  
-  const summaryTitle = t('report.summary_title', 'Research Summary');
-  const reportDetailsLabel = t('report.details_label', 'Report Details');
-  const analysisCompletedLabel = t('report.analysis_completed_label', 'Analysis Completed');
-  const typeLabel = t('report.type_label', 'Type');
-  const scopeLabel = t('report.scope_label', 'Scope');
-  const timePeriodLabel = t('report.time_period_label', 'Time Period');
-  const languageLabel = t('report.language_label', 'Language');
-  const keyInsightsLabel = t('report.key_insights_label', 'Key Insights');
-  
+  const analysis = analysisData?.analysis || {};
+  const picked = Array.from(selectedSections);
+
   researchSummary.innerHTML = `
-    <h4 class="font-semibold text-gray-900 mb-3">${summaryTitle}</h4>
+    <h4 class="font-semibold text-gray-900 mb-3">Report Summary</h4>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
       <div>
-        <strong>${reportDetailsLabel}:</strong>
+        <strong>Report Configuration:</strong>
         <ul class="mt-1 text-gray-600">
-          <li>• ${typeLabel}: ${analysis.report_type || t('report.custom_analysis', 'Custom Analysis')}</li>
-          <li>• ${scopeLabel}: ${analysis.scope || t('report.hr_analytics', 'HR Analytics')}</li>
-          <li>• ${timePeriodLabel}: ${analysis.time_period || t('report.current_data', 'Current data')}</li>
-          <li>• ${languageLabel}: ${getCurrentLanguage()}</li>
+          <li>• Type: ${escapeHtml(analysis.report_type || 'Custom Analysis')}</li>
+          <li>• Sections: ${picked.length}</li>
+          <li>• Depth: ${escapeHtml(selectedDepth)}</li>
+          <li>• Language: ${escapeHtml(getCurrentLanguage())}</li>
         </ul>
       </div>
       <div>
-        <strong>${analysisCompletedLabel}:</strong>
+        <strong>Included Sections:</strong>
         <ul class="mt-1 text-gray-600">
-          <li>• ${t('report.data_sources_connected', 'Data sources connected')}</li>
-          <li>• ${t('report.patterns_identified', 'Patterns identified')}</li>
-          <li>• ${t('report.insights_generated', 'Insights generated')}</li>
-          <li>• ${t('report.recommendations_provided', 'Recommendations provided')}</li>
+          ${picked.slice(0,5).map(s => `<li>• ${escapeHtml(s.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()))}</li>`).join('')}
+          ${picked.length > 5 ? `<li>• And ${picked.length - 5} more...</li>` : ''}
         </ul>
       </div>
     </div>
     ${analysis.summary ? `
       <div class="mt-4 p-3 bg-blue-50 rounded-lg">
-        <strong class="text-blue-900">${keyInsightsLabel}:</strong>
-        <p class="text-blue-800 text-sm mt-1">${analysis.summary}</p>
-      </div>
-    ` : ''}
+        <strong class="text-blue-900">Key Insights:</strong>
+        <p class="text-blue-800 text-sm mt-1">${escapeHtml(analysis.summary)}</p>
+      </div>` : ''}
   `;
-  
-  resultsSection.classList.remove('hidden');
-  updateFinalDownloadSection();
-}
-
-function updateFinalDownloadSection() {
-  const readyText = t('report.ready_download', 'Your comprehensive report is ready for download');
-  const newResearchText = t('report.new_research', 'New Research');
-  const downloadText = t('report.download_report', 'Download Report');
-  
-  const readyTextEl = document.querySelector('#results-section .text-sm.text-gray-600');
-  if (readyTextEl) readyTextEl.textContent = readyText;
-  
-  const newBtn = document.getElementById('start-new-research');
-  if (newBtn) newBtn.textContent = newResearchText;
-  
-  const downloadSpan = downloadBtn.querySelector('span');
-  if (downloadSpan) downloadSpan.textContent = downloadText;
-}
-
-// Helper Functions
-function getCurrentLanguage() {
-  const langSelector = document.getElementById('language-selector');
-  return langSelector ? langSelector.value : 'en-US';
-}
-
-function simulateDelay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function getRandomClarificationQuestion() {
-  const questions = [
-    "What time period should I focus on for this analysis?",
-    "Which departments or teams should I prioritize?",
-    "What specific metrics are most important for your stakeholders?",
-    "Should I include comparative analysis with industry benchmarks?",
-    "What level of detail do you need - executive summary or comprehensive analysis?"
-  ];
-  return questions[Math.floor(Math.random() * questions.length)];
-}
-
-function getSuggestionsForQuery(query) {
-  const lowerQuery = query.toLowerCase();
-  
-  if (lowerQuery.includes('time') || lowerQuery.includes('period')) {
-    return ['Last 3 months', 'Current quarter', 'Year to date', 'Last 12 months', 'Custom range'];
-  } else if (lowerQuery.includes('department')) {
-    return ['All departments', 'Engineering', 'Sales', 'HR', 'Marketing', 'Operations'];
-  } else if (lowerQuery.includes('executive') || lowerQuery.includes('summary')) {
-    return ['High-level overview', 'Detailed analysis', 'Executive brief', 'Full report'];
-  } else {
-    return ['This month', 'Last quarter', 'All departments', 'Executive summary', 'Detailed analysis'];
-  }
 }
 
 async function downloadReport() {
-  if (!researchData?.report_id) {
-    addResearchMessage('ai', 'Download Error', 'No report available for download. Please generate a report first.');
-    return;
-  }
+  const rid = analysisData?.report_id;
+  if (!rid) { addResearchMessage('ai','Download Error','No report available.'); return; }
 
   try {
     downloadBtn.disabled = true;
-    downloadBtn.innerHTML = `
-      <svg class="animate-spin w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-      </svg>
-      <span>Downloading...</span>
-    `;
+    downloadBtn.innerHTML = spinnerHtml('Downloading...');
 
-    const response = await fetch(`${API_BASE}/api/reports/download/${researchData.report_id}`);
-    if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+    const res = await fetch(`${API_BASE}/api/reports/download/${encodeURIComponent(rid)}`);
+    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = researchData.filename || `research-report-${Date.now()}.docx`;
+    a.download = analysisData.filename || `report-${Date.now()}.docx`;
     document.body.appendChild(a);
     a.click();
-    
-    setTimeout(() => {
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    }, 100);
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 100);
 
-    addResearchMessage('ai', 'Download Complete', 'Your report has been downloaded successfully. You can find it in your Downloads folder.');
-    
-  } catch (error) {
-    console.error('Download failed:', error);
-    addResearchMessage('ai', 'Download Error', `There was an issue downloading your report: ${error.message}`);
+    addResearchMessage('ai','Download Complete','Your report has been downloaded.');
+
+  } catch (err) {
+    console.error(err);
+    addResearchMessage('ai','Download Error', `Download failed: ${escapeHtml(err.message)}`);
   } finally {
     downloadBtn.disabled = false;
-    downloadBtn.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="7,10 12,15 17,10"/>
-        <line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      <span>Download Report</span>
-    `;
+    downloadBtn.innerHTML = defaultDownloadBtnHtml();
   }
 }
 
+/* ================================
+   Utilities
+================================= */
+function updateStatusError(){
+  const dot = researchStatus.querySelector('span:first-child');
+  const txt = researchStatus.querySelector('span:last-child');
+  if (dot) dot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
+  if (txt) txt.textContent = 'Error';
+}
+
+function escapeHtml(t){ const d=document.createElement('div'); d.textContent = t ?? ''; return d.innerHTML; }
+
+function addResearchMessage(kind, title, content, thinking=false) {
+  const colors = { ai:'bg-blue-600', research:'bg-purple-600', data:'bg-green-600', analysis:'bg-orange-600' };
+  const icons = {
+    ai:'<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z"/>',
+    research:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
+    data:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>',
+    analysis:'<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>'
+  };
+
+  const wrap = document.createElement('div');
+  wrap.className = 'fade-in';
+  wrap.innerHTML = `
+    <div class="flex items-start space-x-4">
+      <div class="w-10 h-10 ${colors[kind]||'bg-blue-600'} rounded-full grid place-items-center ${thinking?'thinking-animation':''}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" stroke="#fff" stroke-width="2">${icons[kind]||icons.ai}</svg>
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center space-x-2 mb-1">
+          <h4 class="font-semibold text-gray-900">${escapeHtml(title)}</h4>
+          ${thinking?'<div class="flex space-x-1"><div class="w-2 h-2 bg-blue-600 rounded-full animate-pulse"></div><div class="w-2 h-2 bg-blue-600 rounded-full animate-pulse" style="animation-delay:.15s"></div><div class="w-2 h-2 bg-blue-600 rounded-full animate-pulse" style="animation-delay:.3s"></div></div>':''}
+        </div>
+        <div class="text-gray-700 text-sm leading-relaxed">${content}</div>
+      </div>
+    </div>`;
+  researchConversation.appendChild(wrap);
+  researchConversation.scrollTop = researchConversation.scrollHeight;
+  return wrap;
+}
+
+function removeThinkingAnimation() {
+  researchConversation.querySelectorAll('.thinking-animation').forEach(el => el.classList.remove('thinking-animation'));
+  researchConversation.querySelectorAll('.flex.space-x-1').forEach(el => el.remove());
+}
+
+function spinnerHtml(text){
+  return `<svg class="animate-spin w-5 h-5 mr-2 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0"></path>
+          </svg><span>${escapeHtml(text)}</span>`;
+}
+function defaultDownloadBtnHtml(){
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg><span>Download Report</span>`;
+}
+
+function getCurrentLanguage(){
+  const sel = document.getElementById('language-selector');
+  return sel ? sel.value : 'en-US';
+}
+
 function resetResearch() {
-  currentState = ResearchState.IDLE;
   currentQuery = '';
-  clarifications = [];
-  researchData = null;
-  
-  querySection.classList.remove('hidden');
-  researchSection.classList.add('hidden');
-  clarificationSection.classList.add('hidden');
-  resultsSection.classList.add('hidden');
-  
+  analysisData = null;
+  configurationData = null;
+  selectedSections.clear();
+  chartPreferences = {};
+  selectedDepth = 'standard';
   researchConversation.innerHTML = '';
-  
-  for (let i = 1; i <= 4; i++) {
-    updateStep(i, false, false);
-    const progressBar = document.getElementById(`progress-bar-${i}`);
-    if (progressBar) progressBar.style.width = '0%';
-  }
-  
   mainQuery.value = '';
+  transitionTo(AppState.IDLE);
   mainQuery.focus();
-  updateResearchStatus('Ready', 'green');
 }
 </script>
 </body>
