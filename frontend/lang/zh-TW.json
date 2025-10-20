@@ -240,7 +240,33 @@
     "you": "您",
     "thinking": "思考中...",
     "listening": "聆聽中...",
-    "speech_not_supported": "此瀏覽器不支援語音辨識。"
+    "speech_not_supported": "此瀏覽器不支援語音辨識。",
+    "download_csv": "下載 CSV",
+    "copy_sql": "複製 SQL",
+    "total_rows": "總筆數",
+    "visualization": "視覺化" 
+  },
+  "results": {
+    "title": "查詢結果",
+    "rows": "筆數",
+    "summary": "摘要",
+    "no_data": "• 查詢結果為 0 筆，無可供分析的資料。",
+    "data_quality_note": "資料品質說明",
+    "data_quality_desc": [
+      "• 請確認日期區間、條件或權限是否正確。",
+      "• 若為有效期/快照表，亦需注意生效日期條件。"
+    ],
+    "show_sql": "顯示 SQL"
+  },
+  "table_headers": {
+    "emp_id": "員編",
+    "name": "姓名",
+    "workday": "工作日",
+    "attendance_type": "ATTENDANCETYPE",
+    "leave_hours": "請假時數",
+    "start_date": "起始日",
+    "end_date": "結束日",
+    "leave_reason": "LEAVEREASON"
   },
   "system_status": {
     "system_ready": "系統準備就緒",

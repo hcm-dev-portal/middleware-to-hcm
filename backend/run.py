@@ -93,7 +93,6 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Shutting down services ...")
 
-
 def create_app() -> FastAPI:
     app = FastAPI(
         title="HCM AI Portal API",
@@ -132,7 +131,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Static mounts
+    # ---------- Static mounts ----------
+    # Frontend assets
     if FRONTEND_DIR.exists():
         if ASSETS_DIR.exists():
             app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
@@ -165,17 +165,28 @@ def create_app() -> FastAPI:
     else:
         logger.warning("Frontend dir not found at %s", FRONTEND_DIR)
 
-    # ✅ API routes
+    # Charts/images mount (for VisualizationService outputs)
+    charts_dir = REPO_ROOT / "charts" / "images"
+    try:
+        charts_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.exception("Failed to ensure charts dir exists: %s", e)
+    if charts_dir.exists():
+        app.mount("/charts/images", StaticFiles(directory=str(charts_dir)), name="charts_images")
+        logger.info("Mounted charts at /charts/images -> %s", charts_dir)
+    else:
+        logger.warning("Charts dir not found at %s; /charts/images will 404", charts_dir)
+
+    # ---------- API routes ----------
     app.include_router(api_router)
     app.include_router(speech_router)
 
-    # ✅ ADD: include reports API and its static route
-    # <<< add
+    # Reports API and static page(s)
     app.include_router(reports_router)          # /api/reports/...
-    app.include_router(reports_static_router)   # /generate_report.html (static page)
-    # >>>
+    app.include_router(reports_static_router)   # /generate_report.html
 
     return app
+
 
 
 app = create_app()

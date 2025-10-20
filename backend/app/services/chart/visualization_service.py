@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 logger = logging.getLogger(__name__)
 
 # ---- Config via env (optional) ----
-STATIC_IMAGE_DIR = os.getenv("STATIC_IMAGE_DIR", "static/images")   # web-served dir
+STATIC_IMAGE_DIR = os.getenv("STATIC_IMAGE_DIR", "charts/images")   # web-served dir
 LOCAL_SAVE_DIR   = os.getenv("LOCAL_SAVE_DIR", "charts/images")     # filesystem dir
 DEFAULT_REGION   = os.getenv("AWS_REGION", "ap-southeast-2")
 
@@ -41,6 +41,7 @@ def _coerce_dtypes_for_viz(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     df = df.copy()
+
     # Dates
     for c in df.columns:
         lc = str(c).lower()
@@ -49,14 +50,22 @@ def _coerce_dtypes_for_viz(df: pd.DataFrame) -> pd.DataFrame:
                 df[c] = pd.to_datetime(df[c], errors="coerce")
             except Exception:
                 pass
-    # Numeric strings with commas
+
+    # Numeric strings with commas (avoid deprecated errors="ignore")
     for c in df.columns:
         if df[c].dtype == object:
             try:
-                df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", ""), errors="ignore")
+                s = df[c].astype(str).str.replace(",", "")
+                try:
+                    df[c] = pd.to_numeric(s)  # will raise on non-numeric; that's fine
+                except Exception:
+                    # leave as-is if truly non-numeric
+                    pass
             except Exception:
                 pass
+
     return df
+
 
 
 # -------------------------------------------------------------------
@@ -356,43 +365,77 @@ class VisualizationService:
         x = datetime_cols[0] if datetime_cols else (categorical[0] if categorical else (cols[0] if cols else None))
         y = (numeric[0] if numeric else (cols[1] if len(cols) > 1 else None))
 
+        # Helper: choose a series/color column if cardinality is reasonable
+        color_col = None
+        if categorical:
+            # prefer the first categorical with <= 12 unique values
+            for cc in categorical:
+                try:
+                    if df[cc].nunique(dropna=False) <= 12:
+                        color_col = cc
+                        break
+                except Exception:
+                    continue
+
         if chart_type == "area_chart" and x is not None and y is not None:
-            fig = px.area(df, x=x, y=y, title=title, template=self.theme)
+            if color_col:
+                fig = px.area(df, x=x, y=y, color=color_col, title=title, template=self.theme, groupnorm=None)
+            else:
+                fig = px.area(df, x=x, y=y, title=title, template=self.theme)
+
         elif chart_type == "line_chart" and x is not None and y is not None:
-            fig = px.line(df, x=x, y=y, title=title, template=self.theme)
+            if color_col:
+                fig = px.line(df, x=x, y=y, color=color_col, title=title, template=self.theme)
+            else:
+                fig = px.line(df, x=x, y=y, title=title, template=self.theme)
+
         elif chart_type == "bar_chart" and x is not None:
             if y is None or not pd.api.types.is_numeric_dtype(df[y]):
                 counts = df[x].value_counts(dropna=False).reset_index()
                 counts.columns = [str(x), "Count"]
                 fig = px.bar(counts, x=str(x), y="Count", title=title, template=self.theme)
             else:
-                fig = px.bar(df, x=x, y=y, title=title, template=self.theme)
+                # If we have a color grouping and it's not the x itself, use it for clustered bars
+                if color_col and str(color_col) != str(x):
+                    fig = px.bar(df, x=x, y=y, color=color_col, barmode="group", title=title, template=self.theme)
+                else:
+                    fig = px.bar(df, x=x, y=y, title=title, template=self.theme)
+
         elif chart_type == "pie_chart":
-            if x is None:
-                x = cols[0]
-            if y is None or not pd.api.types.is_numeric_dtype(df[y]):
-                vc = df[x].value_counts(dropna=False).reset_index()
-                vc.columns = [str(x), "Count"]
-                fig = px.pie(vc, names=str(x), values="Count", title=title)
+            xx = x if x is not None else (cols[0] if cols else None)
+            if xx is None:
+                fig = px.pie(title=title)
+            elif y is None or not pd.api.types.is_numeric_dtype(df[y]):
+                vc = df[xx].value_counts(dropna=False).reset_index()
+                vc.columns = [str(xx), "Count"]
+                fig = px.pie(vc, names=str(xx), values="Count", title=title)
             else:
-                fig = px.pie(df, names=x, values=y, title=title)
+                fig = px.pie(df, names=xx, values=y, title=title)
+
         elif chart_type == "scatter_plot":
             if len(numeric) >= 2:
-                fig = px.scatter(df, x=numeric[0], y=numeric[1], title=title, template=self.theme)
+                fig = px.scatter(df, x=numeric[0], y=numeric[1], color=color_col, title=title, template=self.theme)
             elif x is not None and y is not None:
-                fig = px.scatter(df, x=x, y=y, title=title, template=self.theme)
+                fig = px.scatter(df, x=x, y=y, color=color_col, title=title, template=self.theme)
             else:
                 fig = px.scatter(title=title, template=self.theme)
+
         elif chart_type == "histogram":
             xx = numeric[0] if numeric else (cols[0] if cols else None)
-            fig = px.histogram(df, x=xx, title=title, template=self.theme) if xx else px.histogram(title=title)
+            if xx:
+                fig = px.histogram(df, x=xx, color=color_col, title=title, template=self.theme)
+            else:
+                fig = px.histogram(title=title, template=self.theme)
+
         elif chart_type == "heatmap" and len(numeric) >= 2:
             corr = df[numeric].corr(numeric_only=True)
             fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale="Blues"))
             fig.update_layout(title=title, template=self.theme)
+
         elif chart_type == "box_plot":
             yy = numeric[0] if numeric else (cols[0] if cols else None)
             fig = px.box(df, y=yy, x=(categorical[0] if categorical else None), title=title, template=self.theme)
+
         else:
             # Table fallback
             header_vals = list(map(str, df.columns))
@@ -403,6 +446,13 @@ class VisualizationService:
             )])
             fig.update_layout(title=title, template=self.theme, width=800, height=500)
 
+        # Make sure dates are sorted for nicer trends
+        try:
+            if x in df.columns and pd.api.types.is_datetime64_any_dtype(df[x]):
+                fig.update_xaxes(type="date")
+        except Exception:
+            pass
+
         fig.update_layout(width=800, height=500)
         return fig
 
@@ -410,11 +460,13 @@ class VisualizationService:
 
     def _save_figure(self, fig: go.Figure, chart_type: str) -> Tuple[str, str]:
         """
-        Save to filesystem (LOCAL_SAVE_DIR) and return a web URL under /static/images.
+        Save to filesystem (LOCAL_SAVE_DIR) and return a web URL under /{LOCAL_SAVE_DIR}/.
         Requires kaleido installed for static export.
         """
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fname = f"{chart_type}_{ts}_{uuid.uuid4().hex[:8]}.png"
+
+        # Write into the same directory the server exposes (LOCAL_SAVE_DIR)
         fpath = self._local_dir / fname
 
         try:
@@ -423,8 +475,11 @@ class VisualizationService:
             logger.warning("Static export failed (%s). Retrying write_image()", e)
             fig.write_image(str(fpath), width=800, height=500)
 
-        # Your web server should map LOCAL_SAVE_DIR -> /static/images (nginx, uvicorn StaticFiles, etc.)
-        web_url = f"/static/images/{fname}"
+        # Build a URL that matches the served route (seen in your logs)
+        # e.g., LOCAL_SAVE_DIR="charts/images" -> "/charts/images/<file>"
+        web_prefix = "/" + str(self._local_dir).replace("\\", "/").strip("/")
+        web_url = f"{web_prefix}/{fname}"
+
         return web_url, fname
 
     def _generate_insights(
