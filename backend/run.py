@@ -1,4 +1,4 @@
-# run.py  (only the changed/added lines are marked with <<< >>>)
+# run.py
 
 import os
 import logging
@@ -12,25 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 
-from app.api.speech_routes import speech_router
 from app.api.router import router as api_router
 
-# ✅ DB + NLP
+# ✅ DB only – NLP pipeline is created lazily inside router via LeaveNLPPipeline
 from app.services.db_service import SQLServerDatabaseService, set_request_id
-from app.services.nlp_service_2 import LanguageNativeNLPService
-
-# ✅ ADD: reports routers (API + static)
-# <<< add
-from app.api.router import (
-    router as reports_router,
-    static_router as reports_static_router,
-)
-# >>>
-
-try:
-    from app.vector_bootstrap import VectorBootstrapper
-except Exception:
-    VectorBootstrapper = None
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -46,43 +31,20 @@ ASSETS_DIR   = FRONTEND_DIR / "assets"
 LANG_DIR     = FRONTEND_DIR / "lang"
 INDEX_HTML   = FRONTEND_DIR / "index.html"
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Application startup/shutdown lifecycle.
+    We only initialize the DB here; the leave NLP pipeline is created lazily
+    in app.api.router via get_leave_nlp_pipeline().
+    """
     t0 = time.perf_counter()
     try:
         db = SQLServerDatabaseService()
+        # Expose DB under both names for backward compatibility
         app.state.db = db
-
-        nlp = LanguageNativeNLPService(db_service=db)
-        app.state.nlp = nlp
-
-        warm_timeout_s = int(os.getenv("VECTOR_WARMUP_TIMEOUT_S", "20"))
-        warm_block = os.getenv("VECTOR_WARMUP_BLOCKING", "true").lower() == "true"
-
-        if VectorBootstrapper:
-            app.state.vector_bootstrap = VectorBootstrapper({"primary": getattr(app.state, "nlp", None)})
-            try:
-                if warm_block:
-                    logger.info("Vector warmup (blocking, timeout=%ss) starting ...", warm_timeout_s)
-                    result = await app.state.vector_bootstrap.start()
-                    logger.info("Vector warmup completed: %s", result)
-                else:
-                    import asyncio
-                    logger.info("Vector warmup (background) scheduled.")
-                    asyncio.create_task(app.state.vector_bootstrap.start(timeout_s=warm_timeout_s))
-            except Exception as e:
-                logger.exception("Vector warmup error: %s", e)
-        else:
-            try:
-                if hasattr(nlp, "vector_search") and hasattr(nlp.vector_search, "warmup"):
-                    logger.info("Vector warmup via NLP service starting ...")
-                    maybe = nlp.vector_search.warmup()
-                    if hasattr(maybe, "__await__"):
-                        import asyncio
-                        await asyncio.wait_for(maybe, timeout=warm_timeout_s)
-                    logger.info("Vector warmup via NLP service completed.")
-            except Exception as e:
-                logger.exception("Vector warmup (fallback) error: %s", e)
+        app.state.db_service = db
 
         logger.info("Startup complete in %dms", int((time.perf_counter() - t0) * 1000))
     except Exception as e:
@@ -92,6 +54,9 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("Shutting down services ...")
+        # If you later add graceful DB close, do it here.
+        # e.g. getattr(app.state, "db", None)?.close()
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -112,8 +77,14 @@ def create_app() -> FastAPI:
         finally:
             dur_ms = int((time.perf_counter() - start) * 1000)
             status = getattr(response, "status_code", "?")
-            logger.info("HTTP %s %s -> %s rid=%s dur=%dms",
-                        request.method, request.url.path, status, request_id, dur_ms)
+            logger.info(
+                "HTTP %s %s -> %s rid=%s dur=%dms",
+                request.method,
+                request.url.path,
+                status,
+                request_id,
+                dur_ms,
+            )
             try:
                 if response is not None:
                     response.headers["x-request-id"] = request_id
@@ -122,7 +93,9 @@ def create_app() -> FastAPI:
 
     # CORS (configurable)
     raw_origins = os.getenv("CORS_ORIGINS", "*").strip()
-    allow_origins = ["*"] if raw_origins == "*" else [o.strip() for o in raw_origins.split(",") if o.strip()]
+    allow_origins = ["*"] if raw_origins == "*" else [
+        o.strip() for o in raw_origins.split(",") if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
@@ -161,38 +134,25 @@ def create_app() -> FastAPI:
             @app.get("/", include_in_schema=False)
             async def root_index():
                 return FileResponse(str(INDEX_HTML))
+
         logger.info("Frontend dir: %s (exists=%s)", FRONTEND_DIR, True)
     else:
         logger.warning("Frontend dir not found at %s", FRONTEND_DIR)
 
-    # Charts/images mount (for VisualizationService outputs)
-    charts_dir = REPO_ROOT / "charts" / "images"
-    try:
-        charts_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        logger.exception("Failed to ensure charts dir exists: %s", e)
-    if charts_dir.exists():
-        app.mount("/charts/images", StaticFiles(directory=str(charts_dir)), name="charts_images")
-        logger.info("Mounted charts at /charts/images -> %s", charts_dir)
-    else:
-        logger.warning("Charts dir not found at %s; /charts/images will 404", charts_dir)
+    # NOTE: charts/images mount & visualization outputs removed
+    # because the new pipeline is chat-only (no chart service).
 
     # ---------- API routes ----------
-    app.include_router(api_router)
-    app.include_router(speech_router)
-
-    # Reports API and static page(s)
-    app.include_router(reports_router)          # /api/reports/...
-    app.include_router(reports_static_router)   # /generate_report.html
+    app.include_router(api_router)      # main + leave + assistant
 
     return app
-
 
 
 app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
+
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8899"))
     reload = os.getenv("RELOAD", "false").lower() == "true"

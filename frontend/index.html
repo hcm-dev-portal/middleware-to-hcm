@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -12,13 +12,12 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- i18n runtime (must define window.TranslationManager) -->
+  <!-- i18n runtime (single locale: zh-TW) -->
   <script src="./translations.js"></script>
 
   <!-- marked -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
-
 
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
@@ -50,26 +49,11 @@
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .conversation-bubble { max-width: 85%; word-wrap: break-word; }
 
-    /* Viz mode */
-    #viz-agent-btn { transition: all 0.2s; }
-    #viz-agent-btn.active { background-color: #8b5cf6; color: white; border-color: #8b5cf6; }
-    #viz-agent-btn.active:hover { background-color: #7c3aed; }
-    #viz-status { display: inline-flex; align-items: center; gap: 6px; }
-    #viz-status::before { content: ""; width: 6px; height: 6px; border-radius: 9999px; background: #8b5cf6; box-shadow: 0 0 0 6px rgba(139,92,246,.15); }
-
-    /* Image display & toolbar */
-    .viz-image { max-width: 100%; border-radius: 8px; margin-top: 8px; cursor: pointer; }
-    .viz-image:hover { opacity: 0.95; }
-    .viz-container { position: relative; display: inline-block; width: 100%; }
-    .viz-toolbar { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s; }
-    .viz-container:hover .viz-toolbar { opacity: 1; }
-    .viz-toolbar button { background: white; border: 1px solid #e5e7eb; padding: 4px; border-radius: 4px; cursor: pointer; }
-    .viz-toolbar button:hover { background: #f3f4f6; }
 
     /* Scrollable leave list */
     .leave-list-container { max-height: 420px; overflow-y: auto; }
 
-.calendar_page {
+    .calendar_page {
       --bg:#F5F7FB; --card:#FFF; --card-border:#E6EAF1; --text:#0F172A; --muted:#6B7280;
       --primary:#2563EB; --primary-600:#1D4ED8; --accent-blue-50:#EFF6FF;
       --grid:#EEF2F7; --today-bg:#E8F0FE; --hover:#F3F6FC; --shadow:0 8px 30px rgba(16,24,40,.06);
@@ -423,7 +407,6 @@
     .prose ul { margin: .25rem 0 .5rem 1.25rem; }
     .prose li { margin: .125rem 0; }
 
-
     /* ===============================
        renderTarget（Markdown區域，已獨立）
        =============================== */
@@ -493,22 +476,14 @@
               <span id="ask-ai-label" data-i18n="buttons.ask_ai">Ask AI</span>
             </button>
 
-            <!-- Global Language Selector -->
-            <select id="global-lang" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none" aria-label="Language">
-              <option value="en-US">English (US)</option>
-              <option value="zh-TW">中文（繁體）</option>
-            </select>
-
             <img src="https://placehold.co/40x40/E2E8F0/4A5568?text=U" alt="User Avatar" class="w-10 h-10 rounded-full">
           </div>
         </header>
 
-        <!-- Database/Health status & Alerts host -->
+        <!-- Alerts / Status Host -->
         <div id="db-status" class="mt-6 mb-4"></div>
 
-        <!-- Key Metrics Summary -->
-
-        <!-- Main Content: Leave List + Trend Chart -->
+        <!-- Main Content: Calendar + Right Column -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
           <!-- Calendar -->
           <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-sm">
@@ -520,11 +495,9 @@
                       <div class="icon-badge" aria-hidden>📅</div>
                       <div>
                         <div style="font-size:18px">行事曆</div>
-                        <!-- <div style="font-size:12px; color:var(--muted)">支援 日 / 週 / 月 檢視（以小時計） · 事件顯示 · 深色模式</div> -->
                       </div>
                     </div>
                     <div class="toolbar">
-                      <!-- <button id="themeToggle" title="深色模式切換">深色模式</button> -->
                       <button id="prevBtn" aria-label="上一頁">←</button>
                       <button id="todayBtn" class="btn-primary">今天</button>
                       <button id="nextBtn" aria-label="下一頁">→</button>
@@ -541,6 +514,7 @@
                   </div>
 
                   <div id="calBody" style="overflow-y: auto; height: 480px;"></div>
+
                   <!-- 左下角：顯示上班時間 / 顯示全天 -->
                   <div class="floating-left-btn">
                     <button id="workHoursBtn" title="顯示 08:00–20:00">顯示上班時間</button>
@@ -564,7 +538,8 @@
               </div>
             </div>
           </div>
-          <!--Right-->
+
+          <!-- Right Column -->
           <div class="lg:col-span-1 flex flex-col gap-6">
 
             <!-- Pending Approvals -->
@@ -586,7 +561,8 @@
                 </div>
               </div>
             </div>
-            <!-- Who's out - Now with scrolling -->
+
+            <!-- Who's out -->
             <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-sm">
               <h3 id="leave-toggle"
                   class="text-lg font-semibold text-gray-700 mb-4 flex items-center justify-between cursor-pointer select-none"
@@ -624,10 +600,6 @@
           <div class="w-9 h-9 border border-slate-300 bg-white rounded-lg flex items-center justify-center text-blue-600 font-bold">AI</div>
           <div>
             <div id="assistant-title" class="font-semibold text-slate-800" data-i18n="assistant.title">Assistant</div>
-            <div class="flex items-center gap-2 text-xs text-slate-500">
-              <span id="health-badge" class="px-2 py-0.5 rounded-full text-white text-[10px] bg-yellow-500" data-i18n="assistant.health_checking">Checking</span>
-              <button id="refresh-health" class="underline" data-i18n="buttons.refresh">refresh</button>
-            </div>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -651,21 +623,6 @@
           </div>
         </div>
 
-        <!-- Composer -->
-        <div class="bg-white border border-slate-200 rounded-lg p-2.5">
-          <!-- Agent Controls -->
-          <div class="flex items-center gap-2 mb-2 px-1">
-            <span class="text-xs text-slate-500">Mode:</span>
-            <button id="viz-agent-btn" class="flex items-center gap-1.5 px-3 py-1 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-slate-50" title="Toggle visualization mode">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <line x1="3" y1="9" x2="21" y2="9"></line>
-                <line x1="9" y1="21" x2="9" y2="9"></line>
-              </svg>
-              <span>Visualize Data</span>
-            </button>
-            <div id="viz-status" class="text-xs text-purple-600 hidden">✨ Visualization mode active</div>
-          </div>
 
           <div class="flex items-start gap-2">
             <button id="mic" class="p-3 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 relative" title="Start recording" data-i18n="buttons.mic_start" data-i18n-type="title">
@@ -687,13 +644,14 @@
       </div>
     </aside>
   </div>
+
 <script>
 document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------
-  // i18n boot
+  // i18n (single locale: zh-TW)
   // ---------------------------
   const i18n = new window.TranslationManager();
-  await i18n.init('en-US');
+  await i18n.init('zh-TW');
 
   // ---------------------------
   // API config
@@ -709,19 +667,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const AS_OF = params.get('asOf') || '';
   const TREND_DAYS = Number(params.get('days') || 7);
   let refreshInterval;
-
-  // ---------------------------
-  // Visualization Agent State
-  // ---------------------------
-  let vizMode = false;
-  const vizAgentBtn = document.getElementById('viz-agent-btn');
-  const vizStatus = document.getElementById('viz-status');
-
-  vizAgentBtn?.addEventListener('click', () => {
-    vizMode = !vizMode;
-    vizAgentBtn.classList.toggle('active', vizMode);
-    vizStatus?.classList.toggle('hidden', !vizMode);
-  });
 
   // ---------------------------
   // TTS Audio Management
@@ -876,7 +821,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const lastUpdateEl = document.getElementById('last-update');
 
   // Assistant panel
-  const healthBadge = document.getElementById('health-badge');
   const queryTA = document.getElementById('query');
   const sendBtn = document.getElementById('send');
   const results = document.getElementById('results');
@@ -887,7 +831,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const vuBar = document.getElementById('vu');
   const dictationStream = document.getElementById('dictation-stream');
   const dbStatus = document.getElementById('db-status');
-  const globalLangSel = document.getElementById('global-lang');
 
   // ---------------------------
   // Helpers
@@ -922,7 +865,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------
   // Panel open/close
   // ---------------------------
-  const openPanel = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
+  const openPanel = () => {
+    mainContent.style.width = '65%';
+    aiPanel.style.transform = 'translateX(0)';
+  };
   const closePanel = () => {
     if (currentAudio) {
       try { currentAudio.pause(); } catch {}
@@ -959,7 +905,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ---------------------------
-  // Message Rendering (TTS + Visualizations)
+  // Message Rendering (TTS + Markdown)
   // ---------------------------
   function appendMessage(role, text, enableTTS = false, imageUrl = null, aiResponse = false) {
     placeholder.classList.add('hidden');
@@ -986,33 +932,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         ${readyIcon()}
       </button>` : '';
 
-    const imageContent = imageUrl ? `
-      <div class="viz-container mt-3">
-        <img src="${escapeHtml(imageUrl)}" alt="Data visualization" class="viz-image" onclick="window.open('${escapeHtml(imageUrl)}', '_blank')">
-        <div class="viz-toolbar">
-          <button onclick="navigator.clipboard.writeText('${escapeHtml(imageUrl)}')" title="Copy image URL">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-          </button>
-          <button onclick="window.open('${escapeHtml(imageUrl)}', '_blank')" title="Open in new tab">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-              <polyline points="15 3 21 3 21 9"></polyline>
-              <line x1="10" y1="14" x2="21" y2="3"></line>
-            </svg>
-          </button>
-        </div>
-      </div>` : '';
-
     bubble.innerHTML = `
       <div class="flex items-center justify-between mb-1">
         <span class="text-xs ${role === 'user' ? 'text-blue-600' : 'text-slate-500'}">${roleLabel}</span>
         ${ttsButton}
       </div>
       ${text ? `<div class="text-sm leading-6">${aiResponse ? `<div id="renderTarget">${renderMD(text)}</div>` : escapeHtml(text)}</div>` : ''}
-      ${imageContent}
     `;
 
     results.appendChild(bubble);
@@ -1060,7 +985,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function buildTableEl(columns, rows, limit = 50) {
     const wrapper = document.createElement("div");
-    wrapper.className = "overflow-x-auto"; // Tailwind：允許左右滾動
+    wrapper.className = "overflow-x-auto";
 
     const table = document.createElement("table");
     table.className = "min-w-full border border-slate-200 rounded-lg overflow-hidden text-sm";
@@ -1096,17 +1021,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     table.appendChild(thead);
     table.appendChild(tbody);
-    // 將 table 放進 wrapper
     wrapper.appendChild(table);
     return wrapper;
   }
 
   // ---------------------------
-  // Unified Result Panel (Explanation + Table + SQL)
+  // Unified Result Panel (rows + columns)
   // ---------------------------
   function renderResultPanel(data, { i18n, resultsContainer }) {
-    const { columns = [], results = [] } = data || {};
-    if (!Array.isArray(columns) || !Array.isArray(results)) return;
+    const columns = Array.isArray(data?.columns) ? data.columns : [];
+    const rows = Array.isArray(data?.rows)
+      ? data.rows
+      : (Array.isArray(data?.results) ? data.results : []);
+
+    if (!Array.isArray(columns) || !Array.isArray(rows)) return;
 
     const card = document.createElement('div');
     card.className = 'mb-4 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden';
@@ -1119,15 +1047,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     title.textContent = i18n.t('results.title') || 'Results';
     const meta = document.createElement('div');
     meta.className = 'text-xs text-slate-500';
-    meta.textContent = `${i18n.t('results.rows') || 'Rows'}: ${results.length}`;
+    meta.textContent = `${i18n.t('results.rows') || 'Rows'}: ${rows.length}`;
     header.appendChild(title);
     header.appendChild(meta);
     card.appendChild(header);
 
-    // Explanation (Markdown) on top
-    const explanationRaw = (data.explanation && String(data.explanation).trim())
-      ? data.explanation
-      : (data.summary || '');
+    // Explanation (Markdown)
+    const explanationRaw =
+      (data.explanation_zh && String(data.explanation_zh).trim())
+      || (data.explanation && String(data.explanation).trim())
+      || (data.summary && String(data.summary).trim())
+      || '';
+
     if (explanationRaw) {
       const expWrap = document.createElement('div');
       expWrap.className = 'px-4 pt-3 pb-2';
@@ -1152,8 +1083,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const toggleFullBtn = mkBtn(i18n.t('ai_assistant.toggle_full_table') || 'Toggle full table');
     const copySqlBtn = mkBtn(i18n.t('ai_assistant.copy_sql') || 'Copy SQL');
     actions.appendChild(csvBtn);
-    if (Array.isArray(results) && results.length > 50) actions.appendChild(toggleFullBtn);
-    if (data.generated_sql) actions.appendChild(copySqlBtn);
+    if (Array.isArray(rows) && rows.length > 50) actions.appendChild(toggleFullBtn);
+
+    const sqlText = data.sql || data.generated_sql || null;
+    if (sqlText) actions.appendChild(copySqlBtn);
+
     card.appendChild(actions);
 
     // Table
@@ -1173,20 +1107,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         tableWrap.appendChild(empty);
         return;
       }
-      const limit = showingFull ? results.length : Math.min(LIMITED, results.length);
-      const tableEl = buildTableEl(columns, results, limit);
+      const limit = showingFull ? rows.length : Math.min(LIMITED, rows.length);
+      const tableEl = buildTableEl(columns, rows, limit);
       const hint = document.createElement("div");
       hint.className = "mt-2 text-xs text-slate-500";
-      hint.textContent = (!showingFull && results.length > LIMITED)
+      hint.textContent = (!showingFull && rows.length > LIMITED)
         ? (i18n.t('ai_assistant.showing_first_n') || `Showing first ${LIMITED} rows...`).replace('{n}', LIMITED)
-        : (i18n.t('ai_assistant.total_rows') || 'Total rows: {n}').replace('{n}', results.length);
+        : (i18n.t('ai_assistant.total_rows') || 'Total rows: {n}').replace('{n}', rows.length);
       tableWrap.appendChild(tableEl);
       tableWrap.appendChild(hint);
     }
     refreshTable();
 
     // Footer (SQL)
-    if (data.generated_sql) {
+    if (sqlText) {
       const footer = document.createElement('div');
       footer.className = 'px-4 py-2 border-t border-slate-200 bg-slate-50';
       const sqlBtn = document.createElement('button');
@@ -1194,7 +1128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       sqlBtn.textContent = i18n.t('results.show_sql') || 'Show SQL';
       const sqlBox = document.createElement('pre');
       sqlBox.className = 'mt-2 hidden overflow-auto text-xs bg-white border border-slate-200 rounded p-2';
-      sqlBox.textContent = data.generated_sql;
+      sqlBox.textContent = sqlText;
       sqlBtn.addEventListener('click', () => {
         sqlBox.classList.toggle('hidden');
       });
@@ -1203,15 +1137,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       card.appendChild(footer);
 
       copySqlBtn?.addEventListener('click', async () => {
-        const ok = await copyToClipboard(data.generated_sql || "");
+        const ok = await copyToClipboard(sqlText || "");
         copySqlBtn.textContent = ok ? (i18n.t('ai_assistant.copied') || 'Copied!') : (i18n.t('ai_assistant.copy_failed') || 'Copy failed');
         setTimeout(() => (copySqlBtn.textContent = i18n.t('ai_assistant.copy_sql') || 'Copy SQL'), 1200);
       });
     }
 
     csvBtn.addEventListener('click', () => {
-      if (!Array.isArray(columns) || !Array.isArray(results) || columns.length === 0) return;
-      const csv = toCSV(columns, results);
+      if (!Array.isArray(columns) || !Array.isArray(rows) || columns.length === 0) return;
+      const csv = toCSV(columns, rows);
       const ts = new Date().toISOString().replace(/[:.]/g, "-");
       downloadCSV(`query-results-${ts}.csv`, csv);
     });
@@ -1224,21 +1158,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       refreshTable();
     });
 
-    // Visualization (image) if provided
-    const vizUrl = data.visualization_url || data.image_url || data.visualization?.url || null;
-    if (vizUrl) {
-      const vizBlock = document.createElement("div");
-      vizBlock.className = "px-4 pb-4";
-      vizBlock.innerHTML = `
-        <div class="text-slate-700 font-medium mb-2">${i18n.t('ai_assistant.visualization') || 'Visualization'}</div>
-        <img src="${vizUrl}" alt="Visualization" class="rounded-lg border border-slate-200 max-w-full">
-      `;
-      card.appendChild(vizBlock);
-    }
-
     resultsContainer.appendChild(card);
     resultsContainer.scrollTop = resultsContainer.scrollHeight;
   }
+
   // ---------------------------
   // Leave Query
   // ---------------------------
@@ -1246,23 +1169,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   const list = document.getElementById('leave-list');
   const countEl = document.getElementById('leave-list-count');
 
-  // 切換展開/收合
   const toggleExpand = () => {
     const expanded = toggle.getAttribute('aria-expanded') === 'true';
     if (expanded) {
-      // 收合：限制高度並可捲動
       list.classList.add('max-h-36', 'overflow-y-auto');
       list.classList.remove('max-h-none', 'overflow-visible');
       toggle.setAttribute('aria-expanded', 'false');
     } else {
-      // 展開：移除高度限制，顯示全部
       list.classList.remove('max-h-36', 'overflow-y-auto');
       list.classList.add('max-h-none', 'overflow-visible');
       toggle.setAttribute('aria-expanded', 'true');
     }
   };
 
-  // 事件：點擊與鍵盤（Enter/Space）
+  // (Leave the toggle handlers commented-out as in original behaviour)
   // toggle.addEventListener('click', toggleExpand);
   // toggle.addEventListener('keydown', (e) => {
   //   if (e.key === 'Enter' || e.key === ' ') {
@@ -1292,13 +1212,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     results.appendChild(typing);
     results.scrollTop = results.scrollHeight;
 
-    const endpoint = vizMode
-      ? `${API_BASE}/api/assistant/query_with_viz`
-      : `${API_BASE}/api/assistant/query`;
+    const endpoint = `${API_BASE}/api/assistant/query`;
     const payload = {
       query: q,
       lang: i18n.getCurrentLanguage(),
-      include_visualization: vizMode
     };
 
     try {
@@ -1314,20 +1231,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       typing.remove();
 
       if (res.ok && data?.success) {
-        const hasGrid = Array.isArray(data.columns) && Array.isArray(data.results);
+        const hasGrid = Array.isArray(data.columns) && Array.isArray(data.rows);
+
         if (hasGrid) {
+          // Use explanation_zh + rows/columns in a structured result card
           renderResultPanel(data, { i18n, resultsContainer: results });
-        }
-
-        const responseText = data.summary || data.explanation || '';
-        const imageUrl = data.visualization_url || data.image_url || null;
-
-        // Show assistant bubble only if no grid was rendered
-        if (!hasGrid) {
-          if (responseText || imageUrl) {
-            appendMessage('assistant', responseText, true, imageUrl, true);
-          } else if (vizMode) {
-            appendMessage('assistant', i18n.t('messages.viz_ready') || 'Visualization generated successfully', true);
+        } else {
+          const responseText =
+            data.explanation_zh ||
+            data.explanation ||
+            data.summary ||
+            '';
+          if (responseText) {
+            appendMessage('assistant', responseText, true, null, true);
           }
         }
         return;
@@ -1374,7 +1290,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const sqlstate = data?.sqlstate || null;
     const dbcode = data?.db_code ?? null;
     const rid = data?.rid || null;
-    const genSql = data?.generated_sql || null;
+    const genSql = data?.generated_sql || data?.sql || null;
 
     const make = (category, title, advice, retry = false, backoffMs = 0) => ({
       category, title, advice, retry, backoffMs, sqlstate, dbcode, rid, genSql, raw: errMsg
@@ -1449,7 +1365,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   sendBtn?.addEventListener('click', () => sendQuery());
-  queryTA?.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery(); });
+  queryTA?.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery();
+  });
 
   // ---------------------------
   // Charts (small KPI trend)
@@ -1478,11 +1396,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         maintainAspectRatio: false,
         responsive: true,
         animation: { duration: 400 },
-        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
-        scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 } } }
+        plugins: {
+          legend: { display: false },
+          tooltip: { mode: 'index', intersect: false }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0 } }
+        }
       }
     });
   }
+
   function updateLeaveTrend(trend) {
     if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) return;
     const labels = trend.map(t => i18n.formatDate(new Date(t.date), { weekday: 'short' }));
@@ -1491,50 +1416,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     leaveTrendChart.data.datasets[0].data = values;
     leaveTrendChart.update();
   }
-
-  // ---------------------------
-  // Health
-  // ---------------------------
-  async function checkHealth() {
-    try {
-      const res = await fetch(`${API_BASE}/api/health`);
-      if (!res.ok) throw new Error(`Health check failed (${res.status})`);
-      const data = await res.json();
-      const ready = !!data?.ready_for_queries;
-
-      ErrorManager.clearError('health');
-
-      healthBadge.textContent = ready ? (i18n.t('ai_assistant.healthy') || 'Healthy') : (i18n.t('ai_assistant.degraded') || 'Degraded');
-      healthBadge.className = `px-2 py-0.5 rounded-full text-white text-[10px] ${ready ? 'bg-emerald-600' : 'bg-yellow-500'}`;
-
-      const parts = [
-        `DB: ${data?.database_connection ? 'OK' : 'down'}`,
-        `Index: ${data?.index_present ? 'OK' : 'missing'}`,
-        `Vector: ${data?.vector_db?.ready ? 'OK' : 'off'}`
-      ];
-
-      // Clear previous status (but keep active errors)
-      const children = Array.from(dbStatus.children);
-      children.forEach(child => {
-        if (!child.hasAttribute('data-error-type')) dbStatus.removeChild(child);
-      });
-
-      const statusDiv = document.createElement('div');
-      statusDiv.className = `warning-message flex items-center gap-3 ${ready ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : ''}`;
-      statusDiv.innerHTML = `
-        <span class="pulse-dot"></span>
-        <div>
-          <div class="font-semibold">${ready ? (i18n.t('system_status.system_ready') || 'System Ready') : (i18n.t('system_status.system_not_ready') || 'System Not Ready')}</div>
-          <div class="text-sm">${parts.join(' · ')}</div>
-        </div>`;
-      dbStatus.insertBefore(statusDiv, dbStatus.firstChild);
-    } catch {
-      healthBadge.textContent = i18n.t('ai_assistant.offline') || 'Offline';
-      healthBadge.className = 'px-2 py-0.5 rounded-full text-white text-[10px] bg-red-600';
-      ErrorManager.showError(i18n.t('system_status.health_check_failed') || 'Health check failed. API not reachable.', 'health');
-    }
-  }
-  document.getElementById('refresh-health')?.addEventListener('click', checkHealth);
 
   // ---------------------------
   // Dashboard data
@@ -1553,179 +1434,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       ErrorManager.clearError('api');
 
       const m = data.metrics || {};
-      document.getElementById('pending-leave-count').textContent = i18n.formatNumber(m.pending_leave_requests ?? 0);
+      document.getElementById('pending-leave-count').textContent =
+        i18n.formatNumber(m.pending_leave_requests ?? 0);
 
-      //const leaveDetails = m.on_leave_details || [];
-      const leaveDetails = [
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  },
-  {
-    "person_id": "c0ee7240-731a-4344-b2f2-38f0933fe070",
-    "person_name": "宋X鵬",
-    "type_code": "13",
-    "end_date": "2025-09-30",
-    "department_id_original": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_id": "db933b92-3023-4ffc-9d45-5f9482419538",
-    "department_code": "DQ00100",
-    "department_name": "品保部",
-    "display_name": "宋X鵬",
-    "type_label": "13"
-  }
-]
+      const leaveDetails = m.on_leave_details || [];
+
       const leaveCountEl = document.getElementById('leave-list-count');
       if (leaveCountEl) {
         leaveCountEl.textContent = `${i18n.formatNumber(leaveDetails.length)} ${leaveDetails.length === 1 ? 'person' : 'people'}`;
@@ -1765,12 +1478,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  async function loadLeaveTrend() {
+    try {
+      const url = new URL(`${API_BASE}/api/leave_data`);
+      url.searchParams.set('kind', 'trend');
+      if (AS_OF) url.searchParams.set('as_of', AS_OF);
+      url.searchParams.set('days', TREND_DAYS);
+      const res = await fetch(url.toString());
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.success) updateLeaveTrend(data.trend);
+      }
+    } catch (err) {
+      ErrorManager.showWarning(
+        i18n.t('errors.leave_trend_failed') || 'Failed to load leave trend data.',
+        'trend'
+      );
+    }
+  }
+
   // ---------------------------
   // Voice Recognition
   // ---------------------------
   let recognition = null, listening = false;
-  function supportsSpeech(){ return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window; }
-  function setupRecognition(){
+  function supportsSpeech() {
+    return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+  }
+  function setupRecognition() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognition = new SR();
     recognition.lang = i18n.getCurrentLanguage();
@@ -1794,7 +1528,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     recognition.onerror = () => stopListening();
     recognition.onend = () => stopListening();
   }
-  function startListening(){
+  function startListening() {
     if (!supportsSpeech()) {
       voiceLine.textContent = i18n.t('ai_assistant.speech_not_supported') || 'Speech recognition not supported in this browser.';
       return;
@@ -1809,7 +1543,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     recognition.lang = i18n.getCurrentLanguage();
     recognition.start();
   }
-  function stopListening(){
+  function stopListening() {
     if (!listening) return;
     listening = false;
     micBtn.classList.remove('active');
@@ -1819,7 +1553,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try { recognition.stop(); } catch {}
     vuBar.style.width = '8px';
   }
-  function vuTick(){
+  function vuTick() {
     if (!listening) return;
     const w = 8 + Math.round(Math.random()*40);
     vuBar.style.width = `${w}px`;
@@ -1835,15 +1569,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = setInterval(async () => {
       await loadLeaveMetrics().catch(() => {});
-      try {
-        const url = new URL(`${API_BASE}/api/leave_data`);
-        url.searchParams.set('days', TREND_DAYS);
-        const res = await fetch(url.toString());
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.success) updateLeaveTrend(data.trend);
-        }
-      } catch {}
+      await loadLeaveTrend().catch(() => {});
     }, 36000000);
   }
 
@@ -1851,38 +1577,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     refreshBtn.classList.add('animate-spin');
     try {
       ErrorManager.clearAll();
-      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
-      try {
-        const url = new URL(`${API_BASE}/api/leave_data`);
-        url.searchParams.set('kind', 'trend');
-        if (AS_OF) url.searchParams.set('as_of', AS_OF);
-        url.searchParams.set('days', TREND_DAYS);
-        const res = await fetch(url.toString());
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.success) updateLeaveTrend(data.trend);
-        }
-      } catch {}
+      await loadLeaveMetrics();
+      await loadLeaveTrend();
     } finally {
       setTimeout(() => refreshBtn.classList.remove('animate-spin'), 500);
     }
   });
-
-  // ---------------------------
-  // Language switching
-  // ---------------------------
-  function applyLanguage(lang) {
-    i18n.switchLanguage(lang);
-    i18n.scanAndRegisterElements();
-    i18n.applyTranslations();
-    updateLastUpdateTime();
-    if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
-  }
-  if (globalLangSel) {
-    globalLangSel.value = i18n.getCurrentLanguage();
-    globalLangSel.addEventListener('change', (e) => applyLanguage(e.target.value));
-  }
-  window.addEventListener('languageChanged', updateLastUpdateTime);
 
   // ---------------------------
   // Init
@@ -1890,19 +1590,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   (async function init() {
     try {
       initializeCharts();
-      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
-
-      try {
-        const url = new URL(`${API_BASE}/api/leave_data`);
-        url.searchParams.set('kind', 'trend');
-        if (AS_OF) url.searchParams.set('as_of', AS_OF);
-        url.searchParams.set('days', TREND_DAYS);
-        const res = await fetch(url.toString());
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.success) updateLeaveTrend(data.trend);
-        }
-      } catch {}
+      await loadLeaveMetrics();
+      await loadLeaveTrend();
 
       scheduleRefresh();
       updateLastUpdateTime();
@@ -1922,20 +1611,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   })();
 
-  // ---------------------------
-  // Global error guards
-  // ---------------------------
-  window.addEventListener('error', (event) => {
-    console.error('Global error:', event.error);
-    ErrorManager.showError('An unexpected error occurred. Please refresh the page.', 'critical');
-  });
-  window.addEventListener('unhandledrejection', (event) => {
-    console.error('Unhandled promise rejection:', event.reason);
-    if (!String(event.reason?.message || '').includes('fetch')) {
-      ErrorManager.showError('An unexpected error occurred. Please refresh the page.', 'critical');
-    }
-  });
-}); // DOMContentLoaded
+}); // end DOMContentLoaded
 
 // ===========================
 // Calendar card (kept intact)
@@ -2212,8 +1888,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   workBtn.addEventListener('click', ()=>{
     workMode = !workMode;
-    if(workMode){ setHourRangeInternal(8,20); workBtn.textContent='顯示全天'; workBtn.title='顯示 00:00–24:00'; }
-    else{ setHourRangeInternal(0,24); workBtn.textContent='顯示上班時間'; workBtn.title='顯示 08:00–20:00'; }
+    if(workMode){
+      setHourRangeInternal(8,20);
+      workBtn.textContent='顯示全天';
+      workBtn.title='顯示 00:00–24:00';
+    } else {
+      setHourRangeInternal(0,24);
+      workBtn.textContent='顯示上班時間';
+      workBtn.title='顯示 08:00–20:00';
+    }
   });
 
   document.body.setAttribute('data-theme','light');
@@ -2234,14 +1917,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   function normalizeEvent(ev){
-    return { id: ev.id || `id_${Math.random().toString(36).slice(2,9)}`,
-             title: ev.title || '無標題',
-             start: new Date(ev.start).toISOString().slice(0,16),
-             end: new Date(ev.end).toISOString().slice(0,16),
-             desc: ev.desc || ev.description || '',
-             location: ev.location || '' };
+    return {
+      id: ev.id || `id_${Math.random().toString(36).slice(2,9)}`,
+      title: ev.title || '無標題',
+      start: new Date(ev.start).toISOString().slice(0,16),
+      end: new Date(ev.end).toISOString().slice(0,16),
+      desc: ev.desc || ev.description || '',
+      location: ev.location || ''
+    };
   }
-})();  
+})();
 </script>
 </body>
 </html>

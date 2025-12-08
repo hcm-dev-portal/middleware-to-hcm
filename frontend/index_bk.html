@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8" />
+  <title>HCM AI 助理 – 結果視覺化介面</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --card-bg: #ffffff;
+      --border: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #dc2626;
+      --radius: 12px;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .app-shell {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      width: 100%;
+    }
+
+    .topbar {
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #ffffff;
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-pill {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .top-title {
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .top-subtitle {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+
+    .api-input-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #f9fafb;
+      border: 1px solid var(--border);
+    }
+
+    .api-input-group label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .api-input-group input {
+      border: none;
+      background: transparent;
+      font-size: 12px;
+      min-width: 220px;
+      outline: none;
+      color: var(--text);
+    }
+
+    .pill {
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: #f9fafb;
+    }
+
+    .pill-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--success);
+      box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.25);
+    }
+
+    .pill-dot.offline {
+      background: var(--danger);
+      box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.25);
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      gap: 16px;
+      padding: 16px 20px;
+      overflow: hidden;
+    }
+
+    .panel {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-panel {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .panel-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .panel-title {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .panel-title span.icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    .panel-subtitle {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .panel-body {
+      padding: 10px 14px;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .btn-ghost {
+      border-radius: 8px;
+      padding: 5px 9px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .btn-ghost:hover {
+      background: #f9fafb;
+    }
+
+    .btn-primary {
+      border: none;
+      border-radius: 999px;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      background: var(--accent);
+      color: #ffffff;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
+      white-space: nowrap;
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.6;
+      cursor: default;
+      box-shadow: none;
+    }
+
+    .chat-log {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .chat-message {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+    }
+
+    .chat-message.user {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+    }
+
+    .message-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .message-content {
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .result-section {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .result-section-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .info-card {
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #f9fafb;
+    }
+
+    .info-label {
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 2px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .info-value {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin: 8px 0;
+    }
+
+    .data-table thead {
+      background: #f9fafb;
+    }
+
+    .data-table th {
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 700;
+      color: var(--text);
+      border-bottom: 2px solid var(--border);
+      font-size: 11px;
+    }
+
+    .data-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .data-table tbody tr:hover {
+      background: #f9fafb;
+    }
+
+    .data-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .code-block {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+      background: #0b1120;
+      color: #e5e7eb;
+      border-radius: 6px;
+      padding: 12px;
+      overflow-x: auto;
+      white-space: pre;
+      line-height: 1.5;
+      margin: 8px 0;
+    }
+
+    .code-block.light-mode {
+      background: #f9fafb;
+      color: #111827;
+      border: 1px solid var(--border);
+    }
+
+    .section-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      border: 1px solid;
+    }
+
+    .badge.success {
+      background: #d1fae5;
+      color: #065f46;
+      border-color: #6ee7b7;
+    }
+
+    .badge.error {
+      background: #fee2e2;
+      color: #991b1b;
+      border-color: #fca5a5;
+    }
+
+    .empty-state {
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+      padding: 40px 10px;
+    }
+
+    .empty-state strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text);
+    }
+
+    .composer {
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
+      background: #f9fafb;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .composer-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .composer-main {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .composer textarea {
+      flex: 1;
+      min-height: 60px;
+      max-height: 140px;
+      resize: vertical;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+      font-family: inherit;
+    }
+
+    .composer textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.25);
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      border: 2px solid rgba(255,255,255,0.6);
+      border-top-color: #ffffff;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 768px) {
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .data-table {
+        font-size: 11px;
+      }
+      
+      .data-table th,
+      .data-table td {
+        padding: 6px 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo-pill">AI</div>
+      <div>
+        <div class="top-title">HCM AI 助理</div>
+        <div class="top-subtitle">對話式查詢介面 · 結構化結果呈現</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="api-input-group">
+        <label for="api-base">API 位址:</label>
+        <input id="api-base" type="text" value="http://localhost:8899" />
+      </div>
+      <button id="save-api" class="btn-ghost" type="button">
+        💾 儲存
+      </button>
+      <div class="pill" id="status-pill">
+        <span class="pill-dot" id="status-dot"></span>
+        <span id="status-text">閒置中</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="panel chat-panel">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">
+            <span class="icon">💬</span>
+            <span>對話紀錄</span>
+          </div>
+          <div class="panel-subtitle">
+            輸入問題並送出 · Ctrl+Enter 快速送出
+          </div>
+        </div>
+        <button id="clear-chat" class="btn-ghost" type="button">
+          🧹 清除
+        </button>
+      </div>
+      <div class="panel-body" id="chat-body">
+        <div class="empty-state" id="empty-state">
+          <strong>準備開始測試您的查詢管道。</strong>
+          試試看這個問題： <br>
+          <code>"9/1～9/30 2025年各假別每天的請假時數"</code>
+        </div>
+        <div class="chat-log" id="chat-log"></div>
+      </div>
+      <div class="composer">
+        <div class="composer-top">
+          <span>詢問請假、出勤或加班相關問題。結果會以結構化格式顯示在對話區域中。</span>
+          <span>快捷鍵: <strong>Ctrl+Enter</strong> 送出</span>
+        </div>
+        <div class="composer-main">
+          <textarea id="query-input" placeholder="在此輸入您的問題..."></textarea>
+          <button id="send-btn" class="btn-primary" type="button">
+            <span id="send-label">送出</span>
+            <span id="send-spinner" class="spinner" style="display:none"></span>
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  function getApiBase() {
+    const stored = localStorage.getItem("HCM_API_BASE");
+    const input = document.getElementById("api-base");
+    if (stored && /^https?:\/\//.test(stored)) {
+      if (input) input.value = stored;
+      return stored;
+    }
+    const fallback = input?.value || "http://localhost:8899";
+    return fallback;
+  }
+
+  function setApiBase(value) {
+    const trimmed = String(value || "").trim();
+    if (trimmed) {
+      localStorage.setItem("HCM_API_BASE", trimmed);
+    }
+  }
+
+  function setStatus(text, { online = true } = {}) {
+    const dot = document.getElementById("status-dot");
+    const pillText = document.getElementById("status-text");
+    if (!dot || !pillText) return;
+    pillText.textContent = text;
+    if (online) {
+      dot.classList.remove("offline");
+    } else {
+      dot.classList.add("offline");
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, ch => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+    }[ch]));
+  }
+
+  const apiInput = document.getElementById("api-base");
+  const saveApiBtn = document.getElementById("save-api");
+  const clearChatBtn = document.getElementById("clear-chat");
+  const chatLog = document.getElementById("chat-log");
+  const emptyState = document.getElementById("empty-state");
+  const queryInput = document.getElementById("query-input");
+  const sendBtn = document.getElementById("send-btn");
+  const sendLabel = document.getElementById("send-label");
+  const sendSpinner = document.getElementById("send-spinner");
+
+  (function initApi() {
+    const base = getApiBase();
+    if (apiInput) apiInput.value = base;
+  })();
+
+  if (saveApiBtn && apiInput) {
+    saveApiBtn.addEventListener("click", () => {
+      setApiBase(apiInput.value);
+      setStatus("API 已儲存", { online: true });
+      setTimeout(() => setStatus("閒置中", { online: true }), 1000);
+    });
+  }
+
+  function ensureChatVisible() {
+    if (emptyState) emptyState.style.display = "none";
+  }
+
+  function appendUserMessage(text) {
+    ensureChatVisible();
+    const msg = document.createElement("div");
+    msg.className = "chat-message user";
+    
+    const header = document.createElement("div");
+    header.className = "message-header";
+    header.innerHTML = '<span>您</span>';
+    
+    const content = document.createElement("div");
+    content.className = "message-content";
+    content.textContent = text;
+    
+    msg.appendChild(header);
+    msg.appendChild(content);
+    chatLog.appendChild(msg);
+    chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
+  }
+
+  function appendAssistantMessage(data) {
+    ensureChatVisible();
+    const msg = document.createElement("div");
+    msg.className = "chat-message";
+    
+    const header = document.createElement("div");
+    header.className = "message-header";
+    
+    const statusBadge = data.success 
+      ? '<span class="badge success">✓ 成功</span>'
+      : '<span class="badge error">✗ 失敗</span>';
+    
+    header.innerHTML = `<span>助理回覆</span>${statusBadge}`;
+    
+    const content = document.createElement("div");
+    content.className = "message-content";
+
+    // 查詢摘要
+    if (data.question || data.language_detected || data.rows || data.attempts) {
+      const summarySection = document.createElement("div");
+      summarySection.className = "result-section";
+      summarySection.innerHTML = `
+        <div class="result-section-title">📊 查詢摘要</div>
+        <div class="info-grid">
+          ${data.question ? `<div class="info-card"><div class="info-label">查詢問題</div><div class="info-value">${escapeHtml(data.question)}</div></div>` : ''}
+          ${data.language_detected ? `<div class="info-card"><div class="info-label">偵測語言</div><div class="info-value">${escapeHtml(data.language_detected.toUpperCase())}</div></div>` : ''}
+          ${data.rows ? `<div class="info-card"><div class="info-label">資料筆數</div><div class="info-value">${data.rows.length}</div></div>` : ''}
+          ${data.attempts ? `<div class="info-card"><div class="info-label">嘗試次數</div><div class="info-value">${data.attempts}</div></div>` : ''}
+        </div>
+      `;
+      content.appendChild(summarySection);
+    }
+
+    // 資料表格
+    if (data.columns && data.rows && data.rows.length > 0) {
+      const tableSection = document.createElement("div");
+      tableSection.className = "result-section";
+      
+      const tableTitle = document.createElement("div");
+      tableTitle.className = "result-section-title";
+      tableTitle.textContent = "📋 查詢結果資料表";
+      
+      let tableHtml = '<table class="data-table"><thead><tr>';
+      data.columns.forEach(col => {
+        tableHtml += `<th>${escapeHtml(col)}</th>`;
+      });
+      tableHtml += '</tr></thead><tbody>';
+      
+      data.rows.forEach(row => {
+        tableHtml += '<tr>';
+        row.forEach(cell => {
+          tableHtml += `<td>${escapeHtml(cell)}</td>`;
+        });
+        tableHtml += '</tr>';
+      });
+      tableHtml += '</tbody></table>';
+      
+      const tableContainer = document.createElement("div");
+      tableContainer.innerHTML = tableHtml;
+      
+      const actions = document.createElement("div");
+      actions.className = "section-actions";
+      const copyTableBtn = document.createElement("button");
+      copyTableBtn.className = "btn-ghost";
+      copyTableBtn.textContent = "📋 複製資料表";
+      copyTableBtn.onclick = () => copyTable(tableContainer, copyTableBtn);
+      actions.appendChild(copyTableBtn);
+      
+      tableSection.appendChild(tableTitle);
+      tableSection.appendChild(tableContainer);
+      tableSection.appendChild(actions);
+      content.appendChild(tableSection);
+    }
+
+    // SQL 查詢
+    if (data.sql) {
+      const sqlSection = document.createElement("div");
+      sqlSection.className = "result-section";
+      
+      const sqlTitle = document.createElement("div");
+      sqlTitle.className = "result-section-title";
+      sqlTitle.textContent = "🔍 產生的 SQL 查詢";
+      
+      const sqlBlock = document.createElement("pre");
+      sqlBlock.className = "code-block";
+      sqlBlock.textContent = data.sql;
+      
+      const actions = document.createElement("div");
+      actions.className = "section-actions";
+      
+      const copySqlBtn = document.createElement("button");
+      copySqlBtn.className = "btn-ghost";
+      copySqlBtn.textContent = "📋 複製 SQL";
+      copySqlBtn.onclick = () => copyText(data.sql, copySqlBtn);
+      
+      const toggleSqlBtn = document.createElement("button");
+      toggleSqlBtn.className = "btn-ghost";
+      toggleSqlBtn.textContent = "☀ 亮色模式";
+      toggleSqlBtn.onclick = () => toggleTheme(sqlBlock, toggleSqlBtn);
+      
+      actions.appendChild(copySqlBtn);
+      actions.appendChild(toggleSqlBtn);
+      
+      sqlSection.appendChild(sqlTitle);
+      sqlSection.appendChild(sqlBlock);
+      sqlSection.appendChild(actions);
+      content.appendChild(sqlSection);
+    }
+
+    // JSON 資料
+    const jsonSection = document.createElement("div");
+    jsonSection.className = "result-section";
+    
+    const jsonTitle = document.createElement("div");
+    jsonTitle.className = "result-section-title";
+    jsonTitle.textContent = "🧪 完整 JSON 回應";
+    
+    const jsonBlock = document.createElement("pre");
+    jsonBlock.className = "code-block";
+    jsonBlock.textContent = JSON.stringify(data, null, 2);
+    
+    const actions = document.createElement("div");
+    actions.className = "section-actions";
+    
+    const copyJsonBtn = document.createElement("button");
+    copyJsonBtn.className = "btn-ghost";
+    copyJsonBtn.textContent = "📋 複製 JSON";
+    copyJsonBtn.onclick = () => copyText(JSON.stringify(data, null, 2), copyJsonBtn);
+    
+    const toggleJsonBtn = document.createElement("button");
+    toggleJsonBtn.className = "btn-ghost";
+    toggleJsonBtn.textContent = "☀ 亮色模式";
+    toggleJsonBtn.onclick = () => toggleTheme(jsonBlock, toggleJsonBtn);
+    
+    actions.appendChild(copyJsonBtn);
+    actions.appendChild(toggleJsonBtn);
+    
+    jsonSection.appendChild(jsonTitle);
+    jsonSection.appendChild(jsonBlock);
+    jsonSection.appendChild(actions);
+    content.appendChild(jsonSection);
+    
+    msg.appendChild(header);
+    msg.appendChild(content);
+    chatLog.appendChild(msg);
+    chatLog.parentElement.scrollTop = chatLog.parentElement.scrollHeight;
+  }
+
+  async function copyText(text, btn) {
+    try {
+      await navigator.clipboard.writeText(text);
+      const orig = btn.textContent;
+      btn.textContent = "✓ 已複製";
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    } catch {
+      alert("複製失敗");
+    }
+  }
+
+  async function copyTable(container, btn) {
+    const table = container.querySelector("table");
+    if (!table) return;
+    
+    let text = "";
+    const rows = table.querySelectorAll("tr");
+    rows.forEach(row => {
+      const cells = row.querySelectorAll("th, td");
+      const rowText = Array.from(cells).map(c => c.textContent).join("\t");
+      text += rowText + "\n";
+    });
+    
+    await copyText(text, btn);
+  }
+
+  function toggleTheme(block, btn) {
+    if (block.classList.contains("light-mode")) {
+      block.classList.remove("light-mode");
+      btn.textContent = "☀ 亮色模式";
+    } else {
+      block.classList.add("light-mode");
+      btn.textContent = "🌙 暗色模式";
+    }
+  }
+
+  function clearChat() {
+    if (chatLog) chatLog.innerHTML = "";
+    if (emptyState) emptyState.style.display = "block";
+  }
+
+  if (clearChatBtn) {
+    clearChatBtn.addEventListener("click", clearChat);
+  }
+
+  let sending = false;
+
+  async function sendQuery() {
+    if (sending) return;
+    const q = (queryInput?.value || "").trim();
+    if (!q) return;
+
+    appendUserMessage(q);
+    if (queryInput) queryInput.value = "";
+    
+    sending = true;
+    if (sendBtn) sendBtn.disabled = true;
+    if (sendLabel) sendLabel.textContent = "查詢中...";
+    if (sendSpinner) sendSpinner.style.display = "inline-block";
+    setStatus("查詢中...", { online: true });
+
+    const apiBase = getApiBase();
+    const url = apiBase.replace(/\/+$/, "") + "/api/assistant/query";
+
+    const payload = {
+      query: q,
+      lang: "zh-TW",
+      include_visualization: false
+    };
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = { success: false, error: "無法解析 JSON", http_status: res.status };
+      }
+
+      appendAssistantMessage(data);
+
+      if (!res.ok || !data || data.success === false) {
+        setStatus("查詢失敗", { online: false });
+      } else {
+        setStatus("查詢成功", { online: true });
+      }
+
+    } catch (err) {
+      console.error(err);
+      appendAssistantMessage({ 
+        success: false, 
+        error: "網路錯誤: " + (err?.message || String(err))
+      });
+      setStatus("離線", { online: false });
+    } finally {
+      sending = false;
+      if (sendBtn) sendBtn.disabled = false;
+      if (sendLabel) sendLabel.textContent = "送出";
+      if (sendSpinner) sendSpinner.style.display = "none";
+      setTimeout(() => setStatus("閒置中", { online: true }), 2000);
+    }
+  }
+
+  if (sendBtn) {
+    sendBtn.addEventListener("click", sendQuery);
+  }
+
+  if (queryInput) {
+    queryInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        sendQuery();
+      }
+    });
+  }
+
+  setStatus("閒置中", { online: true });
+
+})();
+</script>
+</body>
+</html>
