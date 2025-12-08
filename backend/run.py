@@ -1,3 +1,5 @@
+# run.py
+
 import os
 import logging
 import time
@@ -12,17 +14,8 @@ from fastapi.responses import FileResponse, Response
 
 from app.api.router import router as api_router
 
-# ✅ Use the enhanced, Unicode-ready DB service
+# ✅ DB only – NLP pipeline is created lazily inside router via LeaveNLPPipeline
 from app.services.db_service import SQLServerDatabaseService, set_request_id
-
-# ✅ Use your optimized NLP v2
-from app.services.nlp_service_2 import LanguageNativeNLPService
-
-# Optional: vector bootstrapper for warming up vector indexes at startup
-try:
-    from app.vector_bootstrap import VectorBootstrapper
-except Exception:
-    VectorBootstrapper = None  # Guarded by checks
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -42,53 +35,16 @@ INDEX_HTML   = FRONTEND_DIR / "index.html"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Startup:
-      - Initialize DB (Unicode-enabled)
-      - Initialize LanguageNativeNLPService (v2) as primary NLP
-      - Warm vector DBs/indexes so health is green on first load
+    Application startup/shutdown lifecycle.
+    We only initialize the DB here; the leave NLP pipeline is created lazily
+    in app.api.router via get_leave_nlp_pipeline().
     """
     t0 = time.perf_counter()
     try:
-        # DB service
         db = SQLServerDatabaseService()
+        # Expose DB under both names for backward compatibility
         app.state.db = db
-
-        # ✅ Primary NLP = v2 only
-        nlp = LanguageNativeNLPService(db_service=db)
-        app.state.nlp = nlp
-
-        # --- Vector warmup ---
-        warm_timeout_s = int(os.getenv("VECTOR_WARMUP_TIMEOUT_S", "20"))
-        warm_block = os.getenv("VECTOR_WARMUP_BLOCKING", "true").lower() == "true"
-
-        if VectorBootstrapper:
-            app.state.vector_bootstrap = VectorBootstrapper({
-                "primary": getattr(app.state, "nlp", None),
-                # We are no longer using any legacy/original services.
-            })
-            try:
-                if warm_block:
-                    logger.info("Vector warmup (blocking, timeout=%ss) starting ...", warm_timeout_s)
-                    result = await app.state.vector_bootstrap.start()
-                    logger.info("Vector warmup completed: %s", result)
-                else:
-                    logger.info("Vector warmup (background) scheduled.")
-                    import asyncio
-                    asyncio.create_task(app.state.vector_bootstrap.start(timeout_s=warm_timeout_s))
-            except Exception as e:
-                logger.exception("Vector warmup error: %s", e)
-        else:
-            # Fallback: warm via nlp service if exposed
-            try:
-                if hasattr(nlp, "vector_search") and hasattr(nlp.vector_search, "warmup"):
-                    logger.info("Vector warmup via NLP service starting ...")
-                    maybe = nlp.vector_search.warmup()
-                    if hasattr(maybe, "__await__"):
-                        import asyncio
-                        await asyncio.wait_for(maybe, timeout=warm_timeout_s)
-                    logger.info("Vector warmup via NLP service completed.")
-            except Exception as e:
-                logger.exception("Vector warmup (fallback) error: %s", e)
+        app.state.db_service = db
 
         logger.info("Startup complete in %dms", int((time.perf_counter() - t0) * 1000))
     except Exception as e:
@@ -98,6 +54,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("Shutting down services ...")
+        # If you later add graceful DB close, do it here.
+        # e.g. getattr(app.state, "db", None)?.close()
 
 
 def create_app() -> FastAPI:
@@ -119,8 +77,14 @@ def create_app() -> FastAPI:
         finally:
             dur_ms = int((time.perf_counter() - start) * 1000)
             status = getattr(response, "status_code", "?")
-            logger.info("HTTP %s %s -> %s rid=%s dur=%dms",
-                        request.method, request.url.path, status, request_id, dur_ms)
+            logger.info(
+                "HTTP %s %s -> %s rid=%s dur=%dms",
+                request.method,
+                request.url.path,
+                status,
+                request_id,
+                dur_ms,
+            )
             try:
                 if response is not None:
                     response.headers["x-request-id"] = request_id
@@ -129,7 +93,9 @@ def create_app() -> FastAPI:
 
     # CORS (configurable)
     raw_origins = os.getenv("CORS_ORIGINS", "*").strip()
-    allow_origins = ["*"] if raw_origins == "*" else [o.strip() for o in raw_origins.split(",") if o.strip()]
+    allow_origins = ["*"] if raw_origins == "*" else [
+        o.strip() for o in raw_origins.split(",") if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
@@ -138,7 +104,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Static mounts
+    # ---------- Static mounts ----------
+    # Frontend assets
     if FRONTEND_DIR.exists():
         if ASSETS_DIR.exists():
             app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
@@ -146,6 +113,12 @@ def create_app() -> FastAPI:
             app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
         if LANG_DIR.exists():
             app.mount("/lang", StaticFiles(directory=str(LANG_DIR)), name="lang")
+
+        LEAVE_HTML = FRONTEND_DIR / "leave_page.html"
+        if LEAVE_HTML.exists():
+            @app.get("/leave", include_in_schema=False)
+            async def leave_page():
+                return FileResponse(str(LEAVE_HTML))
 
         @app.get("/translations.js", include_in_schema=False)
         async def serve_translations_js():
@@ -161,12 +134,16 @@ def create_app() -> FastAPI:
             @app.get("/", include_in_schema=False)
             async def root_index():
                 return FileResponse(str(INDEX_HTML))
+
         logger.info("Frontend dir: %s (exists=%s)", FRONTEND_DIR, True)
     else:
         logger.warning("Frontend dir not found at %s", FRONTEND_DIR)
 
-    # API routes
-    app.include_router(api_router)
+    # NOTE: charts/images mount & visualization outputs removed
+    # because the new pipeline is chat-only (no chart service).
+
+    # ---------- API routes ----------
+    app.include_router(api_router)      # main + leave + assistant
 
     return app
 
@@ -175,6 +152,7 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
+
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8899"))
     reload = os.getenv("RELOAD", "false").lower() == "true"

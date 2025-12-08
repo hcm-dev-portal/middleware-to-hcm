@@ -327,7 +327,109 @@
     "details": "Details"
   },
 
-  "leave": {
+  "hcm": {
+      "page_title": "HCM Service Request - AI Assistant",
+      "main_title": "HCM Service Request",
+      "main_subtitle": "Submit HCM requests with AI assistance",
+      "ai_ready": "HCM Assistant Ready",
+      
+      "employee_id": "Employee ID:",
+      "login_name": "Login:",
+      "status": "Status:",
+      "services_title": "Available Services",
+      
+      "no_requests_title": "No Requests Submitted",
+      "no_requests_desc": "Your HCM service requests will appear here",
+      "no_requests_hint": "Chat with the AI assistant to submit requests",
+      
+      "assistant_title": "HCM Assistant",
+      "assistant_desc": "I'll help you submit HCM service requests step by step",
+      "status_online": "Online",
+      
+      "welcome_msg": "Hi! I'm your HCM Assistant. I can help you submit service requests to the HCM system. Here's what I can do:",
+      "feature_1": "• Process requests like \"I need applyformleave service\"",
+      "feature_2": "• Generate dynamic forms based on HCM service requirements",
+      "feature_3": "• Handle complex nested data structures automatically",
+      "feature_4": "• Ensure ExpiredDate is always fresh and valid",
+      "feature_5": "• Submit requests directly to the HCM system",
+      "what_help": "Which HCM service would you like to use today?",
+      
+      "mic_button": "Voice input",
+      "input_placeholder": "Ask me about HCM services... (e.g., 'I need to use applyformleave', 'Help me with createleave')",
+      "send_button": "Send message",
+      
+      "suggestion_1": "\"I need applyformleave\"",
+      "suggestion_2": "\"Help with createleave\"",
+      "suggestion_3": "\"Show me createformleave\"",
+      "suggestion_4": "\"I need checkovertime\"",
+      
+      "modal_success_title": "Request Submitted!",
+      "modal_success_desc": "Your HCM request has been processed successfully.",
+      "modal_continue": "Continue",
+      
+      "you_label": "You",
+      "thinking": "Assistant is thinking...",
+      
+      "prepare_form": "Perfect! I'll prepare a {name} form for you. Please review and modify the fields as needed:",
+      "available_services": "Here are the available HCM services I can help you with:\n\n{serviceList}\n\nJust tell me which service you'd like to use, for example: \"I need applyformleave\"",
+      "clarification": "I can help you with HCM service requests. I support these services:\n\n• applyformleave\n• createformleave\n• createleave\n• checkovertime\n\nWhich service would you like to use?",
+      
+      "form_cancelled": "Form cancelled. What else can I help you with?",
+      
+      "success_default": "HCM request submitted successfully!",
+      "error_default": "Request failed",
+      "network_error": "Network error: {error}. Please try again.",
+      "error_processing": "I'm having trouble processing your request. Please try again.",
+      
+      "speech_not_supported": "Speech recognition not supported in this browser",
+      
+      "services": {
+        "applyformleave": {
+          "name": "Apply Form Leave",
+          "description": "Submit leave request with form approval"
+        },
+        "createformleave": {
+          "name": "Create Form Leave", 
+          "description": "Create leave form without applying"
+        },
+        "createleave": {
+          "name": "Create Leave",
+          "description": "Direct leave creation"
+        },
+        "checkovertime": {
+          "name": "Check Overtime",
+          "description": "Verify overtime eligibility and hours"
+        }
+      },
+      
+      "fields": {
+        "formno": "Form Number",
+        "reason": "Reason",
+        "detail": "Details",
+        "employeeid": "Employee ID",
+        "leavetypeid": "Leave Type ID",
+        "begindate": "Begin Date",
+        "begintime": "Begin Time",
+        "enddate": "End Date",
+        "endtime": "End Time",
+        "checkdate": "Check Date",
+        "hours": "Hours"
+      },
+      
+      "common": {
+        "submit": "Submit to HCM",
+        "preview": "Update Preview",
+        "cancel": "Cancel",
+        "submitting": "Submitting...",
+        "success": "Success",
+        "failed": "Failed",
+        "message": "Message",
+        "code": "Code",
+        "raw_response": "Raw Response"
+      }
+    },
+    
+    "leave": {
       "page_title": "Request Leave - HCM AI Assistant",
       "main_title": "Request Leave",
       "main_subtitle": "Submit your leave request with AI assistance",
@@ -351,7 +453,7 @@
       "assistant_desc": "I'll help you submit your leave request step by step",
       "status_online": "Online",
       
-      "welcome_msg": "Hi John! I'm here to help you submit your leave request. Here's what I can do:",
+      "welcome_msg": "Hi! I'm here to help you submit your leave request. Here's what I can do:",
       "feature_1": "• Process natural language requests like \"I need tomorrow off\"",
       "feature_2": "• Help you choose the right leave type based on your situation",
       "feature_3": "• Check your balances and suggest alternatives",
@@ -370,64 +472,6 @@
       
       "modal_success_title": "Request Submitted!",
       "modal_success_desc": "Your leave request has been submitted and is pending approval.",
-      "modal_continue": "Continue",
-      
-      "you_label": "You",
-      "thinking": "Assistant is thinking...",
-      
-      "request_title": "Leave Request",
-      "id_label": "ID",
-      "type_label": "Type",
-      "duration_label": "Duration",
-      "dates_label": "Dates",
-      "reason_label": "Reason",
-      "submitted_label": "Submitted",
-      "awaiting_approval": "Awaiting approval",
-      "status_pending": "Pending",
-      "status_approved": "Approved",
-      "status_rejected": "Rejected",
-      "approved_by_manager": "Approved by manager",
-      "rejected_by_manager": "Rejected by manager",
-      
-      "form_title": "Leave Request Form",
-      "form_leave_type": "Leave Type",
-      "form_duration": "Duration",
-      "form_start_date": "Start Date",
-      "form_end_date": "End Date",
-      "form_reason": "Reason (Optional)",
-      "form_reason_placeholder": "Brief reason for leave...",
-      "form_current_balance": "Current Balance:",
-      "form_submit": "Submit Request",
-      "form_modify": "Modify Details",
-      "form_cancel": "Cancel",
-      
-      "full_day": "Full Day",
-      "half_day_morning": "Half Day (Morning)",
-      "half_day_afternoon": "Half Day (Afternoon)",
-      "multiple_days": "Multiple Days",
-      "one_day": "1 day",
-      "half_day_am": "0.5 day (AM)",
-      "half_day_pm": "0.5 day (PM)",
-      "no_limit": "No limit",
-      
-      "error_processing": "I'm sorry, I'm having trouble processing your request right now. Please try again.",
-      "balance_info": "Here are your current leave balances:\n\n• Annual Leave: 15.5 days\n• Sick Leave: 8.0 days\n• Personal Leave: 3.0 days\n\nYou're in good shape! Is there a specific type of leave you'd like to request?",
-      "tomorrow_request": "I understand you need tomorrow off. Let me help you with that. I'll prepare a leave request form:",
-      "vacation_clarification": "I'd be happy to help you request vacation time! To prepare the best request, could you please tell me:\n\n• Which specific dates do you need off?\n• How many days total?\n• Is this for annual leave?\n• Any special reason or occasion?",
-      "sick_request": "I understand you need sick leave. I'll prepare a sick leave request. Note that sick leave typically doesn't require advance notice if it's for today.",
-      "medical_reasons": "Medical reasons",
-      "general_request": "I understand you'd like to request leave. I can help you with that! Could you provide more details about:\n\n• The dates you need\n• Type of leave (annual, sick, personal, emergency)\n• Duration (full day, half day, multiple days)\n• Reason (optional but helpful)",
-      
-      "modify_prompt": "What would you like to modify? You can tell me the changes and I'll update the form for you.",
-      "form_cancelled": "Form cancelled. What else can I help you with?",
-      
-      "submitting": "Submitting...",
-      "submitted": "Submitted",
-      "submission_success": "Success! Your leave request has been submitted and added to your requests.\n\nRequest ID: {id}\nStatus: Pending Manager Approval\nExpected Response: Within 24 hours\n\nYou can see the request details in the sidebar. You'll receive an email notification once your manager reviews the request.",
-      "submission_error": "I'm sorry, there was an error submitting your request. Please try again or contact HR support if the problem persists.",
-      
-      "approval_notification": "🎉 Great news! Your leave request (ID: {id}) has been approved by your manager.\n\nYou can see the updated status in the sidebar. Have a great time off!",
-      
-      "speech_not_supported": "Speech recognition not supported in this browser"
+      "modal_continue": "Continue"
     }
 }

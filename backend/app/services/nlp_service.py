@@ -1,340 +1,461 @@
-# backend/app/services/nlp_service.py
+# backend/app/services/nlp/leave_nlp_service.py
 from __future__ import annotations
 
-import re
-import time
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+import uuid
+from typing import Any, Dict, List, Optional, Tuple, Literal
 
-from app.services.db_service import SQLServerDatabaseService
-
-# Import our specialized services
-from .aws.translation_service import AWSTranslationService
-
-# from .llm.openai_service import OpenAIService
-
-#from .llm.retry_llm_service import OpenAIService
-from app.services.llm.openai_service import OpenAIService
-
-from app.services.db_service import (
-    DatabaseQueryError,
-    DatabaseConnectionError,
-    DatabaseTimeoutError,
-    PermissionDeniedError,
-    DeadlockError,
+from app.services.llm.llm_service import (
+    LLMService,
+    detect_query_language,
 )
-
-from .data_processing.data_analyzer import DataAnalyzer
-from .data_processing.date_processor import DateProcessor
-from .data_processing.sql_templates import SQLTemplateService
-from .data_processing.sql_executor import SQLExecutor
-from .data_processing.person_enrichment import PersonEnrichmentService
-from .retrieval.vector_search_service import VectorSearchService
-from .helpers.data_utils import jsonable_value, normalize_sql_columns, format_sample_data
-
-from backend.app.services.memory.simple_query_memory import QueryMemoryService
+from app.services.vector_search_service import (
+    VectorSearchService,
+)
 
 logger = logging.getLogger(__name__)
 
-
-def _ms(t0: float) -> int:
-    """Calculate milliseconds elapsed since timestamp."""
-    return int((time.perf_counter() - t0) * 1000)
+Language = Literal["zh-tw", "en"]
 
 
-class NLPService:
+import datetime
+from enum import Enum
+
+def _json_safe(obj: Any) -> Any:
     """
-    Main orchestrator for natural language processing pipeline.
+    Recursively convert objects into JSON-serializable forms.
+
+    - datetime/date → ISO string
+    - Enum → value
+    - set → list
+    - dict → dict with json-safe values
+    - list/tuple → list with json-safe values
+    """
+    # primitives
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+
+    # datetime-like
+    if isinstance(obj, (datetime.datetime, datetime.date)):
+        return obj.isoformat()
+
+    # enums
+    if isinstance(obj, Enum):
+        return obj.value
+
+    # mappings
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+
+    # sets / tuples / lists
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(x) for x in obj]
+
+    # fallback: string representation
+    return str(obj)
+
+class LeaveNLPPipeline:
+    """
+    Orchestrator for the Leave AI Assistant (zh-tw / en).
+
+    NEW PIPELINE (fully transparent):
+
+        Controller
+           ↓
+        LeaveNLPPipeline.answer_question(...)
+           1. Normalize + validate user_question
+           2. Detect language (zh-tw / en)
+           3. Build PLAN via VectorSearchService.plan_for(...)
+                - intent_context (template_ref, slots, candidates, tables)
+                - tables
+                - join_hints
+                - schema (enhanced: recipes + DB schema)
+           4. (Optional) Deep debug of vector index via VectorSearchService.debug_search(...)
+           5. Call LLMService.answer_question(...) using planner schema/join_hints
+                - LLM generates SQL
+                - LLMService executes via db_service.run_select(...)
+                - LLMService computes aggregates + zh-tw explanation
+           6. Attach **all debug info** to the final result:
+                - request_id
+                - pipeline language detection
+                - planner plan
+                - vector debug search results
+                - LLM attempts + final SQL
+
+    STRICT:
+        - No fake "SELECT 1 WHERE 1=0".
+        - No success=True if LLMService says failure.
+        - Errors are surfaced with clear categories (from LLMService).
     """
 
-    def __init__(self, db_service: SQLServerDatabaseService, model_name: str = "gpt-4o-mini",
-                 temperature: float = 0.1, **_):
-        self.db_service = db_service
+    def __init__(
+        self,
+        llm_service: Optional[LLMService] = None,
+        vector_service: Optional[VectorSearchService] = None,
+    ) -> None:
+        # Core LLM pipeline (SQL + DB + explanation)
+        self.llm = llm_service or LLMService()
 
-        # Component services
-        self.translation_service = AWSTranslationService()
-        self.llm_service =  OpenAIService(model_name="gpt-4o-mini", temperature=0.1) # OpenAIService(model_name, temperature)
-        self.data_analyzer = DataAnalyzer()
-        self.date_processor = DateProcessor()
-        self.sql_template_service = SQLTemplateService()
-        self.sql_executor = SQLExecutor(db_service)
-        self.person_enrichment = PersonEnrichmentService(db_service)
-        self.vector_search = VectorSearchService(db_service)
-        self.memory = QueryMemoryService(db_service)
+        # Vector-based planner / schema context
+        # NOTE: VectorSearchService requires db_service, so we create it on first call
+        #       when we actually have db_service available.
+        self._vector_service: Optional[VectorSearchService] = vector_service
+        self._vector_initialized: bool = vector_service is not None
 
-        self._initialize_data_anchor()
-
-    def _initialize_data_anchor(self):
-        """Initialize the data anchor (latest date in dataset)."""
-        try:
-            rows, cols = self.db_service.run_select(
-                "SELECT CONVERT(varchar(10), MAX(CAST(WORKDATE AS date)), 23) FROM dbo.ATDLEAVEDATA"
-            )
-            if rows and rows[0][0]:
-                data_anchor = str(rows[0][0])  # e.g., '2023-10-06'
-                self.date_processor.set_data_anchor(data_anchor)
-                logger.info("Data anchor (latest WORKDATE) = %s", data_anchor)
-        except Exception as e:
-            logger.warning("Could not determine data anchor: %s", e)
-
-    def _rewrite_followup_with_context(self, english: str, session_id: str) -> str:
+    # ------------------------------------------------------------------
+    # Public entrypoint
+    # ------------------------------------------------------------------
+    def answer_question(
+        self,
+        db_service: Any,
+        user_question: str,
+        schema: str,
+        join_hints: str,
+        *,
+        max_rows: int = 1000,
+        query_timeout: int = 10,
+        max_attempts: int = 3,
+        rid: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Replace vague references like 'this department' with concrete values from prior results.
-        Falls back to LLM rewrite for tricky cases.
+        Main entrypoint for the Leave AI assistant.
+
+        Controller can still pass `schema` and `join_hints`, but **planner output
+        always takes precedence**. Old arguments are only used as last-resort fallback.
+
+        Returns the normal LLM payload (rows, columns, sql, aggregates, explanation)
+        PLUS a `debug` block with full transparency of:
+
+          - request_id
+          - pipeline_language_detected
+          - planner_plan (tables, join_hints, schema, intent_context)
+          - vector_debug_search
+          - llm_debug (attempts, final sql)
         """
-        out = english
+        # Per-request correlation ID for logs
+        request_id = rid or self._new_request_id()
 
-        # 1) Heuristic replacement using memory snapshot
-        dept = self.memory.get_last_focus_value(session_id, ["Department", "DEPARTMENT", "DeptName", "部門"])
-        if dept:
-            out = re.sub(r"\b(this|that|the)\s+department\b", dept, out, flags=re.I)
-
-        # 2) Optional: quick LLM rewrite to fully specify pronouns (best-effort)
-        try:
-            if self.llm_service and getattr(self.llm_service, "llm_enabled", False):
-                from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-                rewriter = ChatPromptTemplate.from_messages([
-                    SystemMessagePromptTemplate.from_template(
-                        "You rewrite short analytics questions into fully specified English, "
-                        "replacing vague pronouns with concrete values from context."
-                    ),
-                    HumanMessagePromptTemplate.from_template(
-                        "Question: {question}\n\n"
-                        "Context (last columns and a few preview rows):\n{context}\n\n"
-                        "Return only the rewritten question. No commentary."
-                    ),
-                ])
-                ctx_txt = ""
-                snap = self.memory.session_cache.get(session_id)
-                if snap and snap.successful_results:
-                    last = snap.successful_results[-1]
-                    ctx_txt = f"Columns: {', '.join(last.get('columns') or [])}\nPreview: {last.get('preview')}"
-                msgs = rewriter.format_messages(question=out, context=ctx_txt)
-                new_q = self.llm_service._invoke_llm(msgs)
-                if new_q:
-                    return new_q.strip()
-        except Exception:
-            pass
-
-        return out
-
-
-    @property
-    def person_table(self) -> str:
-        return self.vector_search.person_table
-
-    def vector_status(self) -> Dict[str, Any]:
-        return self.vector_search.health_check()
-
-    # ---------- NEW: pure helper for inline preview table ----------
-    @staticmethod
-    def _markdown_table(columns, rows, limit: int = 20, keep=None) -> str:
-        cols = [c for c in columns or []]
-        if not rows or not cols:
-            return ""
-        # project to selected columns if requested
-        proj_rows = []
-        if keep:
-            low = {c.lower(): i for i, c in enumerate(cols)}
-            wanted = []
-            for k in keep:
-                i = low.get(k.lower())
-                if i is not None:
-                    wanted.append((cols[i], i))
-            if wanted:
-                cols = [w[0] for w in wanted]
-                idxs = [w[1] for w in wanted]
-                for r in rows[:limit]:
-                    proj_rows.append([("" if i >= len(r) or r[i] is None else str(r[i])) for i in idxs])
-            else:
-                for r in rows[:limit]:
-                    proj_rows.append([("" if v is None else str(v)) for v in r])
-        else:
-            for r in rows[:limit]:
-                proj_rows.append([("" if v is None else str(v)) for v in r])
-
-        if not proj_rows:
-            return ""
-
-        header = "| " + " | ".join(cols) + " |"
-        sep = "| " + " | ".join(["---"] * len(cols)) + " |"
-        lines = [header, sep]
-        for r in proj_rows:
-            lines.append("| " + " | ".join(r) + " |")
-        return "\n".join(lines)
-
-    def process_complete_query(self, user_input: str, schema_name: Optional[str] = "dbo",
-                           rid: Optional[str] = None) -> Dict[str, Any]:
-        t0 = time.perf_counter()
-        session_id = rid or "default"
-
-        try:
-            # 1) Language & dates normalization
-            lang, conf = self.translation_service.detect_language(user_input)
-            english = self.translation_service.translate_to_english(user_input, lang)
-            english = self.date_processor.rewrite_relative_dates(english)
-            logger.info("rid=%s query=%r lang=%s conf=%.2f", rid, user_input, lang, conf)
-
-            # 2) Retrieval (tables, hints, schema)
-            rel_with_scores = self.vector_search.find_relevant_tables(
-                english, schema_filter=schema_name, rid=rid
-            )
-            rel_tables = [t for (t, _) in rel_with_scores]
-            join_hints = self.vector_search.get_join_hints(rel_tables)
-            schema_ctx = self.vector_search.get_schema_context(rel_tables)
-
-            # 3) Follow-up grounding
-            english_grounded = self._rewrite_followup_with_context(english, session_id)
-
-            # 4) Try memory first
-            cached_sql, cached_conf = self.memory.check_memory_for_query(
-                english_grounded, rel_tables, session_id=session_id
-            )
-
-            final_sql = ""
-            llm_attempts = 0
-            rows: List[Tuple[Any, ...]] = []
-            columns: List[str] = []
-            execution_error: Optional[str] = None
-
-            # 5) Execute (cache → llm-repair → fallback)
-            exec_t0 = time.perf_counter()
-            try:
-                if cached_sql:
-                    final_sql = normalize_sql_columns(cached_sql)
-                    rows, columns = self.db_service.run_select(final_sql, max_rows=1000, query_timeout=10)
-                    llm_attempts = 0  # pure cache path
-                else:
-                    if rel_tables:
-                        # LLM with self-healing repair
-                        rows, columns, final_sql, llm_attempts = self.llm_service.run_query_with_llm_repair(
-                            db_service=self.db_service,
-                            user_question=english_grounded,
-                            schema=schema_ctx,
-                            join_hints=join_hints,
-                            params=None,
-                            max_rows=1000,
-                            query_timeout=10,
-                            max_attempts=3,
-                        )
-                        final_sql = normalize_sql_columns(final_sql)
-                    else:
-                        # No tables → deterministic template
-                        alt = self.sql_template_service.get_fallback_sql(english_grounded)
-                        final_sql = normalize_sql_columns(alt or "SELECT 1 WHERE 1=0")
-                        rows, columns = self.db_service.run_select(final_sql, max_rows=1000, query_timeout=10)
-            except Exception as e:
-                execution_error = str(e)
-
-            exec_ms = int((time.perf_counter() - exec_t0) * 1000)
-
-            # 6) Learn + record session snapshot
-            if execution_error is None:
-                self.memory.learn_from_query(
-                    english_query=english_grounded,
-                    relevant_tables=rel_tables,
-                    generated_sql=final_sql,
-                    success=True,
-                    execution_time=exec_ms / 1000.0,
-                    session_id=session_id,
-                )
-                self.memory.record_success(
-                    session_id=session_id,
-                    english_query=english_grounded,
-                    generated_sql=final_sql,
-                    columns=columns,
-                    rows=rows,
-                    relevant_tables=rel_tables,
-                    schema_ctx=schema_ctx,
-                )
-            else:
-                self.memory.learn_from_query(
-                    english_query=english_grounded,
-                    relevant_tables=rel_tables,
-                    generated_sql=final_sql or "",
-                    success=False,
-                    execution_time=exec_ms / 1000.0,
-                    session_id=session_id,
-                )
-
-            # 7) Analysis & explanation (only on success)
-            if execution_error:
-                explanation_en = f"Query execution failed: {execution_error}"
-                table_md = ""
-            else:
-                aggregates = self.data_analyzer.compute_aggregates(rows, columns)
-                sample_text = format_sample_data(rows, columns)
-
-                explanation_en = self.llm_service.generate_explanation(
-                    english_grounded, len(rows), columns, aggregates, sample_text
-                )
-
-                want_details = any(k in english_grounded.lower() for k in (
-                    "name", "names", "employee id", "employee ids",
-                    "list", "show", "sample", "detail", "details", "who"
-                ))
-                preferred_cols = [
-                    "Name", "EmployeeID",
-                    "ATTENDANCETYPE", "LEAVETYPE",
-                    "HOURS", "StartDate", "WORKDATE", "EndDate"
-                ]
-                table_md = self._markdown_table(columns, rows, limit=20,
-                                                keep=preferred_cols if want_details else None)
-                if table_md:
-                    explanation_en = explanation_en.strip() + "\n\n**Preview (first 20 rows):**\n\n" + table_md
-
-            # 8) Localize final summary
-            localized_explanation = self.translation_service.translate_from_english(
-                explanation_en, lang
-            )
-
-            # 9) Response
-            stats = self.memory.get_memory_stats()
-            response = {
-                "original_text": user_input,
-                "detected_language": lang,
-                "language_confidence": conf,
-                "english_text": english_grounded,
-                "intent": "generic",
-                "schema": schema_name,
-                "relevant_tables": [{"table": t, "score": round(s, 3)} for (t, s) in rel_with_scores],
-                "generated_sql": final_sql or "SELECT 1 WHERE 1=0",
-                "llm_attempts": llm_attempts,
-                "execution_successful": execution_error is None,
-                "execution_error": execution_error,
-                "columns": columns,
-                "results": [[jsonable_value(v) for v in r] for r in rows],
-                "row_count": len(rows),
-                "resolved_people": self.person_enrichment.enrich_people_data(rows, columns),
-                "columns_enriched": columns,
-                "results_enriched": [[jsonable_value(v) for v in r] for r in rows],
-                "table_markdown": table_md if execution_error is None else "",
-                "explanation_english": explanation_en,
-                "explanation_localized": localized_explanation,
-                "summary": localized_explanation,
-                "success": execution_error is None,
-                # ✅ Memory telemetry
-                "memory": {
-                    "session_id": session_id,
-                    "used_cached_sql": bool(cached_sql),
-                    "cached_confidence": float(cached_conf) if cached_sql else 0.0,
-                    "cache_hit_rate": stats.get("cache_hit_rate"),
+        user_question = (user_question or "").strip()
+        if not user_question:
+            logger.warning("[LeaveNLP][%s] Empty question.", request_id)
+            return {
+                "question": user_question,
+                "language_detected": "zh-tw",
+                "sql": None,
+                "rows": [],
+                "columns": [],
+                "attempts": 0,
+                "aggregates": {
+                    "row_count": 0,
+                    "unique_people": None,
+                    "by_leave_type": {},
+                    "total_hours": None,
+                },
+                "explanation_zh": (
+                    "### 摘要\n"
+                    "• 問題不可為空白。\n\n"
+                    "### 資料品質說明\n"
+                    "• 請輸入有效的查詢問題。"
+                ),
+                "success": False,
+                "error": "問題不可為空白。",
+                "error_category": "validation_error",
+                "debug": {
+                    "request_id": request_id,
+                    "pipeline_language_detected": "zh-tw",
+                    "planner_plan": None,
+                    "vector_debug_search": None,
+                    "llm_debug": None,
                 },
             }
 
-            logger.info("rid=%s pipeline ok ms=%d", rid, int((time.perf_counter() - t0) * 1000))
-            return response
+        # 1) Detect language (pipeline-level; planner + LLM will re-detect as needed)
+        detected_lang: Language = detect_query_language(user_question)
+        logger.info(
+            "[LeaveNLP][%s] START: lang=%s question=%r",
+            request_id,
+            detected_lang,
+            user_question[:120],
+        )
 
-        except Exception as e:
-            logger.error("rid=%s pipeline failed after %dms: %s: %s",
-                        rid, int((time.perf_counter() - t0) * 1000), type(e).__name__, e, exc_info=True)
-            msg = "An error occurred while processing your query."
+        # 2) Ensure vector service is initialised with db_service
+        vector = self._ensure_vector_service(db_service=db_service)
+        planner_plan: Optional[Dict[str, Any]] = None
+        vector_debug: Optional[Dict[str, Any]] = None
+
+        # 3) Build PLAN via VectorSearchService.plan_for(...)
+        planner_plan = self._build_plan_safe(
+            vector=vector,
+            question=user_question,
+            language=detected_lang,
+            request_id=request_id,
+        )
+
+        # 4) Deep vector debug: what did the index actually search / return?
+        vector_debug = self._debug_vector_safe(
+            vector=vector,
+            question=user_question,
+            language=detected_lang,
+            request_id=request_id,
+        )
+
+        # 5) Prepare schema + join_hints for LLMService
+        #    Planner output always wins; controller-provided schema/join_hints
+        #    are only used as last fallback.
+        if planner_plan:
+            planner_schema = planner_plan.get("schema") or ""
+            planner_join_hints = planner_plan.get("join_hints") or ""
+            intent_context = planner_plan.get("intent_context") or {}
+            tables_from_plan = planner_plan.get("tables") or []
+        else:
+            planner_schema = ""
+            planner_join_hints = ""
+            intent_context = {}
+            tables_from_plan = []
+
+        schema_for_llm = planner_schema or schema or ""
+        join_hints_for_llm = planner_join_hints or join_hints or ""
+
+        logger.info(
+            "[LeaveNLP][%s] PLAN_READY: tables=%s template_ref=%s",
+            request_id,
+            tables_from_plan,
+            (intent_context.get("template_ref") if intent_context else None),
+        )
+
+        # 6) Delegate to LLMService.answer_question (which internally uses
+        #    run_query_with_llm_repair for SQL + DB, then explanation).
+        llm_result = self.llm.answer_question(
+            db_service=db_service,
+            user_question=user_question,
+            schema=schema_for_llm,
+            join_hints=join_hints_for_llm,
+            intent_context=intent_context,
+            table_whitelist=None,        # Vector recipes already steer tables via schema & join_hints
+            max_rows=max_rows,
+            query_timeout=query_timeout,
+            max_attempts=max_attempts,
+            allow_fallback=False,        # STRICT: no silent "fake" queries
+        )
+
+        # 7) Pipeline-level integrity and debug stitching
+        if not isinstance(llm_result, dict):
+            logger.error(
+                "[LeaveNLP][%s] LLMService returned non-dict: %r",
+                request_id,
+                type(llm_result),
+            )
             return {
-                "original_text": user_input,
-                "execution_successful": False,
-                "execution_error": str(e),
-                "summary": msg,
-                "explanation_localized": msg,
+                "question": user_question,
+                "language_detected": detected_lang,
+                "sql": None,
+                "rows": [],
+                "columns": [],
+                "attempts": 0,
+                "aggregates": {
+                    "row_count": 0,
+                    "unique_people": None,
+                    "by_leave_type": {},
+                    "total_hours": None,
+                },
+                "explanation_zh": (
+                    "### 摘要\n"
+                    "• 系統內部錯誤，無法完成查詢。\n\n"
+                    "### 資料品質說明\n"
+                    "• 請稍後再試或聯絡系統管理員。"
+                ),
                 "success": False,
+                "error": "LLM pipeline internal error",
+                "error_category": "pipeline_internal_error",
+                "debug": {
+                    "request_id": request_id,
+                    "pipeline_language_detected": detected_lang,
+                    "planner_plan": planner_plan,
+                    "vector_debug_search": vector_debug,
+                    "llm_debug": None,
+                },
             }
 
+        result: Dict[str, Any] = dict(llm_result)
+
+        # Do not override LLMService's success flag; only make sure it exists
+        if "success" not in result:
+            result["success"] = False
+
+        # Expose pipeline-level language detection, but don't override any
+        # "language_detected" field LLMService might have set.
+        result.setdefault("language_detected", detected_lang)
+        result["pipeline_language_detected"] = detected_lang
+
+        # Attach final intent context from planner (even in error cases)
+        result["intent_context"] = intent_context
+
+        # Build LLM debug summary (attempts + final SQL)
+        llm_debug = {
+            "attempts": result.get("attempts"),
+            "final_sql": result.get("sql"),
+        }
+
+        # Attach full debug block
+        result["debug"] = {
+            "request_id": request_id,
+            "pipeline_language_detected": detected_lang,
+            "planner_plan": planner_plan,
+            "vector_debug_search": vector_debug,
+            "llm_debug": llm_debug,
+        }
+
+        logger.info(
+            "[LeaveNLP][%s] DONE: success=%s rows=%s attempts=%s",
+            request_id,
+            result.get("success"),
+            len(result.get("rows") or []),
+            result.get("attempts"),
+        )
+
+        # >>> NEW: ensure everything is JSON-serializable <<<
+        safe_result = _json_safe(result)
+        return safe_result
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Vector service init
+    # ------------------------------------------------------------------
+    def _ensure_vector_service(self, db_service: Any) -> VectorSearchService:
+        """
+        Lazily construct VectorSearchService when db_service is first available.
+        """
+        if self._vector_initialized and self._vector_service is not None:
+            return self._vector_service
+
+        logger.info("[LeaveNLP] Initialising VectorSearchService with db_service=%r", type(db_service).__name__)
+        self._vector_service = VectorSearchService(db_service=db_service)
+        self._vector_initialized = True
+        return self._vector_service
+
+    # ------------------------------------------------------------------
+    # Planner integration – safe wrapper
+    # ------------------------------------------------------------------
+    def _build_plan_safe(
+        self,
+        *,
+        vector: VectorSearchService,
+        question: str,
+        language: Language,
+        request_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Wrap VectorSearchService.plan_for with defensive error handling.
+        Returns the plan dict or None if planning fails.
+        """
+        try:
+            plan = vector.plan_for(
+                question,
+                schema_filter=None,  # you can restrict (e.g., "dbo") later if needed
+                rid=request_id,
+            )
+            # plan contains: language, intent_context, tables, join_hints, schema
+            logger.debug(
+                "[LeaveNLP][%s] PLAN: lang=%s tables=%s template_ref=%s",
+                request_id,
+                plan.get("language"),
+                plan.get("tables"),
+                (plan.get("intent_context") or {}).get("template_ref"),
+            )
+            return plan
+        except Exception as e:
+            logger.error(
+                "[LeaveNLP][%s] PLAN_FATAL: %s: %s (question=%r)",
+                request_id,
+                type(e).__name__,
+                e,
+                question,
+                exc_info=True,
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    # Vector debug – what did the index actually search?
+    # ------------------------------------------------------------------
+    def _debug_vector_safe(
+        self,
+        *,
+        vector: VectorSearchService,
+        question: str,
+        language: Language,
+        request_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Use VectorSearchService.debug_search to introspect search behaviour.
+        Returns a dict that can be directly returned to the frontend under debug.vector_debug_search.
+        """
+        try:
+            dbg = vector.debug_search(question, language=language)
+            logger.debug(
+                "[LeaveNLP][%s] VECTOR_DEBUG: tried=%s results=%s",
+                request_id,
+                dbg.get("tried"),
+                dbg.get("results_count"),
+            )
+            return dbg
+        except Exception as e:
+            logger.error(
+                "[LeaveNLP][%s] VECTOR_DEBUG_FATAL: %s: %s (question=%r)",
+                request_id,
+                type(e).__name__,
+                e,
+                question,
+                exc_info=True,
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    # Simple zh-tw oriented slot extraction (still here if you want to use it
+    # separately; not used directly because VectorSearchService already extracts
+    # slots into intent_context).
+    # ------------------------------------------------------------------
+    def _simple_slot_extraction(
+        self,
+        question: str,
+        *,
+        language: Language,
+    ) -> Dict[str, Any]:
+        """
+        Legacy rule-based slot extraction. You can still call this if you want
+        extra slots merged into intent_context before sending to LLMService.
+        Currently not invoked by the main pipeline.
+        """
+        q = question.strip()
+        slots: Dict[str, Any] = {}
+
+        # TODO: derive these from datetime.today() in real code
+        if "今年" in q:
+            slots["year"] = 2025
+        if "去年" in q:
+            slots["year"] = 2024
+
+        if any(k in q for k in ["本月", "這個月"]):
+            slots["month_scope"] = "current_month"
+        if any(k in q for k in ["上個月", "上月"]):
+            slots["month_scope"] = "previous_month"
+
+        import re
+
+        m = re.search(r"(?:員工|員編)\s*([0-9]{3,10})", q)
+        if m:
+            slots["emp_no"] = m.group(1)
+
+        if "今天" in q or "目前" in q or "現在" in q:
+            slots["today_scope"] = True
+
+        return slots
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _new_request_id(self) -> str:
+        """
+        Short, log-friendly correlation ID.
+        """
+        return uuid.uuid4().hex[:8]

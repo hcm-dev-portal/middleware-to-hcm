@@ -1,18 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title data-i18n="app.title">HCM AI Assistant - Dashboard</title>
+  <title data-i18n="app.title">HCM AI Assistant - Executive Dashboard</title>
 
+  <!-- UI libs -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- i18n runtime (must be present) -->
+  <!-- i18n runtime (single locale: zh-TW) -->
   <script src="./translations.js"></script>
+
+  <!-- marked -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
 
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
@@ -22,12 +27,18 @@
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+    /* Mic + VU */
     #mic.active { background-color: #fecaca; color: #dc2626; }
     #stop.hidden { display: none; }
     .vu { position:absolute; left:50%; bottom:-4px; transform:translateX(-50%); height:3px; background:#2563eb; border-radius:2px; width:8px; transition:width .08s; }
     .chip{background:#eef2ff;border:1px solid #e5e7eb;color:#374151;border-radius:9999px;padding:.125rem .5rem;font-size:.75rem}
+
+    /* Alerts */
     .error-message { background-color: #fef2f2; border: 1px solid #fecaca; color: #dc2626; padding: 12px; border-radius: 8px; margin: 8px 0; }
     .warning-message { background-color: #fffbeb; border: 1px solid #fed7aa; color: #d97706; padding: 12px; border-radius: 8px; margin: 8px 0; }
+
+    /* Loading & cards */
     .loading-shimmer { background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .metric-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
@@ -37,8 +48,395 @@
     .animate-spin { animation: spin 1s linear infinite; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .conversation-bubble { max-width: 85%; word-wrap: break-word; }
-    .typing-indicator { animation: typing 1.5s infinite; }
-    @keyframes typing { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.5; } }
+
+
+    /* Scrollable leave list */
+    .leave-list-container { max-height: 420px; overflow-y: auto; }
+
+    .calendar_page {
+      --bg:#F5F7FB; --card:#FFF; --card-border:#E6EAF1; --text:#0F172A; --muted:#6B7280;
+      --primary:#2563EB; --primary-600:#1D4ED8; --accent-blue-50:#EFF6FF;
+      --grid:#EEF2F7; --today-bg:#E8F0FE; --hover:#F3F6FC; --shadow:0 8px 30px rgba(16,24,40,.06);
+      --radius:16px; --event:#1D4ED8; --event-bg:rgba(29,78,216,.1);
+    }
+
+    .calendar_page[data-theme="dark"] {
+      --bg:#0F172A; --card:#111827; --card-border:#1F2937; --text:#E5E7EB; --muted:#9CA3AF;
+      --primary:#3B82F6; --primary-600:#2563EB; --accent-blue-50:#1E293B;
+      --grid:#1F2937; --today-bg:#102A55; --hover:#111827; --shadow:0 8px 30px rgba(0,0,0,.35);
+      --event:#60A5FA; --event-bg:rgba(96,165,250,.15);
+    }
+
+    .calendar_page * { box-sizing:border-box; }
+    .calendar_page html, .calendar_page body { height:100%; }
+    .calendar_page body {
+      margin:0;
+      font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",Arial,"PingFang TC","Heiti TC","Microsoft JhengHei",sans-serif;
+      background:var(--bg);
+      color:var(--text);
+      padding:28px;
+    }
+
+    .calendar_page .card {
+      background:var(--card);
+      border:1px solid var(--card-border);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      overflow:hidden;
+    }
+    .calendar_page .calendar-card {
+      max-width:1180px;
+      margin:0 auto;
+      position:relative;
+    }
+
+    .calendar_page .card-header {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:12px 20px;
+      border-bottom:1px solid var(--card-border);
+      background:linear-gradient(180deg,rgba(37,99,235,.04),transparent);
+    }
+
+    .calendar_page .title {
+      display:flex;
+      align-items:center;
+      gap:12px;
+      font-weight:800;
+    }
+    .calendar_page .title .icon-badge {
+      width:40px;
+      height:40px;
+      display:grid;
+      place-items:center;
+      border-radius:12px;
+      background:var(--accent-blue-50);
+      border:1px solid var(--card-border);
+      font-size:18px;
+      color:var(--primary-600);
+    }
+
+    .calendar_page .toolbar { display:flex; align-items:center; gap:10px; }
+    .calendar_page .calendar-card button {
+      border:1px solid var(--card-border);
+      background:#fff;
+      color:var(--text);
+      padding:8px 12px;
+      border-radius:12px;
+      font-weight:600;
+      cursor:pointer;
+    }
+    .calendar_page[data-theme="dark"] button { background:#0B1220; }
+    .calendar_page .calendar-card button:hover { filter:brightness(1.02); background:var(--hover); }
+    .calendar_page .btn-primary { background:var(--primary); color:#fff; border-color:transparent; }
+    .calendar_page .btn-primary:hover { filter:brightness(1.05); }
+
+    .calendar_page .segmented {
+      display:inline-flex;
+      border:1px solid var(--card-border);
+      border-radius:12px;
+      overflow:hidden;
+    }
+    .calendar_page .segmented button { border:none; background:transparent; }
+    .calendar_page .segmented button.active { background:var(--primary); color:#fff; }
+
+    .calendar_page .weekdays {
+      display:grid;
+      grid-template-columns:repeat(7,1fr);
+      border-top:1px solid var(--card-border);
+      border-bottom:1px solid var(--card-border);
+    }
+    .calendar_page .weekdays>div {
+      text-align:center;
+      padding:10px 6px;
+      font-size:12px;
+      color:var(--muted);
+    }
+
+    /* 月檢視 */
+    .calendar_page .month-grid {
+      display:grid;
+      grid-template-columns:repeat(7,1fr);
+      grid-auto-rows:88px;
+    }
+    .calendar_page .day-cell {
+      border-right:1px solid var(--grid);
+      border-bottom:1px solid var(--grid);
+      padding:12px;
+      position:relative;
+      cursor:pointer;
+    }
+    .calendar_page[data-theme="dark"] .day-cell { background:transparent; }
+    .calendar_page .day-cell:hover { background:var(--hover); }
+    .calendar_page .day-cell.faded { color:var(--muted); opacity:.65; }
+    .calendar_page .badge {
+      position:absolute;
+      top:8px;
+      left:8px;
+      font-weight:700;
+      font-size:12px;
+      padding:4px 8px;
+      border-radius:999px;
+      color:#64748B;
+    }
+    .calendar_page .today .badge {
+      background:var(--today-bg);
+      color:var(--primary-600);
+    }
+    .calendar_page .dot-row {
+      position:absolute;
+      left:8px;
+      bottom:8px;
+      display:flex;
+      gap:6px;
+    }
+    .calendar_page .dot {
+      width:8px;
+      height:8px;
+      border-radius:999px;
+      background:var(--event);
+      opacity:.7;
+    }
+
+    /* 週檢視（以小時計） */
+    .calendar_page .week-wrap { overflow:auto; }
+    .calendar_page .week-table {
+      display:grid;
+      grid-template-columns:80px repeat(7,1fr);
+      border-top:1px solid var(--card-border);
+    }
+    .calendar_page .week-header {
+      position:sticky;
+      top:0;
+      background:var(--card);
+      z-index:1;
+      border-bottom:1px solid var(--card-border);
+    }
+    .calendar_page .week-header div {
+      padding:10px;
+      font-size:12px;
+      color:var(--muted);
+      text-align:center;
+      border-right:1px solid var(--card-border);
+    }
+    .calendar_page .week-header div:first-child {
+      text-align:right;
+      padding-right:12px;
+      background:linear-gradient(180deg,rgba(37,99,235,.04),transparent);
+    }
+
+    .calendar_page .time-cell {
+      height:48px;
+      border-right:1px solid var(--card-border);
+      border-bottom:1px solid var(--grid);
+      padding:6px 10px;
+      font-size:12px;
+      color:var(--muted);
+      display:flex;
+      align-items:flex-start;
+      justify-content:flex-end;
+    }
+    .calendar_page .week-hour-cell {
+      height:48px;
+      border-right:1px solid var(--grid);
+      border-bottom:1px solid var(--grid);
+      cursor:pointer;
+      position:relative;
+    }
+    .calendar_page .week-hour-cell:hover { background:var(--hover); }
+    .calendar_page .week-hour-cell.today-col {
+      background:linear-gradient(0deg, rgba(37,99,235,.06), rgba(37,99,235,.02));
+    }
+
+    /* 日檢視（以小時計） */
+    .calendar_page .day-wrap { overflow:auto; }
+    .calendar_page .day-grid {
+      display:grid;
+      grid-template-columns:80px 1fr;
+      border-top:1px solid var(--card-border);
+    }
+    .calendar_page .day-hour {
+      height:56px;
+      border-right:1px solid var(--card-border);
+      border-bottom:1px solid var(--grid);
+      padding:8px 10px;
+      font-size:12px;
+      color:var(--muted);
+      display:flex;
+      align-items:flex-start;
+      justify-content:flex-end;
+    }
+    .calendar_page .day-slot {
+      height:56px;
+      border-bottom:1px solid var(--grid);
+      cursor:pointer;
+      display:flex;
+      align-items:flex-start;
+      padding:8px 10px;
+      border-right:1px solid var(--grid);
+      position:relative;
+    }
+    .calendar_page .day-slot:hover { background:var(--hover); }
+    .calendar_page .day-slot.now {
+      background:linear-gradient(90deg, rgba(37,99,235,.12), transparent 40%);
+      position:relative;
+    }
+    .calendar_page .now-indicator {
+      position:absolute;
+      top:8px;
+      left:0;
+      height:2px;
+      width:100%;
+      background:var(--primary);
+      box-shadow:0 0 0 1px rgba(255,255,255,.4) inset;
+    }
+
+    /* 事件塊 */
+    .calendar_page .event {
+      position:absolute;
+      left:6px;
+      right:6px;
+      border-radius:10px;
+      padding:6px 8px;
+      font-size:12px;
+      line-height:1.2;
+      color:var(--event);
+      background:var(--event-bg);
+      border:1px solid rgba(29,78,216,.22);
+      backdrop-filter: blur(2px);
+      overflow:hidden;
+      cursor:pointer;
+    }
+    .calendar_page[data-theme="dark"] .event { border-color:rgba(96,165,250,.25); }
+    .calendar_page .event .title { font-weight:800; font-size:12px; }
+    .calendar_page .event .time { color:var(--muted); font-size:11px; }
+
+    /* Modal */
+    .modal-backdrop {
+      position:fixed;
+      inset:0;
+      background:rgba(15,23,42,.45);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:20px;
+      z-index:50;
+    }
+    .modal {
+      width:min(520px,100%);
+      background:#FFF;
+      border:1px solid #E6EAF1;
+      border-radius:16px;
+      box-shadow:var(--shadow);
+      overflow:hidden;
+    }
+    .modal header {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding:14px 16px;
+      border-bottom:1px solid #E6EAF1;
+      font-weight:800;
+    }
+    .modal .content {
+      padding:16px;
+      display:grid;
+      gap:10px;
+    }
+    .modal .row {
+      display:flex;
+      gap:10px;
+      align-items:center;
+      color:#6B7280;
+      font-size:14px;
+    }
+    .modal .close {
+      border:none;
+      background:transparent;
+      font-size:20px;
+      cursor:pointer;
+      color:#6B7280;
+    }
+
+    .calendar_page .calendar_page { display:grid; gap:20px; }
+
+    /* 左下浮動按鈕 */
+    .calendar_page .floating-left-btn {
+      position:absolute;
+      left:16px;
+      bottom:16px;
+      z-index:5;
+    }
+    .calendar_page .floating-left-btn button { box-shadow:var(--shadow); }
+    
+    /* 月檢視：事件清單（取代小圓點） */
+    .calendar_page .month-events {
+        position:absolute;
+        left:8px; right:8px; bottom:8px;
+        display:flex; flex-direction:column; gap:4px;
+    }
+    .calendar_page .month-event {
+        font-size:11px; line-height:1.2;
+        padding:2px 6px;
+        border-radius:8px;
+        background:var(--event-bg);
+        color:var(--event);
+        border:1px solid rgba(29,78,216,.22);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+        cursor:pointer;
+    }
+    .calendar_page[data-theme="dark"] .month-event {
+        border-color:rgba(96,165,250,.25);
+    }
+    .calendar_page .month-event.more {
+        background:transparent; border:none; color:var(--muted);
+        cursor:default;
+    }
+
+    @media (max-width:520px) {
+      .calendar_page .card-header {
+        flex-direction:column;
+        align-items:flex-start;
+        gap:12px;
+      }
+    }
+
+    .table-scroll { overflow-x: auto; }
+    .prose h1,.prose h2,.prose h3 { margin-top: .25rem; margin-bottom: .5rem; }
+    .prose ul { margin: .25rem 0 .5rem 1.25rem; }
+    .prose li { margin: .125rem 0; }
+
+    /* ===============================
+       renderTarget（Markdown區域，已獨立）
+       =============================== */
+    #renderTarget {
+      padding:14px 16px; font-size:14px; line-height:1.6;
+      color:#1b2130; background:#fff; border-radius:12px; overflow:hidden;
+    }
+    #renderTarget h1,#renderTarget h2,#renderTarget h3{margin:10px 0 8px;font-weight:700}
+    #renderTarget p{margin:8px 0}
+    #renderTarget strong{font-weight:800}
+    #renderTarget code{
+      background:#f1f4fa; border:1px solid #e6e8ef; padding:2px 6px; border-radius:6px;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+    }
+    #renderTarget pre code{display:block;padding:12px;border-radius:10px;overflow:auto;background:#f9fafc}
+
+    /* 可橫移表格 */
+    #renderTarget .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px 0}
+    #renderTarget .table-scroll::-webkit-scrollbar{height:8px}
+    #renderTarget .table-scroll::-webkit-scrollbar-thumb{background:#c0c6d4;border-radius:4px}
+    #renderTarget .table-scroll::-webkit-scrollbar-track{background:#f3f4f8}
+    #renderTarget table{min-width:720px;border-collapse:collapse;width:100%;background:#fff}
+    #renderTarget th,#renderTarget td{
+      border:1px solid #e6e8ef;padding:8px 10px;text-align:left;vertical-align:top;white-space:nowrap;
+    }
+    #renderTarget thead th{background:#f3f6ff;border-bottom:1px solid #e6e8ef;color:#111827;font-weight:700}
+    #renderTarget tbody tr:nth-child(odd){background:#fafbff}
+    @media (max-width:640px){
+      #renderTarget th,#renderTarget td{white-space:normal}
+    }
   </style>
 </head>
 <body class="overflow-hidden">
@@ -47,11 +445,12 @@
     <!-- Main Content Area -->
     <main id="main-content" class="w-full h-full overflow-y-auto custom-scrollbar">
       <div class="p-4 md:p-8">
+
         <!-- Header -->
         <header class="flex justify-between items-center pb-6 border-b border-gray-200">
           <div>
-            <h1 class="text-3xl font-bold text-gray-800" id="welcome-title" data-i18n="header.welcome_title">Welcome back!</h1>
-            <p class="text-gray-500 mt-1" id="welcome-sub" data-i18n="header.welcome_sub">Here's your team dashboard - live data updates every 30 seconds</p>
+            <h1 class="text-3xl font-bold text-gray-800" id="welcome-title" data-i18n="header.welcome_title">Executive Dashboard</h1>
+            <p class="text-gray-500 mt-1" id="welcome-sub" data-i18n="header.welcome_sub">Real-time leave status and trends</p>
           </div>
 
           <div class="flex items-center space-x-4">
@@ -67,21 +466,8 @@
               class="p-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
               data-i18n="buttons.refresh"
               data-i18n-type="title"
-              title="Refresh Data"
-            >
+              title="Refresh Data">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3m2 5.3a10 10 0 01-18.8 4.2"/></svg>
-            </button>
-
-            <!-- Request Leave -->
-            <button id="request-leave-btn" class="flex items-center space-x-2 bg-green-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-green-700 transition duration-300" onclick="window.location.href='leave_page.html'">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-              <span data-i18n="buttons.request_leave">Request Leave</span>
-            </button>
-
-            <!-- Generate Report -->
-            <button id="generate-report-btn" class="flex items-center space-x-2 bg-purple-600 text-white font-semibold px-4 py-2 rounded-lg shadow-md hover:bg-purple-700 transition duration-300" onclick="window.location.href='generate_report.html'">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
-              <span data-i18n="buttons.generate_report">Generate Report</span>
             </button>
 
             <!-- Open AI Panel -->
@@ -90,141 +476,120 @@
               <span id="ask-ai-label" data-i18n="buttons.ask_ai">Ask AI</span>
             </button>
 
-            <!-- Global Language Selector -->
-            <select id="global-lang" class="text-xs p-1.5 rounded-md bg-white border border-slate-300 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none" aria-label="Language">
-              <option value="en-US">English (US)</option>
-              <option value="zh-TW">中文（繁體）</option>
-            </select>
-
             <img src="https://placehold.co/40x40/E2E8F0/4A5568?text=U" alt="User Avatar" class="w-10 h-10 rounded-full">
           </div>
         </header>
 
-        <!-- Database / Status banners appear here -->
+        <!-- Alerts / Status Host -->
         <div id="db-status" class="mt-6 mb-4"></div>
 
-        <!-- Dashboard Widgets -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-6">
-          <!-- Leave Today -->
-          <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
-            <div class="flex justify-between items-start">
-              <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.leave_today.title">On Leave Today</h3>
-                <p class="text-3xl font-bold text-gray-900 mt-2">
-                  <span id="leave-today-count">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="units.people">people</span>
-                </p>
-                <p class="text-xs text-gray-500 mt-2" id="leave-today-details" data-i18n="cards.leave_today.loading">Loading...</p>
-              </div>
-              <div class="p-2 bg-amber-100 rounded-lg" title="Calendar">
-                <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <!-- Pending Leave Requests -->
-          <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
-            <div class="flex justify-between items-start">
-              <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.pending_approvals.title">Pending Approvals</h3>
-                <p class="text-3xl font-bold text-gray-900 mt-2">
-                  <span id="pending-leave-count">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="units.requests">requests</span>
-                </p>
-                <p class="text-xs text-blue-600 mt-2 cursor-pointer hover:underline" id="pending-action" data-i18n="cards.pending_approvals.cta">Review now →</p>
-              </div>
-              <div class="p-2 bg-blue-100 rounded-lg">
-                <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <!-- Low Balance -->
-          <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
-            <div class="flex justify-between items-start">
-              <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.low_balance.title">Low Balance Alerts</h3>
-                <p class="text-3xl font-bold text-gray-900 mt-2">
-                  <span id="low-balance-count">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="units.employees">employees</span>
-                </p>
-                <p class="text-xs text-orange-600 mt-2" id="low-balance-details" data-i18n="cards.low_balance.subtitle">&lt; 5 days remaining</p>
-              </div>
-              <div class="p-2 bg-orange-100 rounded-lg">
-                <svg class="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <!-- Overtime -->
-          <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
-            <div class="flex justify-between items-start">
-              <div>
-                <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.overtime.title">Overtime This Week</h3>
-                <p class="text-3xl font-bold text-gray-900 mt-2">
-                  <span id="overtime-hours">--</span>
-                  <span class="text-lg font-normal text-gray-500" data-i18n="units.hours">hours</span>
-                </p>
-                <p class="text-xs text-gray-500 mt-2" id="overtime-people">-- <span data-i18n="units.people">people</span></p>
-              </div>
-              <div class="p-2 bg-purple-100 rounded-lg">
-                <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                </svg>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Leave Details Section -->
+        <!-- Main Content: Calendar + Right Column -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-          <!-- Who's out -->
-          <div class="bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-1 flex items-center justify-between">
-              <span data-i18n="sections.whos_out">Who's Out Today</span>
-              <span class="text-xs font-normal text-gray-500" id="leave-list-date">--</span>
-            </h3>
-            <p class="text-xs text-gray-400 mb-4" data-i18n="sections.whos_out_hint">Showing names, IDs, and departments</p>
-            <div id="leave-list" class="space-y-3">
-              <div class="loading-shimmer h-12 rounded"></div>
-              <div class="loading-shimmer h-12 rounded"></div>
-            </div>
-          </div>
-
-          <!-- Leave Trends -->
+          <!-- Calendar -->
           <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-1 flex items-center justify-between">
-              <span data-i18n="sections.leave_trends">Leave Trends (Last 7 Days)</span>
-              <span id="trend-range" class="text-xs font-normal text-gray-500">--</span>
-            </h3>
-            <div class="h-64">
-              <canvas id="leaveTrendChart"></canvas>
+            <div class="h-160">
+              <div class="calendar_page">
+                <section class="card calendar-card" id="calendarCard">
+                  <div class="card-header">
+                    <div class="title">
+                      <div class="icon-badge" aria-hidden>📅</div>
+                      <div>
+                        <div style="font-size:18px">行事曆</div>
+                      </div>
+                    </div>
+                    <div class="toolbar">
+                      <button id="prevBtn" aria-label="上一頁">←</button>
+                      <button id="todayBtn" class="btn-primary">今天</button>
+                      <button id="nextBtn" aria-label="下一頁">→</button>
+                      <div class="segmented" role="tablist" aria-label="切換檢視">
+                        <button id="dayViewBtn" role="tab">日</button>
+                        <button id="weekViewBtn" role="tab">週</button>
+                        <button id="monthViewBtn" role="tab" class="active">月</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style="display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--card-border);">
+                    <div id="calTitle" style="font-weight:800;"></div>
+                  </div>
+
+                  <div id="calBody" style="overflow-y: auto; height: 480px;"></div>
+
+                  <!-- 左下角：顯示上班時間 / 顯示全天 -->
+                  <div class="floating-left-btn">
+                    <button id="workHoursBtn" title="顯示 08:00–20:00">顯示上班時間</button>
+                  </div>
+                </section>
+              </div>
+
+              <!-- Modal for event detail -->
+              <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-hidden="true">
+                <div class="modal">
+                  <header>
+                    <div id="modalTitle">事件</div>
+                    <button class="close" id="modalClose" aria-label="關閉">×</button>
+                  </header>
+                  <div class="content">
+                    <div class="row" id="modalTime">時間：--</div>
+                    <div class="row" id="modalDesc">說明：--</div>
+                    <div class="row" id="modalLoc">地點：--</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column -->
+          <div class="lg:col-span-1 flex flex-col gap-6">
+
+            <!-- Pending Approvals -->
+            <div class="metric-card bg-white p-6 rounded-lg shadow-sm">
+              <div class="flex justify-between items-start"
+                   role="button"
+                   onclick="window.open('https://metaguruoa.com/HRM/bpm/approve', '_blank')">
+                <div>
+                  <h3 class="text-sm font-medium text-gray-600" data-i18n="cards.pending_approvals.title">Pending Approvals</h3>
+                  <p class="text-4xl font-bold text-gray-900 mt-2">
+                    <span id="pending-leave-count">--</span>
+                  </p>
+                  <p class="text-xs text-gray-500 mt-2" data-i18n="cards.pending_approvals.subtitle">Awaiting review</p>
+                </div>
+                <div class="p-3 bg-blue-100 rounded-lg">
+                  <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <!-- Who's out -->
+            <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-sm">
+              <h3 id="leave-toggle"
+                  class="text-lg font-semibold text-gray-700 mb-4 flex items-center justify-between cursor-pointer select-none"
+                  role="button"
+                  tabindex="0"
+                  aria-expanded="false"
+                  aria-controls="leave-list">
+                <span data-i18n="sections.whos_out">Currently On Leave</span>
+                <span class="text-xs font-normal text-gray-500" id="leave-list-count">0</span>
+              </h3>
+              <div id="leave-list" class="leave-list-container custom-scrollbar space-y-3 max-h-32 overflow-y-auto transition-all duration-300">
+                <div class="loading-shimmer h-12 rounded"></div>
+                <div class="loading-shimmer h-12 rounded"></div>
+                <div class="loading-shimmer h-12 rounded"></div>
+              </div>
+            </div>
+
+            <!-- Leave Trends -->
+            <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-sm">
+              <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.leave_trends">Leave Trends (Last 7 Days)</h3>
+              <div class="h-46">
+                <canvas id="leaveTrendChart"></canvas>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- Upcoming & Department -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-          <div class="bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.upcoming_leave">Upcoming Leave (Next 7 Days)</h3>
-            <div id="upcoming-leave" class="space-y-3">
-              <div class="text-sm text-gray-500" data-i18n="generic.loading">Loading...</div>
-            </div>
-          </div>
-
-          <div class="bg-white p-6 rounded-lg shadow-sm">
-            <h3 class="text-lg font-semibold text-gray-700 mb-4" data-i18n="sections.leave_by_dept">Leave by Department</h3>
-            <div id="dept-leave-summary" class="space-y-3">
-              <div class="text-sm text-gray-500" data-i18n="generic.loading">Loading...</div>
-            </div>
-          </div>
-        </div>
       </div>
     </main>
 
@@ -235,10 +600,6 @@
           <div class="w-9 h-9 border border-slate-300 bg-white rounded-lg flex items-center justify-center text-blue-600 font-bold">AI</div>
           <div>
             <div id="assistant-title" class="font-semibold text-slate-800" data-i18n="assistant.title">Assistant</div>
-            <div class="flex items-center gap-2 text-xs text-slate-500">
-              <span id="health-badge" class="px-2 py-0.5 rounded-full text-white text-[10px] bg-yellow-500" data-i18n="assistant.health_checking">Checking</span>
-              <button id="refresh-health" class="underline" data-i18n="buttons.refresh">refresh</button>
-            </div>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -262,8 +623,7 @@
           </div>
         </div>
 
-        <!-- Composer -->
-        <div class="bg-white border border-slate-200 rounded-lg p-2.5">
+
           <div class="flex items-start gap-2">
             <button id="mic" class="p-3 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 relative" title="Start recording" data-i18n="buttons.mic_start" data-i18n-type="title">
               <svg id="mic-icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
@@ -288,10 +648,10 @@
 <script>
 document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------
-  // i18n boot
+  // i18n (single locale: zh-TW)
   // ---------------------------
   const i18n = new window.TranslationManager();
-  await i18n.init('en-US'); // loads packs & restores last selection (inside TranslationManager)
+  await i18n.init('zh-TW');
 
   // ---------------------------
   // API config
@@ -309,7 +669,101 @@ document.addEventListener('DOMContentLoaded', async () => {
   let refreshInterval;
 
   // ---------------------------
-  // Error Manager (banners)
+  // TTS Audio Management
+  // ---------------------------
+  let currentAudio = null;
+  let currentSpeakerButton = null;
+
+  async function playTTS(text, button, lang = null) {
+    if (currentAudio) {
+      try { currentAudio.pause(); } catch {}
+      currentAudio = null;
+      if (currentSpeakerButton) {
+        currentSpeakerButton.innerHTML = readyIcon();
+        currentSpeakerButton.classList.remove('bg-blue-100', 'text-blue-600');
+      }
+    }
+    if (currentSpeakerButton === button) {
+      currentSpeakerButton = null;
+      return;
+    }
+
+    currentSpeakerButton = button;
+    button.innerHTML = spinnerIcon();
+    button.classList.add('bg-blue-100', 'text-blue-600');
+
+    try {
+      const response = await fetch(`${API_BASE}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text,
+          lang: lang || i18n.getCurrentLanguage(),
+          voice_id: null
+        })
+      });
+
+      if (!response.ok) throw new Error(`TTS request failed: ${response.status}`);
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      currentAudio = new Audio(audioUrl);
+      button.innerHTML = pauseIcon();
+
+      currentAudio.addEventListener('ended', () => {
+        button.innerHTML = readyIcon();
+        button.classList.remove('bg-blue-100', 'text-blue-600');
+        try { URL.revokeObjectURL(audioUrl); } catch {}
+        currentAudio = null;
+        currentSpeakerButton = null;
+      });
+
+      currentAudio.addEventListener('error', () => {
+        button.innerHTML = errorIcon();
+        button.classList.remove('bg-blue-100', 'text-blue-600');
+        button.classList.add('text-red-500');
+        currentAudio = null;
+        currentSpeakerButton = null;
+      });
+
+      await currentAudio.play();
+    } catch (error) {
+      button.innerHTML = errorIcon();
+      button.classList.remove('bg-blue-100', 'text-blue-600');
+      button.classList.add('text-red-500');
+      currentSpeakerButton = null;
+
+      ErrorManager.showWarning(
+        i18n.t('errors.tts_failed') || 'Text-to-speech is currently unavailable',
+        'tts'
+      );
+    }
+  }
+
+  const readyIcon = () => `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+    </svg>`;
+  const spinnerIcon = () => `
+    <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.15"></path>
+      <path d="M12 3a9 9 0 0 1 9 9" stroke-linecap="round"></path>
+    </svg>`;
+  const pauseIcon = () => `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="6" y="4" width="4" height="16"></rect>
+      <rect x="14" y="4" width="4" height="16"></rect>
+    </svg>`;
+  const errorIcon = () => `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+      <line x1="23" y1="9" x2="17" y2="15"></line>
+      <line x1="17" y1="9" x2="23" y2="15"></line>
+    </svg>`;
+
+  // ---------------------------
+  // Error Manager
   // ---------------------------
   const ErrorManager = {
     activeErrors: new Map(),
@@ -359,28 +813,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Elements
   // ---------------------------
   const mainContent = document.getElementById('main-content');
-  const aiPanel     = document.getElementById('ai-panel');
-  const openAiBtn   = document.getElementById('ai-dock-btn');
-  const closeAiBtn  = document.getElementById('close-panel-btn');
+  const aiPanel = document.getElementById('ai-panel');
+  const openAiBtn = document.getElementById('ai-dock-btn');
+  const closeAiBtn = document.getElementById('close-panel-btn');
 
-  const refreshBtn       = document.getElementById('refresh-btn');
-  const lastUpdateLabel  = document.getElementById('last-update'); // "Last updated:"
-  const lastUpdateTimeEl = document.getElementById('last-update-time');
-  const refreshHealthBtn = document.getElementById('refresh-health');
-  const globalLangSel    = document.getElementById('global-lang');
+  const refreshBtn = document.getElementById('refresh-btn');
+  const lastUpdateEl = document.getElementById('last-update');
 
   // Assistant panel
-  const healthBadge   = document.getElementById('health-badge');
-  const queryTA       = document.getElementById('query');
-  const sendBtn       = document.getElementById('send');
-  const results       = document.getElementById('results');
-  const placeholder   = document.getElementById('placeholder');
-  const voiceLine     = document.getElementById('voice-line');
-  const micBtn        = document.getElementById('mic');
-  const stopBtn       = document.getElementById('stop');
-  const vuBar         = document.getElementById('vu');
+  const queryTA = document.getElementById('query');
+  const sendBtn = document.getElementById('send');
+  const results = document.getElementById('results');
+  const placeholder = document.getElementById('placeholder');
+  const voiceLine = document.getElementById('voice-line');
+  const micBtn = document.getElementById('mic');
+  const stopBtn = document.getElementById('stop');
+  const vuBar = document.getElementById('vu');
   const dictationStream = document.getElementById('dictation-stream');
-  const dbStatus      = document.getElementById('db-status');
+  const dbStatus = document.getElementById('db-status');
 
   // ---------------------------
   // Helpers
@@ -390,8 +840,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]
     ));
   }
+
   function formatDate(dateStr) {
-    if (!dateStr) return i18n.t('common.na') || 'N/A';
+    if (!dateStr) return (i18n.t('common.na') || 'N/A');
     try {
       if (dateStr.length === 8 && !dateStr.includes('-')) {
         const y = dateStr.substring(0,4), m = dateStr.substring(4,6), d = dateStr.substring(6,8);
@@ -403,63 +854,523 @@ document.addEventListener('DOMContentLoaded', async () => {
       return dateStr;
     }
   }
-  function formatYMD(d) {
-    if (!d) return '--';
-    try { return i18n.formatDate(new Date(d), { year:'numeric', month:'short', day:'numeric' }); }
-    catch { return d; }
-  }
+
   function updateLastUpdateTime() {
     const now = new Date();
     const time = i18n.formatTime(now, { hour: '2-digit', minute: '2-digit' });
-    const tpl = i18n.t('header.last_updated'); // preferred "Last updated: {time}"
-    lastUpdateLabel.textContent = tpl ? tpl.replace('{time}', '') : (i18n.t('header.last_updated_prefix') || 'Last updated:');
-    lastUpdateTimeEl.textContent = time;
-  }
-  function decodeJsonField(val, fallback = []) {
-    if (val == null) return fallback;
-    if (Array.isArray(val) || typeof val === 'object') return val;
-    try { return JSON.parse(val); } catch { return fallback; }
-  }
-  function processLeaveData(raw) {
-    const out = { ...raw };
-    out.metrics = decodeJsonField(out.metrics, {});
-    if (out.metrics) {
-      out.metrics.on_leave_details    = decodeJsonField(out.metrics.on_leave_details, []);
-      out.metrics.upcoming_leave      = decodeJsonField(out.metrics.upcoming_leave, []);
-      out.metrics.department_summary  = decodeJsonField(out.metrics.department_summary, []);
-    }
-    return out;
-  }
-  function getDisplayName(p) {
-    return p?.person_name || p?.name || p?.employee_id || p?.cardnum || p?.person_id || 'Unknown';
-  }
-  function initialsFrom(name) {
-    const n = (name || '').trim();
-    if (!n) return '??';
-    try {
-      if (window.Intl && typeof Intl.Segmenter === 'function') {
-        const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-        const it = seg.segment(n)[Symbol.iterator]();
-        const first = it.next().value?.segment || n[0];
-        return first.toUpperCase();
-      }
-    } catch {}
-    return n[0].toUpperCase();
-  }
-  function leaveTypeText(item) {
-    return item?.type_label || item?.type_code || (i18n?.t?.('leave_types.unknown') || 'Leave');
-  }
-  function personIdBadge(item) {
-    if (item?.employee_id) return `ID: ${escapeHtml(String(item.employee_id))}`;
-    if (item?.cardnum)     return `Card: ${escapeHtml(String(item.cardnum))}`;
-    return '';
-  }
-  function safeDept(item) {
-    return item?.department_name || item?.department || item?.department_id || '';
+    const tpl = i18n.t('header.last_updated');
+    lastUpdateEl.textContent = tpl ? tpl.replace('{time}', time) : `Last updated: ${time}`;
   }
 
   // ---------------------------
-  // Charts
+  // Panel open/close
+  // ---------------------------
+  const openPanel = () => {
+    mainContent.style.width = '65%';
+    aiPanel.style.transform = 'translateX(0)';
+  };
+  const closePanel = () => {
+    if (currentAudio) {
+      try { currentAudio.pause(); } catch {}
+      currentAudio = null;
+      if (currentSpeakerButton) {
+        currentSpeakerButton.innerHTML = readyIcon();
+        currentSpeakerButton.classList.remove('bg-blue-100', 'text-blue-600');
+        currentSpeakerButton = null;
+      }
+    }
+    mainContent.style.width = '100%';
+    aiPanel.style.transform = 'translateX(100%)';
+  };
+  openAiBtn?.addEventListener('click', openPanel);
+  closeAiBtn?.addEventListener('click', closePanel);
+
+  // ---------------------------
+  // Markdown helpers (safe)
+  // ---------------------------
+  function unescapeNewlines(text) {
+    return String(text || '')
+      .replace(/\\r/g, '')
+      .replace(/\\t/g, '\t')
+      .replace(/\\n/g, '\n');
+  }
+
+  function renderMD(mdRaw) {
+    const md = unescapeNewlines(mdRaw);
+    let html = marked.parse(md);
+    html = html.replace(/<table>/g, '<div class="table-scroll"><table>')
+               .replace(/<\/table>/g, '</table></div>');
+    const safe = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    return safe;
+  }
+
+  // ---------------------------
+  // Message Rendering (TTS + Markdown)
+  // ---------------------------
+  function appendMessage(role, text, enableTTS = false, imageUrl = null, aiResponse = false) {
+    placeholder.classList.add('hidden');
+    const bubble = document.createElement('div');
+    const bubbleId = `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    bubble.className = `mb-3 p-3 rounded-lg border ${
+      role === 'user'
+      ? 'bg-blue-50 border-blue-200 text-blue-900'
+      : 'bg-white border-slate-200 text-slate-800'
+    }`;
+
+    const roleLabel = role === 'user'
+      ? (i18n.t('ai_assistant.you') || 'You')
+      : (i18n.t('ai_assistant.assistant') || 'Assistant');
+
+    const ttsButton = (role === 'assistant' && enableTTS && text) ? `
+      <button
+        id="tts-${bubbleId}"
+        class="ml-2 p-1 rounded hover:bg-slate-100 transition-colors"
+        title="${i18n.t('buttons.play_audio') || 'Play audio'}"
+        aria-label="Play audio"
+      >
+        ${readyIcon()}
+      </button>` : '';
+
+    bubble.innerHTML = `
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs ${role === 'user' ? 'text-blue-600' : 'text-slate-500'}">${roleLabel}</span>
+        ${ttsButton}
+      </div>
+      ${text ? `<div class="text-sm leading-6">${aiResponse ? `<div id="renderTarget">${renderMD(text)}</div>` : escapeHtml(text)}</div>` : ''}
+    `;
+
+    results.appendChild(bubble);
+    results.scrollTop = results.scrollHeight;
+
+    if (role === 'assistant' && enableTTS && text) {
+      const ttsBtn = document.getElementById(`tts-${bubbleId}`);
+      if (ttsBtn) ttsBtn.addEventListener('click', () => playTTS(text, ttsBtn));
+    }
+  }
+
+  // ---------------------------
+  // CSV helpers
+  // ---------------------------
+  function toCSV(columns, rows) {
+    const esc = (v) => {
+      const s = (v ?? "").toString();
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const head = columns.map(esc).join(",");
+    const body = rows.map(r => r.map(esc).join(",")).join("\n");
+    return head + "\n" + body;
+  }
+
+  function downloadCSV(filename, csvText) {
+    const blob = new Blob([csvText], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function buildTableEl(columns, rows, limit = 50) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "overflow-x-auto";
+
+    const table = document.createElement("table");
+    table.className = "min-w-full border border-slate-200 rounded-lg overflow-hidden text-sm";
+
+    const thead = document.createElement("thead");
+    thead.className = "bg-slate-50";
+    const trh = document.createElement("tr");
+    trh.className = "divide-x divide-slate-200";
+    columns.forEach(c => {
+      const th = document.createElement("th");
+      th.className = "px-3 py-2 text-left font-semibold text-slate-700";
+      th.textContent = c;
+      th.style = "white-space:nowrap;";
+      trh.appendChild(th);
+    });
+    thead.appendChild(trh);
+
+    const tbody = document.createElement("tbody");
+    const showRows = rows.slice(0, limit);
+    showRows.forEach(r => {
+      const tr = document.createElement("tr");
+      tr.className = "divide-x divide-slate-100 odd:bg-white even:bg-slate-50";
+      columns.forEach((_, i) => {
+        const td = document.createElement("td");
+        td.className = "px-3 py-2 text-slate-800";
+        td.style = "white-space:nowrap;";
+        const v = r[i];
+        td.textContent = (v === null || v === undefined) ? "" : String(v);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    return wrapper;
+  }
+
+  // ---------------------------
+  // Unified Result Panel (rows + columns)
+  // ---------------------------
+  function renderResultPanel(data, { i18n, resultsContainer }) {
+    const columns = Array.isArray(data?.columns) ? data.columns : [];
+    const rows = Array.isArray(data?.rows)
+      ? data.rows
+      : (Array.isArray(data?.results) ? data.results : []);
+
+    if (!Array.isArray(columns) || !Array.isArray(rows)) return;
+
+    const card = document.createElement('div');
+    card.className = 'mb-4 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'px-4 py-3 border-b border-slate-200 flex items-center justify-between';
+    const title = document.createElement('div');
+    title.className = 'text-sm font-medium text-slate-700';
+    title.textContent = i18n.t('results.title') || 'Results';
+    const meta = document.createElement('div');
+    meta.className = 'text-xs text-slate-500';
+    meta.textContent = `${i18n.t('results.rows') || 'Rows'}: ${rows.length}`;
+    header.appendChild(title);
+    header.appendChild(meta);
+    card.appendChild(header);
+
+    // Explanation (Markdown)
+    const explanationRaw =
+      (data.explanation_zh && String(data.explanation_zh).trim())
+      || (data.explanation && String(data.explanation).trim())
+      || (data.summary && String(data.summary).trim())
+      || '';
+
+    if (explanationRaw) {
+      const expWrap = document.createElement('div');
+      expWrap.className = 'px-4 pt-3 pb-2';
+      const exp = document.createElement('div');
+      exp.className = 'prose prose-slate max-w-none text-slate-800';
+      exp.innerHTML = renderMD(explanationRaw);
+      expWrap.appendChild(exp);
+      card.appendChild(expWrap);
+    }
+
+    // Action bar
+    const actions = document.createElement('div');
+    actions.className = 'flex flex-wrap items-center gap-2 px-4 pb-2';
+    const mkBtn = (label) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm';
+      b.textContent = label;
+      return b;
+    };
+    const csvBtn = mkBtn(i18n.t('ai_assistant.download_csv') || 'Download CSV');
+    const toggleFullBtn = mkBtn(i18n.t('ai_assistant.toggle_full_table') || 'Toggle full table');
+    const copySqlBtn = mkBtn(i18n.t('ai_assistant.copy_sql') || 'Copy SQL');
+    actions.appendChild(csvBtn);
+    if (Array.isArray(rows) && rows.length > 50) actions.appendChild(toggleFullBtn);
+
+    const sqlText = data.sql || data.generated_sql || null;
+    if (sqlText) actions.appendChild(copySqlBtn);
+
+    card.appendChild(actions);
+
+    // Table
+    const tableWrap = document.createElement('div');
+    tableWrap.className = 'px-4 pb-4';
+    card.appendChild(tableWrap);
+
+    let showingFull = false;
+    const LIMITED = 50;
+
+    function refreshTable() {
+      tableWrap.innerHTML = "";
+      if (!Array.isArray(columns) || columns.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "text-slate-500 text-sm";
+        empty.textContent = i18n.t('ai_assistant.no_rows') || 'No rows to display.';
+        tableWrap.appendChild(empty);
+        return;
+      }
+      const limit = showingFull ? rows.length : Math.min(LIMITED, rows.length);
+      const tableEl = buildTableEl(columns, rows, limit);
+      const hint = document.createElement("div");
+      hint.className = "mt-2 text-xs text-slate-500";
+      hint.textContent = (!showingFull && rows.length > LIMITED)
+        ? (i18n.t('ai_assistant.showing_first_n') || `Showing first ${LIMITED} rows...`).replace('{n}', LIMITED)
+        : (i18n.t('ai_assistant.total_rows') || 'Total rows: {n}').replace('{n}', rows.length);
+      tableWrap.appendChild(tableEl);
+      tableWrap.appendChild(hint);
+    }
+    refreshTable();
+
+    // Footer (SQL)
+    if (sqlText) {
+      const footer = document.createElement('div');
+      footer.className = 'px-4 py-2 border-t border-slate-200 bg-slate-50';
+      const sqlBtn = document.createElement('button');
+      sqlBtn.className = 'text-xs text-slate-600 hover:text-slate-800 underline';
+      sqlBtn.textContent = i18n.t('results.show_sql') || 'Show SQL';
+      const sqlBox = document.createElement('pre');
+      sqlBox.className = 'mt-2 hidden overflow-auto text-xs bg-white border border-slate-200 rounded p-2';
+      sqlBox.textContent = sqlText;
+      sqlBtn.addEventListener('click', () => {
+        sqlBox.classList.toggle('hidden');
+      });
+      footer.appendChild(sqlBtn);
+      footer.appendChild(sqlBox);
+      card.appendChild(footer);
+
+      copySqlBtn?.addEventListener('click', async () => {
+        const ok = await copyToClipboard(sqlText || "");
+        copySqlBtn.textContent = ok ? (i18n.t('ai_assistant.copied') || 'Copied!') : (i18n.t('ai_assistant.copy_failed') || 'Copy failed');
+        setTimeout(() => (copySqlBtn.textContent = i18n.t('ai_assistant.copy_sql') || 'Copy SQL'), 1200);
+      });
+    }
+
+    csvBtn.addEventListener('click', () => {
+      if (!Array.isArray(columns) || !Array.isArray(rows) || columns.length === 0) return;
+      const csv = toCSV(columns, rows);
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      downloadCSV(`query-results-${ts}.csv`, csv);
+    });
+
+    toggleFullBtn?.addEventListener('click', () => {
+      showingFull = !showingFull;
+      toggleFullBtn.textContent = showingFull
+        ? (i18n.t('ai_assistant.show_first_50') || 'Show first 50')
+        : (i18n.t('ai_assistant.toggle_full_table') || 'Toggle full table');
+      refreshTable();
+    });
+
+    resultsContainer.appendChild(card);
+    resultsContainer.scrollTop = resultsContainer.scrollHeight;
+  }
+
+  // ---------------------------
+  // Leave Query
+  // ---------------------------
+  const toggle = document.getElementById('leave-toggle');
+  const list = document.getElementById('leave-list');
+  const countEl = document.getElementById('leave-list-count');
+
+  const toggleExpand = () => {
+    const expanded = toggle.getAttribute('aria-expanded') === 'true';
+    if (expanded) {
+      list.classList.add('max-h-36', 'overflow-y-auto');
+      list.classList.remove('max-h-none', 'overflow-visible');
+      toggle.setAttribute('aria-expanded', 'false');
+    } else {
+      list.classList.remove('max-h-36', 'overflow-y-auto');
+      list.classList.add('max-h-none', 'overflow-visible');
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+  };
+
+  // (Leave the toggle handlers commented-out as in original behaviour)
+  // toggle.addEventListener('click', toggleExpand);
+  // toggle.addEventListener('keydown', (e) => {
+  //   if (e.key === 'Enter' || e.key === ' ') {
+  //     e.preventDefault();
+  //     toggleExpand();
+  //   }
+  // });
+
+  // ---------------------------
+  // Send Query
+  // ---------------------------
+  async function sendQuery(forcedText, fromRetry = false) {
+    const q = (forcedText ?? (queryTA.value || '')).trim();
+    if (!q) return;
+
+    if (!fromRetry) {
+      appendMessage('user', q, false);
+      queryTA.value = '';
+    }
+
+    const typing = document.createElement('div');
+    typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
+    typing.innerHTML = `<span class="inline-flex items-center gap-2">
+      <span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>
+      ${i18n.t('ai_assistant.thinking') || 'Thinking...'}
+    </span>`;
+    results.appendChild(typing);
+    results.scrollTop = results.scrollHeight;
+
+    const endpoint = `${API_BASE}/api/assistant/query`;
+    const payload = {
+      query: q,
+      lang: i18n.getCurrentLanguage(),
+    };
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+
+      typing.remove();
+
+      if (res.ok && data?.success) {
+        const hasGrid = Array.isArray(data.columns) && Array.isArray(data.rows);
+
+        if (hasGrid) {
+          // Use explanation_zh + rows/columns in a structured result card
+          renderResultPanel(data, { i18n, resultsContainer: results });
+        } else {
+          const responseText =
+            data.explanation_zh ||
+            data.explanation ||
+            data.summary ||
+            '';
+          if (responseText) {
+            appendMessage('assistant', responseText, true, null, true);
+          }
+        }
+        return;
+      }
+
+      const classified = classifyBackendError(data, res.status);
+      renderErrorPanel(classified, q);
+
+    } catch (err) {
+      typing.remove();
+      const classified = {
+        category: 'network',
+        title: i18n.t('errors.network_error_title') || 'Network error',
+        advice: i18n.t('errors.network_error_advice') || 'Please check your internet connection and retry.',
+        retry: true,
+        backoffMs: 800,
+        rid: null, sqlstate: null, dbcode: null, genSql: null, raw: String(err || '')
+      };
+      renderErrorPanel(classified, q);
+    }
+  }
+
+  // ---------------------------
+  // Error rendering helpers
+  // ---------------------------
+  function el(html) {
+    const t = document.createElement('template');
+    t.innerHTML = html.trim();
+    return t.content.firstElementChild;
+  }
+
+  function renderAssistantCard(html) {
+    placeholder.classList.add('hidden');
+    const card = el(`<div class="mb-3 p-4 rounded-lg border bg-white border-slate-200 text-slate-700 text-sm leading-relaxed"></div>`);
+    card.innerHTML = html;
+    results.appendChild(card);
+    results.scrollTop = results.scrollHeight;
+    return card;
+  }
+
+  function classifyBackendError(data, httpStatus) {
+    const cat = (data?.error_category || "").toLowerCase();
+    const errMsg = (data?.execution_error || data?.error || "").toString();
+    const sqlstate = data?.sqlstate || null;
+    const dbcode = data?.db_code ?? null;
+    const rid = data?.rid || null;
+    const genSql = data?.generated_sql || data?.sql || null;
+
+    const make = (category, title, advice, retry = false, backoffMs = 0) => ({
+      category, title, advice, retry, backoffMs, sqlstate, dbcode, rid, genSql, raw: errMsg
+    });
+
+    if (cat) {
+      switch (cat) {
+        case "connection":
+          return make(cat, i18n.t('errors.db_connection_title') || "Can't reach the database",
+            i18n.t('errors.db_connection_advice') || "Please check VPN/Network and server availability.", true, 1500);
+        case "authz":
+          return make(cat, i18n.t('errors.auth_title') || "Login/permission issue",
+            i18n.t('errors.auth_advice') || "Your DB credentials or table permissions may be incorrect.");
+        case "timeout":
+          return make(cat, i18n.t('errors.timeout_title') || "The query took too long",
+            i18n.t('errors.timeout_advice') || "Try narrowing the date range or filters, then retry.", true, 0);
+        default:
+          return make(cat, i18n.t('errors.generic_title') || "Something went wrong",
+            i18n.t('errors.generic_advice') || "You can retry or copy the details below.");
+      }
+    }
+    return make('unknown',
+      i18n.t('errors.generic_title') || "Something went wrong",
+      i18n.t('errors.generic_advice') || "You can retry or copy the details below.", true, 500);
+  }
+
+  function renderErrorPanel(classified, originalQuery) {
+    const title = classified.title;
+    const advice = classified.advice;
+    const rid = classified.rid ? `<span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">${classified.rid}</span>` : '';
+    const detailsId = `err-details-${Math.random().toString(36).slice(2)}`;
+    const retryId = `retry-${Math.random().toString(36).slice(2)}`;
+
+    const html = `
+      <div class="flex items-start gap-3">
+        <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
+          <span class="text-red-600 text-xs">!</span>
+        </div>
+        <div class="flex-1">
+          <div class="flex items-center gap-2">
+            <div class="font-medium text-slate-900">${title}</div>
+            ${rid}
+          </div>
+          <div class="mt-1 text-slate-600">${advice}</div>
+
+          <div class="mt-3 flex items-center gap-2 flex-wrap">
+            ${classified.retry ? `<button id="${retryId}" class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs hover:bg-slate-800">${i18n.t('actions.retry') || 'Retry'}</button>` : ''}
+            <button class="px-3 py-1.5 rounded-md border text-xs hover:bg-slate-50" onclick="navigator.clipboard.writeText('${(classified.rid || '').replace(/'/g, "\\'")}')">${i18n.t('actions.copy_rid') || 'Copy RID'}</button>
+            <button class="px-3 py-1.5 rounded-md border text-xs hover:bg-slate-50" onclick="document.getElementById('${detailsId}').classList.toggle('hidden')">${i18n.t('actions.details') || 'Details'}</button>
+          </div>
+
+          <div id="${detailsId}" class="hidden mt-3 text-xs text-slate-600 whitespace-pre-wrap">${(classified.raw || '').slice(0, 4000)}</div>
+        </div>
+      </div>
+    `;
+    const card = renderAssistantCard(html);
+
+    if (classified.retry) {
+      const btn = card.querySelector(`#${retryId}`);
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          const originalText = btn.textContent;
+          btn.textContent = i18n.t('actions.retrying') || 'Retrying...';
+          if (classified.backoffMs) await new Promise(r => setTimeout(r, classified.backoffMs));
+          try { await sendQuery(originalQuery, true); }
+          finally { btn.disabled = false; btn.textContent = originalText; }
+        });
+      }
+    }
+    return card;
+  }
+
+  sendBtn?.addEventListener('click', () => sendQuery());
+  queryTA?.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery();
+  });
+
+  // ---------------------------
+  // Charts (small KPI trend)
   // ---------------------------
   let leaveTrendChart = null;
   function initializeCharts() {
@@ -485,433 +1396,115 @@ document.addEventListener('DOMContentLoaded', async () => {
         maintainAspectRatio: false,
         responsive: true,
         animation: { duration: 400 },
-        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
-        scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 } } }
+        plugins: {
+          legend: { display: false },
+          tooltip: { mode: 'index', intersect: false }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0 } }
+        }
       }
     });
   }
-  function updateLeaveTrend(trend, range) {
-    const rangeEl = document.getElementById('trend-range');
-    if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) {
-      if (rangeEl) rangeEl.textContent = '--';
-      return;
-    }
-    const labels = trend.map(t => i18n.formatDate(new Date(t.date), { month: 'short', day: 'numeric' }));
+
+  function updateLeaveTrend(trend) {
+    if (!leaveTrendChart || !Array.isArray(trend) || trend.length === 0) return;
+    const labels = trend.map(t => i18n.formatDate(new Date(t.date), { weekday: 'short' }));
     const values = trend.map(t => Number(t.count || 0));
     leaveTrendChart.data.labels = labels;
     leaveTrendChart.data.datasets[0].data = values;
     leaveTrendChart.update();
-
-    if (rangeEl && range && range.start && range.end) {
-      rangeEl.textContent = `${formatYMD(range.start)} – ${formatYMD(range.end)}`;
-    } else if (rangeEl) {
-      rangeEl.textContent = `${formatYMD(trend[0].date)} – ${formatYMD(trend[trend.length - 1].date)}`;
-    }
   }
 
   // ---------------------------
-  // Data loaders
+  // Dashboard data
   // ---------------------------
   async function loadLeaveMetrics() {
     try {
       const url = new URL(`${API_BASE}/api/leave_data`);
       url.searchParams.set('kind', 'metrics');
       if (AS_OF) url.searchParams.set('as_of', AS_OF);
-      const response = await fetch(url.toString(), { credentials: 'include' });
+      const response = await fetch(url.toString());
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const raw = await response.json();
-      if (!raw || raw.success !== true) throw new Error('Invalid response');
-
-      // normalize
-      const data = processLeaveData(raw);
-      const m = data.metrics || {};
+      const data = await response.json();
+      if (!data?.success) throw new Error('Invalid response');
 
       ErrorManager.clearError('api');
 
-      // Top metrics
-      document.getElementById('leave-today-count').textContent =
-        i18n.formatNumber(m.employees_on_leave_today ?? 0);
+      const m = data.metrics || {};
       document.getElementById('pending-leave-count').textContent =
         i18n.formatNumber(m.pending_leave_requests ?? 0);
-      document.getElementById('low-balance-count').textContent  =
-        i18n.formatNumber(m.low_balance_count ?? 0);
-      document.getElementById('overtime-hours').textContent     =
-        i18n.formatNumber(m.overtime_hours ?? 0);
-      document.getElementById('overtime-people').textContent    =
-        `${i18n.formatNumber(m.overtime_people ?? 0)} ${
-          (i18n.t && i18n.t('common.count_people'))
-            ? i18n.t('common.count_people').replace('{count}','').trim()
-            : (i18n.t && i18n.t('units.people')) || 'people'
-        }`.trim();
 
-      // "As of" date for Who's Out Today
-      const asOfLabel = raw.effective_as_of || new Date().toISOString().slice(0,10);
-      document.getElementById('leave-list-date').textContent =
-        `${(i18n.t('common.as_of') || 'As of')} ${formatYMD(asOfLabel)}`;
+      const leaveDetails = m.on_leave_details || [];
 
-      // Who's Out list
-      const leaveDetails = Array.isArray(m.on_leave_details) ? m.on_leave_details : [];
-      if (leaveDetails.length > 0) {
-        const names = leaveDetails.slice(0, 3).map(p => getDisplayName(p)).join(', ');
-        const extra = leaveDetails.length > 3 ? ` +${i18n.formatNumber(leaveDetails.length - 3)}` : '';
-        document.getElementById('leave-today-details').textContent = `${names}${extra}`;
-      } else {
-        document.getElementById('leave-today-details').textContent =
-          (i18n.t && i18n.t('metrics.no_one_on_leave')) || 'No one on leave';
+      const leaveCountEl = document.getElementById('leave-list-count');
+      if (leaveCountEl) {
+        leaveCountEl.textContent = `${i18n.formatNumber(leaveDetails.length)} ${leaveDetails.length === 1 ? 'person' : 'people'}`;
       }
 
       const leaveListHtml = leaveDetails.length
         ? leaveDetails.map(person => {
-            const name = getDisplayName(person);
-            const token = initialsFrom(name);
-            const typeText = leaveTypeText(person);
-            const idText = personIdBadge(person);
-            const deptText = safeDept(person);
+            const displayName = escapeHtml(person.person_name || person.display_name || person.person_id || 'Unknown');
+            const deptName = escapeHtml(person.department_name || person.department_code || person.department_id || 'N/A');
+            const initials = displayName.substring(0, 2).toUpperCase();
             return `
-              <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <div class="flex items-center space-x-3">
-                  <div class="w-8 h-8 bg-amber-200 rounded-full flex items-center justify-center text-amber-700 font-medium text-xs">
-                    ${escapeHtml(token)}
-                  </div>
-                  <div>
-                    <p class="text-sm font-medium text-gray-900">${escapeHtml(name)}</p>
-                    <p class="text-xs text-gray-500">
-                      ${idText}${idText && deptText ? ' · ' : ''}${deptText ? `${i18n.t('common.department') || 'Dept'}: ${escapeHtml(deptText)}` : ''}
-                    </p>
-                  </div>
-                </div>
-                <div class="text-right">
-                  <p class="text-xs text-gray-500">${escapeHtml(typeText)}</p>
-                  <p class="text-xs text-gray-400">${
-                    ((i18n.t && i18n.t('leave_types.until')) || 'Until {date}')
-                      .replace('{date}', formatDate(person.end_date))
-                  }</p>
-                </div>
-              </div>`;
+          <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+            <div class="flex items-center space-x-3 flex-1 min-w-0">
+              <div class="w-10 h-10 bg-amber-200 rounded-full flex items-center justify-center text-amber-700 font-semibold text-sm shrink-0">
+                ${initials}
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-semibold text-gray-900 truncate">${displayName}</p>
+                <p class="text-xs text-gray-600 truncate">${deptName}</p>
+              </div>
+            </div>
+            <span class="text-xs text-gray-500 ml-2 shrink-0">${formatDate(person.end_date)}</span>
+          </div>`;
           }).join('')
-        : `<div class="text-center text-gray-500 py-8" data-i18n="sections.no_employees_on_leave">${
-            (i18n.t && i18n.t('sections.no_employees_on_leave')) || 'No employees on leave today'
-          }</div>`;
-      const leaveListEl = document.getElementById('leave-list');
-      if (leaveListEl) {
-        leaveListEl.innerHTML = leaveListHtml;
-        i18n?.updateDynamicContent?.('leave-list');
-      }
+        : `<div class="text-center text-gray-500 py-8" data-i18n="sections.no_employees_on_leave">${i18n.t('sections.no_employees_on_leave') || 'No employees on leave today'}</div>`;
 
-      // Upcoming leave (with department)
-      const up = Array.isArray(m.upcoming_leave) ? m.upcoming_leave : [];
-      const upcomingHtml = up.length
-        ? up.map(item => {
-            const name = getDisplayName(item);
-            const typeText = leaveTypeText(item);
-            const idText = personIdBadge(item);
-            const deptText = safeDept(item);
-            return `
-              <div class="border-l-4 border-blue-400 pl-3 py-2">
-                <p class="text-sm font-medium text-gray-900">${escapeHtml(name)}</p>
-                <p class="text-xs text-gray-500">${formatDate(item.start_date)} - ${formatDate(item.end_date)}</p>
-                <div class="flex justify-between mt-1">
-                  <p class="text-xs text-gray-400">${(i18n.t && i18n.t('common.type')) || 'Type'}: ${escapeHtml(typeText)}</p>
-                  <div class="text-right text-xs text-gray-400">
-                    ${deptText ? `<div>${i18n.t('common.department') || 'Dept'}: ${escapeHtml(deptText)}</div>` : ''}
-                    ${idText ? `<div>${idText}</div>` : ''}
-                  </div>
-                </div>
-              </div>`;
-          }).join('')
-        : `<div class="text-sm text-gray-500" data-i18n="sections.no_upcoming_leave">${
-            (i18n.t && i18n.t('sections.no_upcoming_leave')) || 'No upcoming leave scheduled'
-          }</div>`;
-      const upEl = document.getElementById('upcoming-leave');
-      if (upEl) {
-        upEl.innerHTML = upcomingHtml;
-        i18n?.updateDynamicContent?.('upcoming-leave');
-      }
+      document.getElementById('leave-list').innerHTML = leaveListHtml;
+      i18n.updateDynamicContent('leave-list');
 
-      // Department summary
-      const dept = Array.isArray(m.department_summary) ? m.department_summary : [];
-      const deptHtml = dept.length
-        ? dept.map(d => `
-            <div class="flex justify-between items-center py-2">
-              <span class="text-sm text-gray-700">${escapeHtml(d.department_id || (i18n.t && i18n.t('common.unknown')) || 'Unknown')}</span>
-              <span class="text-sm font-medium text-gray-900">${i18n.formatNumber(d.count)} ${(i18n.t && i18n.t('leave_types.on_leave')) || 'on leave'}</span>
-            </div>`
-          ).join('')
-        : `<div class="text-sm text-gray-500" data-i18n="sections.no_department_data">${
-            (i18n.t && i18n.t('sections.no_department_data')) || 'No department data available'
-          }</div>`;
-      const deptEl = document.getElementById('dept-leave-summary');
-      if (deptEl) {
-        deptEl.innerHTML = deptHtml;
-        i18n?.updateDynamicContent?.('dept-leave-summary');
-      }
-
-      updateLastUpdateTime?.();
-
-      // Debug
-      console.log('Upcoming leave data (first 2):', up.slice(0, 2));
+      updateLastUpdateTime();
     } catch (err) {
-      console.error('Failed to load leave metrics:', err);
-      ErrorManager?.showError?.(
-        ((i18n.t && i18n.t('errors.leave_metrics_failed')) || 'Leave metrics failed')
-          .replace('{status}', err.message || ''),
+      ErrorManager.showError(
+        (i18n.t('errors.leave_metrics_failed') || 'Leave metrics failed').replace('{status}', err.message || ''),
         'api'
       );
-      // Reset counters to placeholders
-      document.getElementById('leave-today-count').textContent = '--';
       document.getElementById('pending-leave-count').textContent = '--';
-      document.getElementById('low-balance-count').textContent  = '--';
-      document.getElementById('overtime-hours').textContent     = '--';
-      document.getElementById('overtime-people').textContent    =
-        `-- ${(i18n.t && i18n.t('units.people')) || 'people'}`;
     }
   }
 
-  // ---------------------------
-  // Health
-  // ---------------------------
-  async function checkHealth() {
-    try {
-      const res = await fetch(`${API_BASE}/api/health`);
-      if (!res.ok) throw new Error(`Health check failed (${res.status})`);
-      const data = await res.json();
-      const ready = !!data?.ready_for_queries;
-
-      ErrorManager.clearError('health');
-
-      healthBadge.textContent = ready ? (i18n.t('ai_assistant.healthy') || 'Healthy')
-                                      : (i18n.t('ai_assistant.degraded') || 'Degraded');
-      healthBadge.className = `px-2 py-0.5 rounded-full text-white text-[10px] ${ready ? 'bg-emerald-600' : 'bg-yellow-500'}`;
-
-      const parts = [
-        `DB: ${data?.database_connection ? 'OK' : 'down'}`,
-        `Index: ${data?.index_present ? 'OK' : 'missing'}`,
-        `Vector: ${data?.vector_db?.ready ? 'OK' : 'off'}`
-      ];
-
-      // Clear previous status (but keep active errors)
-      const children = Array.from(dbStatus.children);
-      children.forEach(child => {
-        if (!child.hasAttribute('data-error-type')) dbStatus.removeChild(child);
-      });
-
-      const statusDiv = document.createElement('div');
-      statusDiv.className = `warning-message flex items-center gap-3 ${ready ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : ''}`;
-      statusDiv.innerHTML = `
-        <span class="pulse-dot"></span>
-        <div>
-          <div class="font-semibold">${ready ? (i18n.t('system_status.system_ready') || 'System Ready')
-                                              : (i18n.t('system_status.system_not_ready') || 'System Not Ready')}</div>
-          <div class="text-sm">${parts.join(' · ')}</div>
-        </div>`;
-      dbStatus.insertBefore(statusDiv, dbStatus.firstChild);
-    } catch (err) {
-      healthBadge.textContent = i18n.t('ai_assistant.offline') || 'Offline';
-      healthBadge.className = 'px-2 py-0.5 rounded-full text-white text-[10px] bg-red-600';
-      ErrorManager.showError(i18n.t('system_status.health_check_failed') || 'Health check failed. API not reachable.', 'health');
-    }
-  }
-  document.getElementById('refresh-health')?.addEventListener('click', checkHealth);
-
-  // ---------------------------
-  // Trend fetch helper (DRY)
-  // ---------------------------
-  async function fetchAndRenderTrend() {
+  async function loadLeaveTrend() {
     try {
       const url = new URL(`${API_BASE}/api/leave_data`);
       url.searchParams.set('kind', 'trend');
       if (AS_OF) url.searchParams.set('as_of', AS_OF);
       url.searchParams.set('days', TREND_DAYS);
-      const res = await fetch(url.toString(), { credentials: 'include' });
+      const res = await fetch(url.toString());
       if (res.ok) {
         const data = await res.json();
-        if (data?.success) updateLeaveTrend(data.trend, data.effective_range);
+        if (data?.success) updateLeaveTrend(data.trend);
       }
     } catch (err) {
-      console.error('Trend fetch failed:', err);
+      ErrorManager.showWarning(
+        i18n.t('errors.leave_trend_failed') || 'Failed to load leave trend data.',
+        'trend'
+      );
     }
   }
 
   // ---------------------------
-  // Panel open/close
-  // ---------------------------
-  const openPanel  = () => { mainContent.style.width = '65%'; aiPanel.style.transform = 'translateX(0)'; };
-  const closePanel = () => { mainContent.style.width = '100%'; aiPanel.style.transform = 'translateX(100%)'; };
-  openAiBtn?.addEventListener('click', openPanel);
-  closeAiBtn?.addEventListener('click', closePanel);
-
-  // ---------------------------
-  // Refresh & scheduling
-  // ---------------------------
-  function scheduleRefresh() {
-    if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(async () => {
-      await loadLeaveMetrics().catch(err => console.error('Scheduled metrics refresh failed:', err));
-      await fetchAndRenderTrend();
-    }, 30000);
-  }
-
-  document.getElementById('refresh-btn')?.addEventListener('click', async () => {
-    const btn = document.getElementById('refresh-btn');
-    btn.classList.add('animate-spin');
-    try {
-      ErrorManager.clearAll();
-      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
-      await fetchAndRenderTrend();
-    } finally {
-      setTimeout(() => btn.classList.remove('animate-spin'), 500);
-    }
-  });
-
-  // ---------------------------
-  // Language switching
-  // ---------------------------
-  function applyLanguage(lang) {
-    i18n.switchLanguage(lang);
-    i18n.scanAndRegisterElements();
-    i18n.applyTranslations();
-    updateLastUpdateTime();
-    if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
-  }
-  const globalSel = document.getElementById('global-lang');
-  if (globalSel) {
-    globalSel.value = i18n.getCurrentLanguage();
-    globalSel.addEventListener('change', (e) => applyLanguage(e.target.value));
-  }
-  window.addEventListener('languageChanged', updateLastUpdateTime);
-
-  // ---------------------------
-  // Assistant chat (minimal)
-  // ---------------------------
-  function appendMessage(role, text) {
-    const placeholder = document.getElementById('placeholder');
-    placeholder?.classList.add('hidden');
-    const bubble = document.createElement('div');
-    bubble.className = `mb-3 p-3 rounded-lg border ${role === 'user' ? 'bg-blue-50 border-blue-200 text-blue-900' : 'bg-white border-slate-200 text-slate-800'}`;
-    const roleLabel = role === 'user' ? (i18n.t('ai_assistant.you') || 'You') : (i18n.t('ai_assistant.assistant') || 'Assistant');
-    bubble.innerHTML = `<div class="text-xs mb-1 ${role==='user'?'text-blue-600':'text-slate-500'}">${roleLabel}</div><div class="text-sm leading-6">${escapeHtml(text)}</div>`;
-    const results = document.getElementById('results');
-    results.appendChild(bubble);
-    results.scrollTop = results.scrollHeight;
-  }
-  function el(html) {
-    const t = document.createElement('template');
-    t.innerHTML = html.trim();
-    return t.content.firstElementChild;
-  }
-  function copyToClipboard(text) {
-    if (!text) return;
-    navigator.clipboard?.writeText(text).catch(() => {});
-  }
-  function renderAssistantCard(html) {
-    const results = document.getElementById('results');
-    const card = el(`<div class="mb-3 p-4 rounded-lg border bg-white border-slate-200 text-slate-700 text-sm leading-relaxed"></div>`);
-    card.innerHTML = html;
-    results.appendChild(card);
-    results.scrollTop = results.scrollHeight;
-    return card;
-  }
-  function classifyBackendError(data, httpStatus) {
-    const cat = (data?.error_category || "").toLowerCase();
-    const errMsg = (data?.execution_error || data?.error || "").toString();
-    const make = (category, title, advice, retry = false, backoffMs = 0) => ({ category, title, advice, retry, backoffMs, raw: errMsg });
-    if (cat) {
-      switch (cat) {
-        case "connection": return make(cat, "Can't reach the database", "Please check VPN/Network and server availability.", true, 1500);
-        case "authz":      return make(cat, "Login/permission issue", "Your DB credentials or table permissions may be incorrect.");
-        case "timeout":    return make(cat, "The query took too long", "Try narrowing the date range or filters, then retry.", true, 0);
-        case "deadlock":   return make(cat, "Database was busy", "Safe to retry the same query.", true, 800);
-        case "not_found":  return make(cat, "Field or table not found", "We’ll auto-fix the SQL; review the generated SQL if needed.", true, 0);
-        case "syntax":
-        case "semantic":   return make(cat, "The generated SQL was invalid", "We can retry and auto-fix the SQL for SQL Server.", true, 0);
-        default:           return make(cat, "Something went wrong", "You can retry or copy the details below.");
-      }
-    }
-    if (httpStatus === 429) return make('rate_limit', "Too many requests", "Please wait a moment and retry.", true, 1000);
-    if (httpStatus >= 500)  return make('server', "Server error", "Please retry. If it persists, contact support.", true, 1000);
-    if (/timeout/i.test(errMsg)) return make('timeout', "The query took too long", "Try narrower filters, then retry.", true, 0);
-    if (/login failed|denied|permission/i.test(errMsg)) return make('authz', "Login/permission issue", "Your DB credentials or table permissions may be incorrect.");
-    return make('unknown', "Something went wrong", "You can retry or copy the details below.", true, 500);
-  }
-  async function sendQuery(forcedText, fromRetry = false) {
-    const q = (forcedText ?? (queryTA.value || '')).trim();
-    if (!q) return;
-    if (!fromRetry) {
-      appendMessage('user', q);
-      queryTA.value = '';
-    }
-    const typing = document.createElement('div');
-    typing.className = 'mb-3 p-3 rounded-lg border bg-white border-slate-200 text-slate-500 text-sm';
-    typing.innerHTML = `<span class="inline-flex items-center gap-2"><span class="animate-pulse w-2 h-2 rounded-full bg-slate-400"></span>${i18n.t('ai_assistant.thinking') || 'Thinking...'}</span>`;
-    const resultsEl = document.getElementById('results');
-    resultsEl.appendChild(typing);
-    resultsEl.scrollTop = resultsEl.scrollHeight;
-    const payload = { query: q, lang: i18n.getCurrentLanguage() };
-    try {
-      const res = await fetch(`${API_BASE}/api/assistant/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      let data = null;
-      try { data = await res.json(); } catch { data = null; }
-      typing.remove();
-      if (res.ok && data?.success) {
-        appendMessage('assistant', data.summary || data.explanation_localized || data.explanation_english || 'Done.');
-        return;
-      }
-      const classified = classifyBackendError(data, res.status);
-      const html = `
-        <div class="flex items-start gap-3">
-          <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
-            <span class="text-red-600 text-xs">!</span>
-          </div>
-          <div class="flex-1">
-            <div class="font-medium text-slate-900">${classified.title}</div>
-            <div class="mt-1 text-slate-600">${classified.advice}</div>
-            ${classified.retry ? `<button class="mt-2 px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs hover:bg-slate-800" id="retry-btn">Retry</button>` : ''}
-          </div>
-        </div>`;
-      const card = renderAssistantCard(html);
-      if (classified.retry) {
-        card.querySelector('#retry-btn')?.addEventListener('click', async (e) => {
-          const btn = e.currentTarget;
-          btn.disabled = true;
-          btn.textContent = 'Retrying...';
-          if (classified.backoffMs) await new Promise(r => setTimeout(r, classified.backoffMs));
-          try { await sendQuery(q, true); } finally { btn.disabled = false; btn.textContent = 'Retry'; }
-        });
-      }
-    } catch (err) {
-      typing.remove();
-      const html = `
-        <div class="flex items-start gap-3">
-          <div class="mt-1 h-5 w-5 shrink-0 rounded-full bg-red-500/10 flex items-center justify-center">
-            <span class="text-red-600 text-xs">!</span>
-          </div>
-          <div class="flex-1">
-            <div class="font-medium text-slate-900">Network error</div>
-            <div class="mt-1 text-slate-600">Please check your internet connection and retry.</div>
-          </div>
-        </div>`;
-      renderAssistantCard(html);
-    }
-  }
-  document.getElementById('send')?.addEventListener('click', () => sendQuery());
-  document.getElementById('query')?.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendQuery(); });
-  document.getElementById('pending-action')?.addEventListener('click', () => {
-    openPanel();
-    queryTA.value = i18n.t('ai_assistant.example_2') || 'Show pending leave requests';
-    queryTA.focus();
-  });
-
-  // ---------------------------
-  // Voice (optional)
+  // Voice Recognition
   // ---------------------------
   let recognition = null, listening = false;
-  function supportsSpeech(){ return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window; }
-  function setupRecognition(){
+  function supportsSpeech() {
+    return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+  }
+  function setupRecognition() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognition = new SR();
     recognition.lang = i18n.getCurrentLanguage();
@@ -935,7 +1528,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     recognition.onerror = () => stopListening();
     recognition.onend = () => stopListening();
   }
-  function startListening(){
+  function startListening() {
     if (!supportsSpeech()) {
       voiceLine.textContent = i18n.t('ai_assistant.speech_not_supported') || 'Speech recognition not supported in this browser.';
       return;
@@ -950,7 +1543,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     recognition.lang = i18n.getCurrentLanguage();
     recognition.start();
   }
-  function stopListening(){
+  function stopListening() {
     if (!listening) return;
     listening = false;
     micBtn.classList.remove('active');
@@ -960,14 +1553,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     try { recognition.stop(); } catch {}
     vuBar.style.width = '8px';
   }
-  function vuTick(){
+  function vuTick() {
     if (!listening) return;
     const w = 8 + Math.round(Math.random()*40);
     vuBar.style.width = `${w}px`;
     setTimeout(vuTick, 80);
   }
-  document.getElementById('mic')?.addEventListener('click', startListening);
-  document.getElementById('stop')?.addEventListener('click', stopListening);
+  micBtn?.addEventListener('click', startListening);
+  stopBtn?.addEventListener('click', stopListening);
+
+  // ---------------------------
+  // Refresh & scheduling
+  // ---------------------------
+  function scheduleRefresh() {
+    if (refreshInterval) clearInterval(refreshInterval);
+    refreshInterval = setInterval(async () => {
+      await loadLeaveMetrics().catch(() => {});
+      await loadLeaveTrend().catch(() => {});
+    }, 36000000);
+  }
+
+  refreshBtn?.addEventListener('click', async () => {
+    refreshBtn.classList.add('animate-spin');
+    try {
+      ErrorManager.clearAll();
+      await loadLeaveMetrics();
+      await loadLeaveTrend();
+    } finally {
+      setTimeout(() => refreshBtn.classList.remove('animate-spin'), 500);
+    }
+  });
 
   // ---------------------------
   // Init
@@ -975,45 +1590,343 @@ document.addEventListener('DOMContentLoaded', async () => {
   (async function init() {
     try {
       initializeCharts();
+      await loadLeaveMetrics();
+      await loadLeaveTrend();
 
-      // initial loads
-      await Promise.all([ loadLeaveMetrics(), checkHealth() ]);
-      await fetchAndRenderTrend();
-
-      // schedule live refresh
       scheduleRefresh();
       updateLastUpdateTime();
 
-      // Welcome subline details
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
       const dateLabel = AS_OF ? AS_OF : 'auto';
       const sub = document.getElementById('welcome-sub');
       if (sub) {
-        const base = i18n.t('header.welcome_sub') || "Here's your team dashboard - live data updates every 30 seconds";
+        const base = i18n.t('header.welcome_sub') || "Real-time leave status and trends";
         sub.textContent = `${base} · ${tz} · as_of=${dateLabel}`;
       }
 
-      // First pass translations
       i18n.scanAndRegisterElements();
       i18n.applyTranslations();
-    } catch (error) {
-      console.error('Initialization error:', error);
+    } catch {
       ErrorManager.showError('Failed to initialize dashboard. Please refresh the page.', 'critical');
     }
   })();
 
-  // Global guards
-  window.addEventListener('error', (event) => {
-    console.error('Global error:', event.error);
-    ErrorManager.showError('An unexpected error occurred. Please refresh the page.', 'critical');
+}); // end DOMContentLoaded
+
+// ===========================
+// Calendar card (kept intact)
+// ===========================
+(function(){
+  let HOURS_START = 0;
+  let HOURS_END   = 24;
+  const HOUR_CELL_HEIGHT = 48;
+  let events = [];
+
+  async function loadEventsFromAPIForCursor(cursorDate) {
+    const base = cursorDate ? new Date(cursorDate) : new Date();
+    const startMonth = new Date(base.getFullYear(), base.getMonth() - 1, 1);
+    startMonth.setHours(0, 0, 0, 0);
+    const endMonth = new Date(base.getFullYear(), base.getMonth() + 2, 0);
+    endMonth.setHours(23, 59, 0, 0);
+
+    const pad = n => String(n).padStart(2, '0');
+    const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+    try {
+      const response = await fetch('https://calendar.qcest-2.com/calendar-view', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: "jvs@chwu0217.onmicrosoft.com",
+          start: fmt(startMonth),
+          end: fmt(endMonth),
+          timezone: "Asia/Taipei"
+        })
+      });
+
+      if (!response.ok) throw new Error('Network response was not ok');
+      const result = await response.json();
+      events = (result.events || []).map(ev => ({
+        id: ev.id,
+        title: ev.subject,
+        start: ev.start.date_time,
+        end: ev.end.date_time,
+        desc: ev.body?.content || '',
+        location: ev.location?.display_name || ''
+      }));
+
+      render();
+    } catch (err) {
+      console.error('Error loading events:', err);
+    }
+  }
+
+  const state = { view:'month', cursor: stripTime(new Date()), locale:'zh-TW', weekStartsOn:1 };
+
+  function stripTime(d){ const x=new Date(d); x.setHours(0,0,0,0); return x; }
+  function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
+  function addMonths(d,n){ const x=new Date(d); x.setMonth(x.getMonth()+n); return x; }
+  function startOfMonth(d){ return new Date(d.getFullYear(), d.getMonth(), 1); }
+  function endOfMonth(d){ return new Date(d.getFullYear(), d.getMonth()+1, 0); }
+  function startOfWeek(d,ws=1){ const day=(d.getDay()+7-ws)%7; return stripTime(addDays(d,-day)); }
+  function endOfWeek(d,ws=1){ return addDays(startOfWeek(d,ws),6); }
+  function isSameDay(a,b){ return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
+  function fmt(d,opts){ return new Intl.DateTimeFormat(state.locale, opts).format(d); }
+  function tw(d){ return `${fmt(d,{year:'numeric'})}/${fmt(d,{month:'2-digit'})}/${fmt(d,{day:'2-digit'})} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; }
+  function getWeekNumber(d){ const tmp=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const dayNum=(tmp.getUTCDay()+6)%7; tmp.setUTCDate(tmp.getUTCDate()-dayNum+3); const firstThursday=new Date(Date.UTC(tmp.getUTCFullYear(),0,4)); return 1+Math.round((tmp-firstThursday)/(7*24*3600*1000)); }
+  function sameYMD(a,b){ return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
+
+  const titleEl=document.getElementById('calTitle');
+  const bodyEl=document.getElementById('calBody');
+
+  function render(){
+    const d=state.cursor; let title='';
+    if(state.view==='month') title=`${fmt(d,{year:'numeric'})} ${fmt(d,{month:'long'})}`;
+    if(state.view==='week'){ const s=startOfWeek(d,state.weekStartsOn), e=endOfWeek(d,state.weekStartsOn); title=`第 ${getWeekNumber(d)} 週 · ${fmt(s,{month:'numeric',day:'numeric'})} – ${fmt(e,{month:'numeric',day:'numeric'})}`; }
+    if(state.view==='day') title=`${fmt(d,{year:'numeric'})}/${fmt(d,{month:'2-digit'})}/${fmt(d,{day:'2-digit'})}（${fmt(d,{weekday:'long'})}）`;
+    titleEl.textContent=title;
+
+    bodyEl.innerHTML='';
+    if(state.view==='month') renderMonth(); else if(state.view==='week') renderWeekHourly(); else renderDayHourly();
+
+    document.querySelectorAll('.segmented button').forEach(b=>b.classList.remove('active'));
+    document.getElementById(state.view+'ViewBtn').classList.add('active');
+  }
+
+  function renderWeekdaysRow(){
+    const row=document.createElement('div'); row.className='weekdays';
+    const base=startOfWeek(state.cursor, state.weekStartsOn);
+    for(let i=0;i<7;i++){ const d=addDays(base,i); const cell=document.createElement('div'); cell.textContent=fmt(d,{weekday:'short'}); row.appendChild(cell); }
+    return row;
+  }
+
+  function monthEvents(date){
+    const ymd = stripTime(date);
+    return events.filter(e => sameYMD(new Date(e.start), ymd));
+  }
+
+  function renderMonth(){
+    bodyEl.appendChild(renderWeekdaysRow());
+    const start=startOfWeek(startOfMonth(state.cursor), state.weekStartsOn);
+    const end=endOfWeek(endOfMonth(state.cursor), state.weekStartsOn);
+    const grid=document.createElement('div'); grid.className='month-grid';
+    const today=stripTime(new Date());
+    for(let d=new Date(start); d<=end; d=addDays(d,1)){
+      const cell=document.createElement('div'); cell.className='day-cell';
+      if(d.getMonth()!==state.cursor.getMonth()) cell.classList.add('faded');
+      if(isSameDay(d,today)) cell.classList.add('today');
+      const badge=document.createElement('div'); badge.className='badge'; badge.textContent=d.getDate(); cell.appendChild(badge);
+
+      const list = monthEvents(d);
+      if(list.length > 0){
+        const wrap = document.createElement('div');
+        wrap.className = 'month-events';
+        const max = 3;
+        list.slice(0, max).forEach(ev=>{
+          const item = document.createElement('div');
+          item.className = 'month-event';
+          item.textContent = ev.title || '無標題';
+          const s = new Date(ev.start), e = new Date(ev.end);
+          item.title = `${ev.title || '無標題'}｜${tw(s)} – ${tw(e)}`;
+          item.addEventListener('click', (e)=>{
+            e.stopPropagation();
+            openModal(ev);
+          });
+          wrap.appendChild(item);
+        });
+        if(list.length > max){
+          const more = document.createElement('div');
+          more.className = 'month-event more';
+          more.textContent = `+${list.length - max} 更多`;
+          wrap.appendChild(more);
+        }
+        cell.appendChild(wrap);
+      }
+
+      cell.addEventListener('click',()=>{ state.cursor=new Date(d); state.view='day'; render(); });
+      grid.appendChild(cell);
+    }
+    bodyEl.appendChild(grid);
+  }
+
+  function renderWeekHourly(){
+    const base=startOfWeek(state.cursor, state.weekStartsOn);
+    const today=stripTime(new Date());
+
+    const header=document.createElement('div'); header.className='week-table week-header';
+    header.appendChild(document.createElement('div'));
+    for(let i=0;i<7;i++){ const d=addDays(base,i); const h=document.createElement('div'); h.textContent=`${fmt(d,{weekday:'short'})} · ${fmt(d,{month:'numeric',day:'numeric'})}`; header.appendChild(h); }
+    bodyEl.appendChild(header);
+
+    const wrap=document.createElement('div'); wrap.className='week-wrap';
+    const table=document.createElement('div'); table.className='week-table';
+    for(let h=HOURS_START; h<HOURS_END; h++){
+      const tCell=document.createElement('div'); tCell.className='time-cell'; tCell.textContent=String(h).padStart(2,'0')+':00'; table.appendChild(tCell);
+      for(let i=0;i<7;i++){
+        const d=addDays(base,i);
+        const cell=document.createElement('div'); cell.className='week-hour-cell';
+        if(isSameDay(d,today)) cell.classList.add('today-col');
+        cell.dataset.key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}|${h}`;
+        table.appendChild(cell);
+      }
+    }
+    wrap.appendChild(table); bodyEl.appendChild(wrap);
+    paintEventsWeek(base);
+  }
+
+  function paintEventsWeek(base){
+    const startW = startOfWeek(base, state.weekStartsOn);
+    const endW   = addDays(startW, 7);
+    const weekEvents = events.filter(e=> new Date(e.end) > startW && new Date(e.start) < endW);
+    weekEvents.forEach(ev=> placeEventAcrossHours(ev, true));
+  }
+
+  function renderDayHourly(){
+    const grid=document.createElement('div'); grid.className='day-grid';
+    const today=new Date(); const isToday=isSameDay(state.cursor, stripTime(today));
+    for(let h=HOURS_START; h<HOURS_END; h++){
+      const gutter=document.createElement('div'); gutter.className='day-hour'; gutter.textContent=String(h).padStart(2,'0')+':00';
+      const slot=document.createElement('div'); slot.className='day-slot';
+      slot.dataset.key = `${state.cursor.getFullYear()}-${String(state.cursor.getMonth()+1).padStart(2,'0')}-${String(state.cursor.getDate()).padStart(2,'0')}|${h}`;
+      if(isToday && today.getHours()===h){ slot.classList.add('now'); const line=document.createElement('div'); line.className='now-indicator'; slot.appendChild(line); }
+      grid.appendChild(gutter); grid.appendChild(slot);
+    }
+    bodyEl.appendChild(grid);
+    paintEventsDay(state.cursor);
+  }
+
+  function paintEventsDay(day){
+    const s = stripTime(day), e = addDays(s,1);
+    const dayEvents = events.filter(ev=> new Date(ev.end) > s && new Date(ev.start) < e);
+    dayEvents.forEach(ev=> placeEventAcrossHours(ev, false));
+  }
+
+  function placeEventAcrossHours(ev) {
+    const start = new Date(ev.start);
+    const end = new Date(ev.end);
+
+    const key = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}|${start.getHours()}`;
+    const cell = document.querySelector(`[data-key="${key}"]`);
+    if (!cell) return;
+
+    const durationMinutes = (end - start) / 60000;
+    const heightPx = (durationMinutes / 60) * HOUR_CELL_HEIGHT - 2;
+    const topPx = (start.getMinutes() / 60) * HOUR_CELL_HEIGHT;
+
+    const box = document.createElement('div');
+    box.className = 'event';
+    box.style.position = 'absolute';
+    box.style.top = `${topPx}px`;
+    box.style.height = `${Math.max(20, heightPx)}px`;
+    box.style.left = '6px';
+    box.style.right = '6px';
+    box.innerHTML = `<div class="title">${escapeHtml(ev.title)}</div>
+                    <div class="time">${timeLabel(start)}–${timeLabel(end)}</div>`;
+    box.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openModal(ev);
+    });
+
+    cell.style.position = 'relative';
+    cell.appendChild(box);
+  }
+
+  function timeLabel(d){ return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; }
+  function escapeHtml(s=''){ return s.replace(/[&<>"']/g, m=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m])); }
+
+  const backdrop = document.getElementById('modalBackdrop');
+  const modalClose = document.getElementById('modalClose');
+  function openModal(ev){
+    document.getElementById('modalTitle').textContent = ev.title || '事件';
+    const s = new Date(ev.start), e = new Date(ev.end);
+    document.getElementById('modalTime').textContent = `時間：${tw(s)} – ${tw(e)}`;
+    function stripHtml(html) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      return tmp.textContent || tmp.innerText || '';
+    }
+    document.getElementById('modalDesc').textContent = `說明：${stripHtml(ev.desc) || '—'}`;
+    document.getElementById('modalLoc').textContent  = `地點：${ev.location || '—'}`;
+    backdrop.style.display='flex';
+    backdrop.setAttribute('aria-hidden','false');
+  }
+  function closeModal(){ backdrop.style.display='none'; backdrop.setAttribute('aria-hidden','true'); }
+  modalClose.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', (e)=>{ if(e.target===backdrop) closeModal(); });
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
+
+  // Controls
+  document.getElementById('todayBtn').addEventListener('click',()=>{
+    state.cursor = stripTime(new Date());
+    loadEventsFromAPIForCursor(state.cursor);
+    render();
   });
-  window.addEventListener('unhandledrejection', (event) => {
-    console.error('Unhandled promise rejection:', event.reason);
-    if (!String(event.reason?.message || '').includes('fetch')) {
-      ErrorManager.showError('An unexpected error occurred. Please refresh the page.', 'critical');
+  document.getElementById('prevBtn').addEventListener('click',()=>{
+    if (state.view==='month') state.cursor = addMonths(state.cursor, -1);
+    else if (state.view==='week') state.cursor = addDays(state.cursor, -7);
+    else state.cursor = addDays(state.cursor, -1);
+    loadEventsFromAPIForCursor(state.cursor);
+    render();
+  });
+  document.getElementById('nextBtn').addEventListener('click', ()=>{
+    if (state.view==='month') state.cursor = addMonths(state.cursor, 1);
+    else if (state.view==='week') state.cursor = addDays(state.cursor, 7);
+    else state.cursor = addDays(state.cursor, 1);
+    loadEventsFromAPIForCursor(state.cursor);
+    render();
+  });
+  document.getElementById('dayViewBtn').addEventListener('click',()=>{ state.view='day'; render(); });
+  document.getElementById('weekViewBtn').addEventListener('click',()=>{ state.view='week'; render(); });
+  document.getElementById('monthViewBtn').addEventListener('click',()=>{ state.view='month'; render(); });
+
+  const workBtn = document.getElementById('workHoursBtn');
+  let workMode = false;
+  function setHourRangeInternal(start,end){
+    if(start>=0&&end<=24&&start<end){
+      HOURS_START=start; HOURS_END=end; render();
+    }
+  }
+  workBtn.addEventListener('click', ()=>{
+    workMode = !workMode;
+    if(workMode){
+      setHourRangeInternal(8,20);
+      workBtn.textContent='顯示全天';
+      workBtn.title='顯示 00:00–24:00';
+    } else {
+      setHourRangeInternal(0,24);
+      workBtn.textContent='顯示上班時間';
+      workBtn.title='顯示 08:00–20:00';
     }
   });
-});
+
+  document.body.setAttribute('data-theme','light');
+  loadEventsFromAPIForCursor();
+  render();
+  workMode = true;
+  setHourRangeInternal(8,20);
+  workBtn.textContent='顯示全天';
+  workBtn.title='顯示 00:00–24:00';
+
+  window.CalendarCard={
+    goto(date){ state.cursor=stripTime(new Date(date)); render(); },
+    setView(view){ state.view=view; render(); },
+    setWeekStartsOn(s){ state.weekStartsOn=(s===0?0:1); render(); },
+    toggleDark(on){ document.body.setAttribute('data-theme', on?'dark':'light'); },
+    setHourRange(start,end){ setHourRangeInternal(start,end); },
+    setEvents(list){ events = (list||[]).map(normalizeEvent); render(); },
+  };
+
+  function normalizeEvent(ev){
+    return {
+      id: ev.id || `id_${Math.random().toString(36).slice(2,9)}`,
+      title: ev.title || '無標題',
+      start: new Date(ev.start).toISOString().slice(0,16),
+      end: new Date(ev.end).toISOString().slice(0,16),
+      desc: ev.desc || ev.description || '',
+      location: ev.location || ''
+    };
+  }
+})();
 </script>
 </body>
 </html>
