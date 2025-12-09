@@ -1,4 +1,13 @@
 # backend/app/services/llm/llm_service.py
+"""
+LLM Service for Leave AI Assistant - AWS Bedrock Edition
+=========================================================
+
+Handles all LLM calls via AWS Bedrock (Claude) for:
+1. SQL generation from natural language
+2. SQL repair when errors occur
+3. Explanation generation (summarizing results in Chinese)
+"""
 from __future__ import annotations
 
 import json
@@ -22,32 +31,23 @@ logger = logging.getLogger(__name__)
 
 def _load_env_for_llm() -> None:
     """
-    Try to load .env from a few likely locations:
-
-    1. Project root (…/hcm-ai-portal-v3/.env), derived from this file path.
-    2. backend/.env (if you ever put one there).
-    3. Default python-dotenv search (current working directory upwards).
-
-    Logs exactly which path (if any) was used.
+    Try to load .env from a few likely locations.
     """
     here = Path(__file__).resolve()
     candidates: List[Path] = []
 
     try:
-        # hcm-ai-portal-v3
         project_root = here.parents[4]
         candidates.append(project_root / ".env")
     except Exception:
         pass
 
-    # backend/.env (optional)
     try:
-        backend_root = here.parents[3]  # …/backend
+        backend_root = here.parents[3]
         candidates.append(backend_root / ".env")
     except Exception:
         pass
 
-    # Try explicit paths first
     for p in candidates:
         try:
             if p.is_file():
@@ -62,7 +62,6 @@ def _load_env_for_llm() -> None:
                 e,
             )
 
-    # Fallback: default behaviour (search from CWD upwards)
     loaded = False
     try:
         loaded = load_dotenv(override=False)
@@ -84,47 +83,47 @@ def _load_env_for_llm() -> None:
 # Load env **before** reading any env vars
 _load_env_for_llm()
 
-# We keep the Literal type for compatibility with other modules,
-# but the pipeline behaviour is zh-tw–only.
+# ──────────────────────────────────────────────────────────────────────
+# AWS Bedrock Configuration
+# ──────────────────────────────────────────────────────────────────────
 Language = Literal["zh-tw", "en"]
 
-LLM_API_KEY = os.getenv("OPENAI_API_KEY")
-LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+# AWS Configuration
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+BEDROCK_MODEL_ID = os.getenv(
+    "BEDROCK_MODEL_ID", 
+    "anthropic.claude-3-sonnet-20240229-v1:0"
+)
+# Optional: Use inference profile ARN for cross-region inference
+BEDROCK_INFERENCE_PROFILE_ID = (
+    os.getenv("BEDROCK_INFERENCE_PROFILE_ID")
+    or os.getenv("BEDROCK_INFERENCE_PROFILE_ARN")
+)
 
-if not LLM_API_KEY:
-    logger.warning(
-        "[LLMService] OPENAI_API_KEY is not set (LLM calls will be disabled)."
-    )
-else:
-    logger.info(
-        "[LLMService] OPENAI_API_KEY is set (length=%d, value masked).",
-        len(LLM_API_KEY),
-    )
+# Bedrock settings
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "4096"))
+BEDROCK_TEMPERATURE = float(os.getenv("BEDROCK_TEMPERATURE", "0.1"))
 
-logger.info("[LLMService] OPENAI_MODEL=%s", LLM_MODEL or "(not set)")
-
+logger.info("[LLMService] AWS_REGION=%s", AWS_REGION)
+logger.info("[LLMService] BEDROCK_MODEL_ID=%s", BEDROCK_MODEL_ID)
+if BEDROCK_INFERENCE_PROFILE_ID:
+    logger.info("[LLMService] BEDROCK_INFERENCE_PROFILE_ID=%s", BEDROCK_INFERENCE_PROFILE_ID)
 
 # ──────────────────────────────────────────────────────────────────────
-# Optional LangChain / OpenAI imports (soft dependency)
+# Optional boto3 import (soft dependency)
 # ──────────────────────────────────────────────────────────────────────
 try:
-    from langchain_openai import ChatOpenAI
-    from langchain_core.prompts import (
-        ChatPromptTemplate,
-        SystemMessagePromptTemplate,
-        HumanMessagePromptTemplate,
-    )
-    from langchain_core.messages import BaseMessage, HumanMessage
+    import boto3
+    from botocore.exceptions import ClientError, NoCredentialsError
+    BOTO3_AVAILABLE = True
+    logger.info("[LLMService] boto3 is available.")
 except ImportError:
-    ChatOpenAI = None
-    ChatPromptTemplate = None
-    SystemMessagePromptTemplate = None
-    HumanMessagePromptTemplate = None
-    BaseMessage = object  # type: ignore
-    HumanMessage = object  # type: ignore
-
+    boto3 = None  # type: ignore
+    ClientError = Exception  # type: ignore
+    NoCredentialsError = Exception  # type: ignore
+    BOTO3_AVAILABLE = False
     logger.warning(
-        "[LLMService] langchain_openai is not installed; LLM integration will be disabled."
+        "[LLMService] boto3 is not installed; Bedrock LLM integration will be disabled."
     )
 
 # ──────────────────────────────────────────────────────────────────────
@@ -144,7 +143,6 @@ try:
         PermissionDeniedError as DBServicePermissionDeniedError,
     )
 except ImportError:
-    # Minimal generic fallbacks so this module can import even before db_service is ready
     class DBServiceQueryError(Exception):
         pass
 
@@ -173,10 +171,6 @@ except ImportError:
 def detect_query_language(text: str) -> Language:
     """
     Very lightweight zh-tw vs en detector.
-
-    NOTE: The *behaviour* of LLMService is zh-tw–only; this is used
-    purely for logging/metadata so you can observe how people type
-    (Chinese vs English), but prompts/explanations are always zh-tw.
     """
     if not text or not text.strip():
         return "en"
@@ -192,25 +186,269 @@ def detect_query_language(text: str) -> Language:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Bedrock LLM Client
+# ──────────────────────────────────────────────────────────────────────
+class BedrockClient:
+    """
+    AWS Bedrock client wrapper for Claude models.
+    
+    Handles:
+    - Client initialization with proper error handling
+    - Message formatting for Anthropic Claude models
+    - Response parsing and error handling
+    - Automatic model ID selection based on availability
+    
+    Model Selection Priority:
+    1. BEDROCK_INFERENCE_PROFILE_ID (for cross-region or Opus 4.5)
+    2. BEDROCK_MODEL_ID (for on-demand models like Claude 3 Sonnet/Haiku)
+    
+    Note: Claude Opus 4.5 and some newer models REQUIRE an inference profile.
+    Cross-region inference profiles start with region prefix (e.g., "apac.", "eu.", "us.")
+    """
+    
+    # Models that support on-demand invocation (no inference profile needed)
+    ON_DEMAND_MODELS = [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+        "anthropic.claude-3-opus-20240229-v1:0",
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "anthropic.claude-3-5-haiku-20241022-v1:0",
+    ]
+    
+    # Models that REQUIRE inference profile (cannot use on-demand)
+    INFERENCE_PROFILE_REQUIRED = [
+        "anthropic.claude-opus-4-5-20251101-v1:0",
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    ]
+    
+    # Cross-region inference profile prefixes
+    CROSS_REGION_PREFIXES = ["apac.", "eu.", "us."]
+    
+    def __init__(
+        self,
+        region: Optional[str] = None,
+        model_id: Optional[str] = None,
+        inference_profile_id: Optional[str] = None,
+        max_tokens: int = BEDROCK_MAX_TOKENS,
+        temperature: float = BEDROCK_TEMPERATURE,
+    ):
+        self.region = region or AWS_REGION
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.client = None
+        self._initialized = False
+        self._init_error: Optional[str] = None
+        
+        # Determine model target
+        self.inference_profile_id = inference_profile_id or BEDROCK_INFERENCE_PROFILE_ID
+        self.model_id = model_id or BEDROCK_MODEL_ID
+        
+        # Select the actual target to use
+        self._model_target = self._select_model_target()
+        
+        self._initialize_client()
+    
+    def _select_model_target(self) -> str:
+        """
+        Select the appropriate model target based on configuration.
+        
+        Returns the model ID or inference profile ARN to use.
+        """
+        # If inference profile is set, use it (supports all models including cross-region)
+        if self.inference_profile_id:
+            # Check if it's a cross-region inference profile (starts with apac., eu., us., etc.)
+            is_cross_region = any(
+                self.inference_profile_id.startswith(prefix) 
+                for prefix in self.CROSS_REGION_PREFIXES
+            )
+            if is_cross_region:
+                logger.info(
+                    "[BedrockClient] Using cross-region inference profile: %s",
+                    self.inference_profile_id,
+                )
+            else:
+                logger.info(
+                    "[BedrockClient] Using inference profile: %s",
+                    self.inference_profile_id,
+                )
+            return self.inference_profile_id
+        
+        # Check if the model requires an inference profile
+        if self.model_id in self.INFERENCE_PROFILE_REQUIRED:
+            logger.warning(
+                "[BedrockClient] Model %s requires an inference profile but none configured. "
+                "Falling back to claude-3-5-sonnet.",
+                self.model_id,
+            )
+            # Fall back to a supported on-demand model
+            fallback = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+            self.model_id = fallback
+            return fallback
+        
+        # Check if model supports on-demand
+        if self.model_id in self.ON_DEMAND_MODELS:
+            logger.info(
+                "[BedrockClient] Using on-demand model: %s",
+                self.model_id,
+            )
+            return self.model_id
+        
+        # Unknown model - try it anyway but warn
+        logger.warning(
+            "[BedrockClient] Unknown model %s - attempting on-demand invocation",
+            self.model_id,
+        )
+        return self.model_id
+    
+    def _initialize_client(self) -> None:
+        """Initialize the Bedrock runtime client."""
+        if not BOTO3_AVAILABLE:
+            self._init_error = "boto3 is not installed"
+            logger.error("[BedrockClient] %s", self._init_error)
+            return
+        
+        try:
+            self.client = boto3.client(
+                "bedrock-runtime",
+                region_name=self.region,
+            )
+            self._initialized = True
+            logger.info(
+                "[BedrockClient] Initialized successfully. Target=%s Region=%s",
+                self._model_target,
+                self.region,
+            )
+        except NoCredentialsError as e:
+            self._init_error = f"AWS credentials not found: {e}"
+            logger.error("[BedrockClient] %s", self._init_error)
+        except Exception as e:
+            self._init_error = f"Failed to initialize: {type(e).__name__}: {e}"
+            logger.error("[BedrockClient] %s", self._init_error)
+    
+    def is_available(self) -> bool:
+        """Check if the client is ready for use."""
+        return self._initialized and self.client is not None
+    
+    def get_init_error(self) -> Optional[str]:
+        """Return initialization error message if any."""
+        return self._init_error
+    
+    def get_model_target(self) -> str:
+        """Return the actual model target being used."""
+        return self._model_target
+    
+    def invoke(
+        self,
+        system_prompt: str,
+        user_message: str,
+        context: str = "",
+    ) -> str:
+        """
+        Invoke the Bedrock Claude model.
+        
+        Args:
+            system_prompt: System instructions for the model
+            user_message: User's message/query
+            context: Optional context string for logging
+            
+        Returns:
+            Model's response text
+        """
+        if not self.is_available():
+            logger.error(
+                "[BedrockClient] invoke() called but client not available: %s",
+                self._init_error,
+            )
+            return ""
+        
+        t0 = time.perf_counter()
+        
+        try:
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": 0.9,
+                "system": system_prompt,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": user_message}],
+                    }
+                ],
+                "stop_sequences": ["\n\nHuman:", "\n\nUser:"],
+            }
+            
+            # Use the pre-selected model target
+            response = self.client.invoke_model(
+                modelId=self._model_target,
+                body=json.dumps(body),
+                accept="application/json",
+                contentType="application/json",
+            )
+            
+            payload = json.loads(response["body"].read())
+            content_blocks = payload.get("content", [])
+            
+            if not content_blocks:
+                logger.warning(
+                    "[BedrockClient] Empty response from model: %s",
+                    json.dumps(payload)[:200],
+                )
+                return ""
+            
+            result = content_blocks[0].get("text", "").strip()
+            
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            logger.info(
+                "[BedrockClient] invoke OK: ctx=%s model=%s ms=%d len=%d",
+                context,
+                self._model_target[:50],
+                elapsed_ms,
+                len(result),
+            )
+            
+            return result
+            
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            error_msg = e.response.get("Error", {}).get("Message", str(e))
+            logger.error(
+                "[BedrockClient] ClientError [%s]: %s (ctx=%s, model=%s)",
+                error_code,
+                error_msg,
+                context,
+                self._model_target,
+            )
+            return ""
+            
+        except Exception as e:
+            logger.error(
+                "[BedrockClient] invoke failed: %s: %s (ctx=%s)",
+                type(e).__name__,
+                e,
+                context,
+            )
+            return ""
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Core service – zh-tw monolingual behaviour
 # ──────────────────────────────────────────────────────────────────────
 class LLMService:
     """
     Core LLM orchestration service for the Leave AI Assistant.
+    
+    Now powered by AWS Bedrock (Claude) instead of OpenAI.
 
     Responsibilities:
       - 接收自然語言問題（主要為繁體中文 zh-tw）。
-      - 使用上游檢索層提供的 `intent_context`：
-          * template_ref: str | None
-          * slots: dict
-          * tables: list[str]
-          * few_shot_sql: str (recipes 中的範例 SQL)
+      - 使用上游檢索層提供的 `intent_context`。
       - 產生安全的 **SELECT-only** T-SQL。
       - 於資料庫錯誤時用 LLM 做查詢修復。
       - 呼叫 `db_service.run_select(...)` 執行最終 SQL。
       - 輸出給主管看的繁體中文說明（explanation_zh）。
-
-    注意：本版本行為為「繁體中文單軌」，不再提供英文提示詞。
     """
 
     # Keywords that we will block in generated SQL for safety
@@ -225,219 +463,226 @@ class LLMService:
 
     def __init__(
         self,
-        model_name: str = LLM_MODEL,
-        temperature: float = 0.1,
+        model_id: Optional[str] = None,
+        temperature: float = BEDROCK_TEMPERATURE,
+        region: Optional[str] = None,
     ) -> None:
-        self.model_name = model_name
+        self.model_id = model_id or BEDROCK_MODEL_ID
         self.temperature = temperature
-        self.api_key = LLM_API_KEY
+        self.region = region or AWS_REGION
 
-        # "Global" feature flag based on env + imports
-        self.llm_enabled = bool(self.api_key) and ChatOpenAI is not None
-        self.llm: Optional[ChatOpenAI] = None  # type: ignore
-
-        # zh-tw–only prompts
-        self.sql_prompt_zh = None
-        self.repair_sql_prompt_zh = None
-        self.explanation_prompt_zh = None
+        # Initialize Bedrock client
+        self.bedrock = BedrockClient(
+            region=self.region,
+            model_id=self.model_id,
+            temperature=self.temperature,
+        )
+        
+        self.llm_enabled = self.bedrock.is_available()
 
         logger.info(
-            "[LLMService.__init__] model_name=%s, temp=%.2f, llm_enabled=%s",
-            self.model_name,
+            "[LLMService.__init__] model_id=%s, temp=%.2f, region=%s, llm_enabled=%s",
+            self.model_id,
             self.temperature,
+            self.region,
             self.llm_enabled,
         )
 
-        self._initialize_llm()
-        self._initialize_prompts()
-
     # ──────────────────────────────────────────────────────────────────
-    # LLM init + availability
+    # LLM availability check
     # ──────────────────────────────────────────────────────────────────
     def _is_llm_available(self) -> bool:
-        if not self.api_key:
-            logger.error(
-                "[LLMService] LLM unavailable: OPENAI_API_KEY is missing or empty."
-            )
-            return False
-        if ChatOpenAI is None:
-            logger.error(
-                "[LLMService] LLM unavailable: langchain_openai is not installed."
-            )
-            return False
         if not self.llm_enabled:
-            logger.error(
-                "[LLMService] LLM unavailable: llm_enabled flag is False (init failed or disabled)."
-            )
-            return False
-        if self.llm is None:
-            logger.error(
-                "[LLMService] LLM unavailable: ChatOpenAI client was not initialised."
-            )
+            error = self.bedrock.get_init_error() or "Unknown initialization error"
+            logger.error("[LLMService] LLM unavailable: %s", error)
             return False
         return True
 
-    def _initialize_llm(self) -> None:
-        # More granular logging on why it's disabled
-        if not self.api_key:
-            logger.warning(
-                "[LLMService] Skipping LLM init: OPENAI_API_KEY not set in env."
-            )
-            self.llm_enabled = False
-            return
-        if ChatOpenAI is None:
-            logger.warning(
-                "[LLMService] Skipping LLM init: langchain_openai is missing."
-            )
-            self.llm_enabled = False
-            return
-
-        t0 = time.perf_counter()
-        try:
-            try:
-                # Newer langchain_openai signature
-                self.llm = ChatOpenAI(  # type: ignore
-                    model=self.model_name,
-                    temperature=self.temperature,
-                    api_key=self.api_key,
-                )
-            except TypeError:
-                # Older signature fallback
-                self.llm = ChatOpenAI(  # type: ignore
-                    model_name=self.model_name,  # type: ignore
-                    temperature=self.temperature,
-                    openai_api_key=self.api_key,
-                )
-            self.llm_enabled = True
-            logger.info(
-                "[LLMService] LLM initialized: model=%s temp=%.2f in %.0fms",
-                self.model_name,
-                self.temperature,
-                (time.perf_counter() - t0) * 1000,
-            )
-        except Exception as e:
-            logger.error(
-                "[LLMService] LLM init failed: %s: %s", type(e).__name__, e, exc_info=True
-            )
-            self.llm = None
-            self.llm_enabled = False
-
     # ──────────────────────────────────────────────────────────────────
-    # Prompt initialization (zh-tw only)
+    # Prompt builders (zh-tw only)
     # ──────────────────────────────────────────────────────────────────
-    def _initialize_prompts(self) -> None:
-        if not ChatPromptTemplate:
-            logger.warning(
-                "[LLMService] Prompts disabled: ChatPromptTemplate not available."
-            )
-            return
-
-        # --- SQL generation prompt (zh-tw only) ---
-        # FIXED: Removed misleading @today instruction; now instructs to use inline T-SQL functions
-        self.sql_prompt_zh = ChatPromptTemplate.from_messages(
-            [
-                SystemMessagePromptTemplate.from_template(  # type: ignore
-                    "你是一位專精於人資請假與考勤資料的 T-SQL 專家，負責產生安全的查詢語句。\n"
-                    "請只回傳 **一個** Microsoft SQL Server (T-SQL) 查詢，且必須是 **僅限 SELECT**，可以使用 CTE。\n\n"
-                    "（下列內容由上游檢索系統提供，已根據公司實際資料庫 schema 與 recipe 精心設計）\n\n"
-                    "意圖 (intent)：\n{intent_debug}\n\n"
-                    "Few-shot 參考 SQL（若有，優先參考其欄位與 JOIN 寫法）：\n{few_shot}\n\n"
-                    "【重要】日期處理規則：\n"
-                    "- 嚴禁使用 SQL 參數變數（如 @today、@startDate 等），因為本系統不支援參數綁定。\n"
-                    "- 若需要「今天」的日期，請使用 CAST(GETDATE() AS DATE)。\n"
-                    "- 若需要「本週」，請使用 DATEADD(DAY, -DATEPART(WEEKDAY, GETDATE())+1, CAST(GETDATE() AS DATE)) 作為週一。\n"
-                    "- 若需要「本月」，請使用 DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)。\n"
-                    "- 建議使用 CAST(column AS DATE) 搭配 BETWEEN 或 >= / < 做日期過濾。\n\n"
-                    "系統提供的日期資訊（可直接參考）：\n"
-                    "- 今天日期: {today_date}\n"
-                    "- 今天星期: {today_weekday}\n\n"
-                    "業務規則（Leave AI）：\n"
-                    "- WORKDATE 為發生日；STARTDATE/ENDDATE 為請假區間。\n"
-                    "- 統計「已批准」請假時，請加上 VALIDATED = 1 條件（若適用）。\n"
-                    "- 只有在需要顯示部門/單位資訊時再 JOIN 組織表或人員表。\n\n"
-                    "T-SQL 安全規範：\n"
-                    "- 嚴禁使用 INSERT/UPDATE/DELETE/MERGE/ALTER/DROP/CREATE/TRUNCATE/EXEC 等指令。\n"
-                    "- 只能產生一個查詢語句，不得包含多個批次或 GO。\n"
-                    "- 別名必須先在 FROM/JOIN 宣告後再使用。\n"
-                    "- GROUP BY 必須包含所有非聚合欄位。\n"
-                    "- 不可使用 @ 開頭的變數。\n\n"
-                    "可用資料庫結構 (schema 摘要)：\n{schema}\n\n"
-                    "建議 JOIN 關聯說明：\n{join_hints}\n\n"
-                    "若有提供 table_whitelist，請只使用其中出現的資料表：\n{table_whitelist}\n"
-                ),
-                HumanMessagePromptTemplate.from_template(  # type: ignore
-                    "使用者問題：{query}\n\n"
-                    "已抽取的 slots (JSON)：{slots_json}\n\n"
-                    "請只回傳最終 SQL 查詢本體（不要加 markdown、不要加額外說明或註解、不要使用 @ 變數）。"
-                ),
-            ]
+    def _build_sql_generation_prompt(
+        self,
+        question: str,
+        schema: str,
+        join_hints: str,
+        intent_context: Dict[str, Any],
+        table_whitelist_text: str,
+    ) -> Tuple[str, str]:
+        """
+        Build system and user prompts for SQL generation.
+        Returns (system_prompt, user_message).
+        """
+        slots = intent_context.get("slots", {}) or {}
+        few_shot_sql = (
+            intent_context.get("few_shot_sql")
+            or intent_context.get("example_sql")
+            or ""
         )
+        intent_debug = self._intent_debug_string(intent_context)
+        today_info = self._get_today_info()
+        
+        system_prompt = f"""你是一位專精於人資請假與考勤資料的 T-SQL 專家，負責產生安全的查詢語句。
+請只回傳 **一個** Microsoft SQL Server (T-SQL) 查詢，且必須是 **僅限 SELECT**，可以使用 CTE。
 
-        # --- SQL repair prompt (zh-tw only) ---
-        # FIXED: Added explicit instruction about @variable errors
-        self.repair_sql_prompt_zh = ChatPromptTemplate.from_messages(
-            [
-                SystemMessagePromptTemplate.from_template(  # type: ignore
-                    "你要協助修復一段失敗的 Microsoft SQL Server (T-SQL) 查詢。\n"
-                    "請輸出一個修正後的 **僅限 SELECT** 的查詢，維持原本意圖，不得新增 DML/DDL 指令。\n"
-                    "務必遵守：\n"
-                    "- 別名先在 FROM/JOIN 宣告再使用。\n"
-                    "- GROUP BY 包含所有非聚合欄位。\n"
-                    "- 【重要】不可使用任何 @ 開頭的變數（如 @today、@startDate），請改用 T-SQL 內建日期函數。\n"
-                    "- 若錯誤訊息提到「必須宣告純量變數」，表示原 SQL 使用了未定義的 @ 變數，請將其替換為對應的 T-SQL 函數。\n\n"
-                    "日期替換指引：\n"
-                    "- @today → CAST(GETDATE() AS DATE)\n"
-                    "- @now → GETDATE()\n"
-                    "- @startOfWeek → DATEADD(DAY, -DATEPART(WEEKDAY, GETDATE())+1, CAST(GETDATE() AS DATE))\n"
-                    "- @startOfMonth → DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)\n"
-                    "- @startOfYear → DATEFROMPARTS(YEAR(GETDATE()), 1, 1)\n\n"
-                    "系統提供的日期資訊：\n"
-                    "- 今天日期: {today_date}\n\n"
-                    "意圖 (intent)：\n{intent_debug}\n\n"
-                    "Few-shot 參考 SQL：\n{few_shot}\n\n"
-                    "可用 schema：\n{schema}\n\n"
-                    "建議 JOIN 關係：\n{join_hints}\n\n"
-                    "允許使用之資料表（若有提供）：\n{table_whitelist}\n"
-                ),
-                HumanMessagePromptTemplate.from_template(  # type: ignore
-                    "資料庫錯誤訊息：\n{error_summary}\n\n"
-                    "原始失敗的 SQL：\n{failed_sql}\n\n"
-                    "請只回傳修正後的 SQL，本體即可（不要使用 @ 變數）。"
-                ),
-            ]
+（下列內容由上游檢索系統提供，已根據公司實際資料庫 schema 與 recipe 精心設計）
+
+意圖 (intent)：
+{intent_debug}
+
+Few-shot 參考 SQL（若有，優先參考其欄位與 JOIN 寫法）：
+{few_shot_sql}
+
+【重要】日期處理規則：
+- 嚴禁使用 SQL 參數變數（如 @today、@startDate 等），因為本系統不支援參數綁定。
+- 若需要「今天」的日期，請使用 CAST(GETDATE() AS DATE)。
+- 若需要「本週」，請使用 DATEADD(DAY, -DATEPART(WEEKDAY, GETDATE())+1, CAST(GETDATE() AS DATE)) 作為週一。
+- 若需要「本月」，請使用 DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)。
+- 建議使用 CAST(column AS DATE) 搭配 BETWEEN 或 >= / < 做日期過濾。
+
+系統提供的日期資訊（可直接參考）：
+- 今天日期: {today_info["today_date"]}
+- 今天星期: {today_info["today_weekday"]}
+
+業務規則（Leave AI）：
+- WORKDATE 為發生日；STARTDATE/ENDDATE 為請假區間。
+- 統計「已批准」請假時，請加上 VALIDATED = 1 條件（若適用）。
+- 只有在需要顯示部門/單位資訊時再 JOIN 組織表或人員表。
+
+T-SQL 安全規範：
+- 嚴禁使用 INSERT/UPDATE/DELETE/MERGE/ALTER/DROP/CREATE/TRUNCATE/EXEC 等指令。
+- 只能產生一個查詢語句，不得包含多個批次或 GO。
+- 別名必須先在 FROM/JOIN 宣告後再使用。
+- GROUP BY 必須包含所有非聚合欄位。
+- 不可使用 @ 開頭的變數。
+
+可用資料庫結構 (schema 摘要)：
+{schema}
+
+建議 JOIN 關聯說明：
+{join_hints}
+
+若有提供 table_whitelist，請只使用其中出現的資料表：
+{table_whitelist_text}"""
+
+        user_message = f"""使用者問題：{question}
+
+已抽取的 slots (JSON)：{json.dumps(slots, ensure_ascii=False)}
+
+請只回傳最終 SQL 查詢本體（不要加 markdown、不要加額外說明或註解、不要使用 @ 變數）。"""
+
+        return system_prompt, user_message
+
+    def _build_sql_repair_prompt(
+        self,
+        failed_sql: str,
+        error_summary: str,
+        schema: str,
+        join_hints: str,
+        intent_context: Dict[str, Any],
+        table_whitelist_text: str,
+    ) -> Tuple[str, str]:
+        """
+        Build system and user prompts for SQL repair.
+        Returns (system_prompt, user_message).
+        """
+        slots = intent_context.get("slots", {}) or {}
+        few_shot_sql = (
+            intent_context.get("few_shot_sql")
+            or intent_context.get("example_sql")
+            or ""
         )
+        intent_debug = self._intent_debug_string(intent_context)
+        today_info = self._get_today_info()
+        
+        system_prompt = f"""你要協助修復一段失敗的 Microsoft SQL Server (T-SQL) 查詢。
+請輸出一個修正後的 **僅限 SELECT** 的查詢，維持原本意圖，不得新增 DML/DDL 指令。
 
-        # --- Explanation prompt (zh-tw only) ---
-        self.explanation_prompt_zh = ChatPromptTemplate.from_messages(
-            [
-                SystemMessagePromptTemplate.from_template(  # type: ignore
-                    "你是一位服務公司高階主管的人資資料分析師。\n"
-                    "請根據提供的欄位、統計摘要與樣本資料，用繁體中文寫出簡潔的說明。\n"
-                    "嚴格規則：\n"
-                    "- 僅可使用提供的欄位名稱、聚合統計與樣本資料，不可自行杜撰欄位或數值。\n"
-                    "- 若資料不足以回答問題，請在摘要中明確說明。\n"
-                    "- 不要輸出 SQL 或程式碼。\n"
-                    "輸出格式（Markdown）：\n"
-                    "### 摘要\n"
-                    "• 2–3 點最重要的數字或結論（需與問題直接相關）。\n"
-                    "### 主要觀察\n"
-                    "• 2–4 點描述分布、趨勢、異常值或部門/假別等類別的重點。\n"
-                    "### 風險與建議\n"
-                    "• 1–3 點給主管的具體建議（例如追蹤對象、檢查政策、設定門檻）。\n"
-                    "### 資料品質說明\n"
-                    "• 1–2 點說明樣本限制（例如資料期間、欄位缺漏、筆數過少）。\n"
-                ),
-                HumanMessagePromptTemplate.from_template(  # type: ignore
-                    "問題：{question}\n"
-                    "資料筆數：{row_count}\n"
-                    "欄位：{columns}\n"
-                    "統計摘要 (JSON)：{aggregates_json}\n"
-                    "資料樣本（截斷顯示）：\n{sample_text}\n"
-                ),
-            ]
-        )
+務必遵守：
+- 別名先在 FROM/JOIN 宣告再使用。
+- GROUP BY 包含所有非聚合欄位。
+- 【重要】不可使用任何 @ 開頭的變數（如 @today、@startDate），請改用 T-SQL 內建日期函數。
+- 若錯誤訊息提到「必須宣告純量變數」，表示原 SQL 使用了未定義的 @ 變數，請將其替換為對應的 T-SQL 函數。
 
-        logger.info("[LLMService] Prompts initialized (zh-tw only).")
+日期替換指引：
+- @today → CAST(GETDATE() AS DATE)
+- @now → GETDATE()
+- @startOfWeek → DATEADD(DAY, -DATEPART(WEEKDAY, GETDATE())+1, CAST(GETDATE() AS DATE))
+- @startOfMonth → DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)
+- @startOfYear → DATEFROMPARTS(YEAR(GETDATE()), 1, 1)
+
+系統提供的日期資訊：
+- 今天日期: {today_info["today_date"]}
+
+意圖 (intent)：
+{intent_debug}
+
+Few-shot 參考 SQL：
+{few_shot_sql}
+
+可用 schema：
+{schema}
+
+建議 JOIN 關係：
+{join_hints}
+
+允許使用之資料表（若有提供）：
+{table_whitelist_text}"""
+
+        user_message = f"""資料庫錯誤訊息：
+{error_summary}
+
+原始失敗的 SQL：
+{failed_sql}
+
+請只回傳修正後的 SQL，本體即可（不要使用 @ 變數）。"""
+
+        return system_prompt, user_message
+
+    def _build_explanation_prompt(
+        self,
+        question: str,
+        row_count: int,
+        columns: List[str],
+        aggregates: Dict[str, Any],
+        sample_text: str,
+    ) -> Tuple[str, str]:
+        """
+        Build system and user prompts for explanation generation.
+        Returns (system_prompt, user_message).
+        """
+        system_prompt = """你是一位服務公司高階主管的人資資料分析師。
+請根據提供的欄位、統計摘要與樣本資料，用繁體中文寫出簡潔的說明。
+
+嚴格規則：
+- 僅可使用提供的欄位名稱、聚合統計與樣本資料，不可自行杜撰欄位或數值。
+- 若資料不足以回答問題，請在摘要中明確說明。
+- 不要輸出 SQL 或程式碼。
+
+輸出格式（Markdown）：
+### 摘要
+• 2–3 點最重要的數字或結論（需與問題直接相關）。
+
+### 主要觀察
+• 2–4 點描述分布、趨勢、異常值或部門/假別等類別的重點。
+
+### 風險與建議
+• 1–3 點給主管的具體建議（例如追蹤對象、檢查政策、設定門檻）。
+
+### 資料品質說明
+• 1–2 點說明樣本限制（例如資料期間、欄位缺漏、筆數過少）。"""
+
+        cols_joined = ", ".join(columns) if columns else "(none)"
+        aggs_json = json.dumps(aggregates or {}, ensure_ascii=False)
+        
+        user_message = f"""問題：{question}
+資料筆數：{row_count}
+欄位：{cols_joined}
+統計摘要 (JSON)：{aggs_json}
+資料樣本（截斷顯示）：
+{sample_text}"""
+
+        return system_prompt, user_message
 
     # ──────────────────────────────────────────────────────────────────
     # Date helpers for SQL generation
@@ -449,7 +694,7 @@ class LLMService:
         today = date.today()
         weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
         return {
-            "today_date": today.isoformat(),  # e.g., "2025-12-08"
+            "today_date": today.isoformat(),
             "today_weekday": weekday_names[today.weekday()],
         }
 
@@ -463,19 +708,14 @@ class LLMService:
 
         today_str = date.today().isoformat()
         
-        # Define substitutions (case-insensitive matching)
         substitutions = [
-            # @today variants
             (r"@today\b", f"CAST('{today_str}' AS DATE)"),
             (r"@currentDate\b", f"CAST('{today_str}' AS DATE)"),
             (r"@now\b", "GETDATE()"),
-            # Week boundaries
             (r"@startOfWeek\b", "DATEADD(DAY, -DATEPART(WEEKDAY, GETDATE())+1, CAST(GETDATE() AS DATE))"),
             (r"@endOfWeek\b", "DATEADD(DAY, 7-DATEPART(WEEKDAY, GETDATE()), CAST(GETDATE() AS DATE))"),
-            # Month boundaries  
             (r"@startOfMonth\b", "DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)"),
             (r"@endOfMonth\b", "EOMONTH(GETDATE())"),
-            # Year boundaries
             (r"@startOfYear\b", "DATEFROMPARTS(YEAR(GETDATE()), 1, 1)"),
             (r"@endOfYear\b", "DATEFROMPARTS(YEAR(GETDATE()), 12, 31)"),
         ]
@@ -484,7 +724,6 @@ class LLMService:
         for pattern, replacement in substitutions:
             result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
-        # Log if we made substitutions
         if result != sql:
             logger.info(
                 "SQL_PARAM_SUBSTITUTION: replaced @variables in SQL (original had unbound params)"
@@ -502,14 +741,13 @@ class LLMService:
             
         matches = self._UNBOUND_PARAM_RE.findall(sql)
         if matches:
-            # Filter out false positives (e.g., @@ROWCOUNT, @@IDENTITY are valid)
             unbound = [m for m in matches if not m.startswith('@')]
             if unbound:
                 return f"SQL contains unbound parameters: @{', @'.join(unbound)}"
         return None
 
     # ──────────────────────────────────────────────────────────────────
-    # New: unified SQL + DB execution with repair
+    # SQL + DB execution with repair
     # ──────────────────────────────────────────────────────────────────
     def run_query_with_llm_repair(
         self,
@@ -524,8 +762,6 @@ class LLMService:
         max_attempts: int = 3,
     ) -> Tuple[List[Tuple[Any, ...]], List[str], str, int]:
         """
-        Used by VectorSearchService.run_with_openai.
-
         Pipeline:
           1) Detect language (僅供 logging / metadata)。
           2) 使用 zh-tw 提示詞產生 SQL（含 recipes/few-shot）。
@@ -546,7 +782,6 @@ class LLMService:
             )
             return [], [], "", 0
 
-        # Table whitelist: primary is explicit field; fallback to tables hint.
         table_whitelist: List[str] = list(
             ctx.get("table_whitelist") or ctx.get("tables") or []
         )
@@ -558,9 +793,6 @@ class LLMService:
         cols: List[str] = []
         last_error_summary = "initial generation (no DB error yet)"
 
-        # 行為上：一律使用 zh-tw 提示詞（但仍保留 detected_lang 供觀察）
-        effective_lang: Language = "zh-tw"
-
         while attempts < max_attempts:
             attempts += 1
 
@@ -571,7 +803,6 @@ class LLMService:
                     join_hints=join_hints,
                     intent_context=ctx,
                     table_whitelist_text=whitelist_text,
-                    language=effective_lang,
                 )
             else:
                 raw = self._repair_sql_raw(
@@ -581,7 +812,6 @@ class LLMService:
                     join_hints=join_hints,
                     intent_context=ctx,
                     table_whitelist_text=whitelist_text,
-                    language=effective_lang,
                 )
 
             sql = self._finalize_sql(raw)
@@ -590,7 +820,6 @@ class LLMService:
                 logger.warning("RUN_QUERY_ATTEMPT_EMPTY_SQL: attempt=%d", attempts)
                 continue
 
-            # Safety guard: prohibited keywords
             if self._PROHIBITED_RE.search(sql):
                 logger.warning(
                     "RUN_QUERY_PROHIBITED_KEYWORD: attempt=%d sql_prefix=%r",
@@ -600,10 +829,8 @@ class LLMService:
                 sql = ""
                 continue
 
-            # FIXED: Substitute any remaining @parameters before execution
             sql = self._substitute_date_parameters(sql)
 
-            # Check for any remaining unbound parameters
             param_error = self._check_for_unbound_parameters(sql)
             if param_error:
                 logger.warning(
@@ -613,10 +840,8 @@ class LLMService:
                     sql[:200],
                 )
                 last_error_summary = param_error
-                # Don't clear sql - let the repair prompt try to fix it
                 continue
 
-            # String-based whitelist check
             if table_whitelist and not self._tables_respect_whitelist(sql, table_whitelist):
                 logger.warning(
                     "RUN_QUERY_WHITELIST_VIOLATION: attempt=%d sql_prefix=%r",
@@ -627,7 +852,6 @@ class LLMService:
                 last_error_summary = "Table whitelist violation in generated SQL"
                 continue
 
-            # Try executing against DB
             try:
                 rows, cols = db_service.run_select(
                     sql,
@@ -643,7 +867,6 @@ class LLMService:
                 )
                 return rows or [], cols or [], sql, attempts
             except DBServiceSyntaxError as e:
-                # Specific handling for syntax errors (like undeclared variables)
                 last_error_summary = self._format_db_error_for_repair(e, "syntax")
                 logger.warning(
                     "RUN_QUERY_SYNTAX_ERROR: attempt=%d err=%s sql_prefix=%r",
@@ -702,7 +925,6 @@ class LLMService:
         
         hint = hints.get(category, "")
         
-        # Special handling for @variable errors (common issue)
         if "@" in str(error) and "宣告" in str(error):
             hint = "（重要：這是因為使用了 @ 變數但未定義。請將所有 @xxx 變數替換為 T-SQL 日期函數如 CAST(GETDATE() AS DATE)）"
         
@@ -723,17 +945,13 @@ class LLMService:
         max_rows: int = 1000,
         query_timeout: int = 10,
         max_attempts: int = 3,
-        allow_fallback: bool = False,  # kept for compatibility with caller
+        allow_fallback: bool = False,
     ) -> Dict[str, Any]:
         """
         Full pipeline for HTTP controllers:
           - 使用 run_query_with_llm_repair 產生 SQL + 執行 DB。
           - 計算基本統計。
           - 產出 zh-tw 說明給主管閱讀。
-
-        STRICT BEHAVIOUR:
-          - 若 LLM 無法使用 → error, success=False。
-          - 若 max_attempts 內仍無有效 SQL → error, success=False。
         """
         user_question = (user_question or "").strip()
         if not user_question:
@@ -764,14 +982,9 @@ class LLMService:
         detected_lang: Language = detect_query_language(user_question)
         logger.info("LLM_PIPELINE_START: lang=%s q=%r", detected_lang, user_question[:120])
 
-        if allow_fallback:
-            logger.debug(
-                "[LLMService.answer_question] allow_fallback=True (currently not used)."
-            )
-
-        # 0) LLM availability check
         if not self._is_llm_available():
-            msg = "LLM backend not available（可能是 API key 或 langchain_openai 未正確設定）。"
+            init_error = self.bedrock.get_init_error() or "Unknown error"
+            msg = f"LLM backend not available（{init_error}）。"
             logger.error("LLM_PIPELINE_ABORT: %s", msg)
             return {
                 "question": user_question,
@@ -790,16 +1003,14 @@ class LLMService:
                     "### 摘要\n"
                     "• 系統目前無法使用 LLM 服務，請稍後再試或聯絡系統管理員。\n\n"
                     "### 資料品質說明\n"
-                    "• LLM API 設定或連線可能有問題。"
+                    "• AWS Bedrock 設定或連線可能有問題。"
                 ),
                 "success": False,
                 "error": msg,
                 "error_category": "llm_unavailable",
             }
 
-        # 1) Query + repair pipeline (shared with VectorSearchService)
         ctx = intent_context or {}
-        # If controller provides explicit whitelist, respect it (higher priority)
         if table_whitelist:
             ctx = dict(ctx)
             ctx["table_whitelist"] = table_whitelist
@@ -842,7 +1053,6 @@ class LLMService:
                 "error_category": "llm_sql_generation_failed",
             }
 
-        # 2) Aggregates & explanation
         aggregates = self._compute_basic_aggregates(rows, cols)
         sample_text = self._format_sample_rows(rows, cols, max_rows=5)
 
@@ -868,7 +1078,7 @@ class LLMService:
         }
 
     # ──────────────────────────────────────────────────────────────────
-    # SQL generation + repair (LLM side only, zh-tw behaviour)
+    # SQL generation + repair (Bedrock calls)
     # ──────────────────────────────────────────────────────────────────
     def _generate_sql_raw(
         self,
@@ -877,50 +1087,27 @@ class LLMService:
         join_hints: str,
         intent_context: Dict[str, Any],
         table_whitelist_text: str,
-        language: Language,
     ) -> str:
         """
-        language 參數僅保留給 logging/上下游相容；
-        實際上永遠使用 zh-tw 提示詞。
+        Generate SQL using Bedrock.
         """
-        if not (self.llm_enabled and self.llm and ChatPromptTemplate):
+        if not self._is_llm_available():
             logger.warning("SQL_GEN_RAW: LLM not available.")
             return ""
 
-        prompt = self.sql_prompt_zh
-        if not prompt:
-            logger.warning("SQL_GEN_RAW: zh-tw prompt missing")
-            return ""
-
-        slots = intent_context.get("slots", {}) or {}
-        # Support multiple possible keys from recipes/router for examples
-        few_shot_sql = (
-            intent_context.get("few_shot_sql")
-            or intent_context.get("example_sql")
-            or ""
+        system_prompt, user_message = self._build_sql_generation_prompt(
+            question=question,
+            schema=schema,
+            join_hints=join_hints,
+            intent_context=intent_context,
+            table_whitelist_text=table_whitelist_text,
         )
-        intent_debug = self._intent_debug_string(intent_context)
-        
-        # Get today's date info for the prompt
-        today_info = self._get_today_info()
 
-        try:
-            msgs: List[BaseMessage] = prompt.format_messages(  # type: ignore
-                query=question,
-                schema=schema,
-                join_hints=join_hints,
-                intent_debug=intent_debug,
-                few_shot=few_shot_sql,
-                slots_json=json.dumps(slots, ensure_ascii=False),
-                table_whitelist=table_whitelist_text,
-                today_date=today_info["today_date"],
-                today_weekday=today_info["today_weekday"],
-            )
-            # context 仍帶 language 以方便追蹤，但內容為 zh-tw prompt
-            return self._invoke_llm(msgs, context=f"sql_gen_{language}")
-        except Exception as e:
-            logger.error("SQL_GEN_RAW_FAIL: %s: %s", type(e).__name__, e)
-            return ""
+        return self.bedrock.invoke(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            context="sql_gen",
+        )
 
     def _repair_sql_raw(
         self,
@@ -930,83 +1117,32 @@ class LLMService:
         join_hints: str,
         intent_context: Dict[str, Any],
         table_whitelist_text: str,
-        language: Language,
     ) -> str:
         """
-        language 參數僅保留給 logging/上下游相容；
-        實際上永遠使用 zh-tw 修復提示詞。
+        Repair SQL using Bedrock.
         """
-        if not (self.llm_enabled and self.llm and ChatPromptTemplate):
+        if not self._is_llm_available():
             logger.warning("SQL_REPAIR_RAW: LLM not available.")
             return failed_sql
 
-        prompt = self.repair_sql_prompt_zh
-        if not prompt:
-            logger.warning("SQL_REPAIR_RAW: zh-tw repair prompt missing")
-            return failed_sql
-
-        slots = intent_context.get("slots", {}) or {}
-        few_shot_sql = (
-            intent_context.get("few_shot_sql")
-            or intent_context.get("example_sql")
-            or ""
+        system_prompt, user_message = self._build_sql_repair_prompt(
+            failed_sql=failed_sql,
+            error_summary=error_summary,
+            schema=schema,
+            join_hints=join_hints,
+            intent_context=intent_context,
+            table_whitelist_text=table_whitelist_text,
         )
-        intent_debug = self._intent_debug_string(intent_context)
-        
-        # Get today's date info for the repair prompt
-        today_info = self._get_today_info()
 
-        try:
-            msgs: List[BaseMessage] = prompt.format_messages(  # type: ignore
-                failed_sql=failed_sql,
-                error_summary=error_summary,
-                schema=schema,
-                join_hints=join_hints,
-                intent_debug=intent_debug,
-                few_shot=few_shot_sql,
-                slots_json=json.dumps(slots, ensure_ascii=False),
-                table_whitelist=table_whitelist_text,
-                today_date=today_info["today_date"],
-            )
-            return self._invoke_llm(msgs, context=f"sql_repair_{language}")
-        except Exception as e:
-            logger.error("SQL_REPAIR_RAW_FAIL: %s: %s", type(e).__name__, e)
-            return failed_sql
+        return self.bedrock.invoke(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            context="sql_repair",
+        )
 
     # ──────────────────────────────────────────────────────────────────
-    # LLM invoke + SQL sanitization
+    # SQL sanitization
     # ──────────────────────────────────────────────────────────────────
-    def _invoke_llm(self, messages: List[BaseMessage], context: str = "") -> str:  # pyright: ignore[reportInvalidTypeForm]
-        if not (self.llm_enabled and self.llm):
-            logger.warning(
-                "LLM_INVOKE_SKIPPED: llm_enabled=%s, llm=%s",
-                self.llm_enabled,
-                type(self.llm).__name__ if self.llm else None,
-            )
-            return ""
-        t0 = time.perf_counter()
-        try:
-            user_preview = ""
-            for m in reversed(messages):
-                if isinstance(m, HumanMessage):  # type: ignore
-                    user_preview = str(m.content)[:120]
-                    break
-            logger.debug("LLM_INVOKE: ctx=%s user=%r", context, user_preview)
-            resp = self.llm.invoke(messages)  # type: ignore
-            content = str(getattr(resp, "content", "") or "")
-            logger.info(
-                "LLM_INVOKE_OK: ctx=%s ms=%d len=%d",
-                context,
-                int((time.perf_counter() - t0) * 1000),
-                len(content),
-            )
-            return content
-        except Exception as e:
-            logger.error(
-                "LLM_INVOKE_FAIL: ctx=%s %s: %s", context, type(e).__name__, e
-            )
-            return ""
-
     def _extract_sql_from_text(self, text: str) -> str:
         if not text:
             return ""
@@ -1024,7 +1160,6 @@ class LLMService:
         if not sql:
             return ""
         s = sql.strip().rstrip(";")
-        # Split on semicolon and keep first SELECT/CTE
         parts = [
             p.strip()
             for p in re.split(r";\s*(?=WITH\b|SELECT\b|$)", s, flags=re.I)
@@ -1046,29 +1181,90 @@ class LLMService:
 
     def _tables_respect_whitelist(self, sql: str, whitelist: List[str]) -> bool:
         """
-        Very simple table whitelist enforcement by regex scanning for FROM/JOIN.
+        Check if SQL only uses tables from the whitelist.
+        
+        Handles various table name formats:
+        - dbo.TableName
+        - [dbo].[TableName]
+        - [Database].[dbo].[TableName]
+        - Database.dbo.TableName
+        
+        Also handles:
+        - CTEs (WITH ... AS) - extracts CTE names and allows them
+        - Table aliases (FROM table AS alias)
         """
         if not whitelist:
             return True
-        toks = re.findall(
-            r"(?i)\bfrom\s+([^\s\(\),]+)|\bjoin\s+([^\s\(\),]+)", sql or ""
-        )
-        raw = [x or y for (x, y) in toks]
-
-        def norm(t: str) -> str:
-            # Normalize: strip [ ], ``, quotes and lowercase
-            t = t.strip().rstrip(",")
-            t = re.sub(r"^[\[\]`\"']+|[\[\]`\"']+$", "", t)
-            return t.lower()
-
-        whitelist_norm = {norm(w) for w in whitelist}
-        for t in raw:
-            if whitelist_norm and norm(t) not in whitelist_norm:
+        
+        if not sql:
+            return True
+        
+        sql_upper = sql.upper()
+        
+        # Extract CTE names (WITH cte_name AS ...)
+        cte_pattern = r'(?i)\bWITH\s+(\w+)\s+AS\s*\('
+        cte_names = set(m.lower() for m in re.findall(cte_pattern, sql))
+        
+        # Also find recursive CTE patterns: ), cte_name AS (
+        recursive_cte_pattern = r'(?i)\)\s*,\s*(\w+)\s+AS\s*\('
+        cte_names.update(m.lower() for m in re.findall(recursive_cte_pattern, sql))
+        
+        logger.debug("CTE names found: %s", cte_names)
+        
+        # Extract table references from SQL
+        # Matches: FROM/JOIN followed by table name (handles schema.table and [schema].[table])
+        # Updated to capture full qualified names including brackets
+        pattern = r'(?i)(?:FROM|JOIN)\s+(\[?[\w]+\]?(?:\.\[?[\w]+\]?){0,2})'
+        matches = re.findall(pattern, sql)
+        
+        if not matches:
+            return True  # No tables found, assume OK
+        
+        def normalize_table_name(name: str) -> str:
+            """Normalize table name for comparison."""
+            # Remove brackets
+            name = re.sub(r'[\[\]]', '', name)
+            # Convert to lowercase
+            name = name.lower()
+            # Extract just the last 2 parts (schema.table)
+            parts = name.split('.')
+            if len(parts) >= 2:
+                return f"{parts[-2]}.{parts[-1]}"
+            return parts[-1]
+        
+        # Normalize whitelist
+        whitelist_normalized = set()
+        for w in whitelist:
+            norm = normalize_table_name(w)
+            whitelist_normalized.add(norm)
+            # Also add just the table name (without schema)
+            parts = norm.split('.')
+            if len(parts) >= 2:
+                whitelist_normalized.add(parts[-1])
+        
+        # Check each table in SQL
+        for table_ref in matches:
+            table_ref_clean = table_ref.strip()
+            table_norm = normalize_table_name(table_ref_clean)
+            table_name_only = table_norm.split('.')[-1] if '.' in table_norm else table_norm
+            
+            # Skip if it's a CTE name
+            if table_name_only in cte_names:
+                logger.debug("WHITELIST_CHECK: skipping CTE %s", table_ref_clean)
+                continue
+            
+            # Check if table matches whitelist
+            if table_norm not in whitelist_normalized and table_name_only not in whitelist_normalized:
+                logger.warning(
+                    "WHITELIST_CHECK_FAIL: table=%s normalized=%s not in whitelist=%s",
+                    table_ref_clean, table_norm, whitelist_normalized
+                )
                 return False
+        
         return True
 
     # ──────────────────────────────────────────────────────────────────
-    # Intent debug string for prompts – includes recipe hints
+    # Intent debug string for prompts
     # ──────────────────────────────────────────────────────────────────
     def _intent_debug_string(self, intent_context: Dict[str, Any]) -> str:
         if not intent_context:
@@ -1093,10 +1289,8 @@ class LLMService:
         if score is not None:
             lines.append(f"score={score}")
         if cands:
-            # Only show top 2–3 to avoid blowing the context
             lines.append(f"top_candidates={json.dumps(cands[:3], ensure_ascii=False)}")
         if business_prompt:
-            # Truncate long recipe description
             bp = business_prompt
             if len(bp) > 400:
                 bp = bp[:400] + " …(truncated)"
@@ -1104,7 +1298,7 @@ class LLMService:
         return "\n".join(lines)
 
     # ──────────────────────────────────────────────────────────────────
-    # Aggregates + zh-tw explanation
+    # Aggregates + explanation
     # ──────────────────────────────────────────────────────────────────
     def _compute_basic_aggregates(
         self,
@@ -1112,11 +1306,7 @@ class LLMService:
         columns: List[str],
     ) -> Dict[str, Any]:
         """
-        Very simple aggregates that explanation can use:
-          - row_count
-          - unique_people (by EMPLOYEEID/員編)
-          - by_leave_type (count per CLASSNAME/假別名稱/ATTENDANCETYPE)
-          - total_hours (sum HOURS/請假時數/總時數)
+        Very simple aggregates that explanation can use.
         """
         col_index = {name: idx for idx, name in enumerate(columns or [])}
         row_count = len(rows)
@@ -1188,7 +1378,7 @@ class LLMService:
         sample_text: str,
     ) -> str:
         """
-        zh-tw 專用說明產生器。
+        zh-tw explanation generator using Bedrock.
         """
         # Fast path: no data
         if row_count <= 0:
@@ -1199,7 +1389,7 @@ class LLMService:
                 "• 請確認日期區間、請假條件或使用者權限是否正確。"
             )
 
-        if not (self.llm_enabled and self.llm and ChatPromptTemplate):
+        if not self._is_llm_available():
             # Simple fallback if LLM not available
             rc = aggregates.get("row_count", row_count)
             up = aggregates.get("unique_people")
@@ -1211,23 +1401,18 @@ class LLMService:
                 parts.append(f"總請假時數約為 {th}。")
             return " ".join(parts)
 
-        prompt = self.explanation_prompt_zh
-        if not prompt:
-            return ""
+        system_prompt, user_message = self._build_explanation_prompt(
+            question=question,
+            row_count=row_count,
+            columns=columns,
+            aggregates=aggregates,
+            sample_text=sample_text,
+        )
 
-        cols_joined = ", ".join(columns) if columns else "(none)"
-        aggs_json = json.dumps(aggregates or {}, ensure_ascii=False)
-
-        try:
-            msgs: List[BaseMessage] = prompt.format_messages(  # type: ignore
-                question=question,
-                row_count=row_count,
-                columns=cols_joined,
-                aggregates_json=aggs_json,
-                sample_text=sample_text,
-            )
-            text = self._invoke_llm(msgs, context="explain_zh-tw").strip()
-            return text or ""
-        except Exception as e:
-            logger.error("EXPLANATION_FAIL: %s: %s", type(e).__name__, e)
-            return ""
+        text = self.bedrock.invoke(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            context="explain_zh-tw",
+        )
+        
+        return text.strip() if text else ""
